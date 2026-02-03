@@ -16,8 +16,11 @@
 * left/right side of scattering
 *
 * %D
-* An (n times m) pixel PSD monitor with spherical shape,
+* An (n times m) pixel angle sensitive time-of-flight monitor with spherical shape,
 * centered at (0,0,0).
+* 
+* The angle is calculated using the speed vectors angle to the z direction,
+* therefore mistakes may be prevalent for a large sample.
 *
 * %Example: det = Sphere_monitor_TOF(tmin = 0, tmax = 10, radius=0.1)
 *
