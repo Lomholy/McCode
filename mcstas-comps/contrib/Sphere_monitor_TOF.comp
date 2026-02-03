@@ -1,0 +1,152 @@
+/*******************************************************************************
+*
+* McStas, neutron ray-tracing package
+*         Copyright 1997-2002, All rights reserved
+*         Risoe National Laboratory, Roskilde, Denmark
+*         Institut Laue Langevin, Grenoble, France
+*
+* %I
+* Written by: Daniel Lomholt Christensen, based off of Cyl_monitor_TOF.comp by 
+* Kim Lefmann
+* Date: December 17, 2025
+* Origin: University of Copenhagen 
+*
+* A 2D total scattering angle and TOF-sensitive monitor. The shape is spherical.
+* The monitor covers the whole sphere, but can be limited to angles, and
+* left/right side of scattering
+*
+* %D
+* An (n times m) pixel PSD monitor with spherical shape,
+* centered at (0,0,0).
+*
+* %Example: det = Sphere_monitor_TOF(tmin = 0, tmax = 10, radius=0.1)
+*
+* %P
+* INPUT PARAMETERS:
+*
+* nphi: [1]             Number of pixels along phi
+* filename: [string]    Name of file in which to store the detector image
+* radius: [m]           Radius of detector
+* side: [1]             Flag for choosing a specific side that the neutron scatters into. Choosing a value larger than zero, requires the velocity in the x direction to be positive, and likewise with a negative side value choosing only negative velocities in x. A value of 0 (standard) monitors both sides.
+* restore_neutron: [1]  If set, the monitor does not influence the neutron state
+* thmin: [deg]          Minimum total angle covered/measured.
+* thmax: [deg]          Maximum total angle covered/measured.
+* nt: [1]               Number of pixels along the time direction
+* tmin:  [s]            Minimum time measured
+* tmax:  [s]            Maximum time measured
+* nt:    [1]            Number of t-bins
+* nowritefile: [1]      If set, monitor will skip writing to disk
+*
+* CALCULATED PARAMETERS:
+*
+* PSD_N: []             Array of neutron counts
+* PSD_p: []             Array of neutron weight counts
+* PSD_p2: []            Array of second moments
+*
+* %E
+******************************************************************************/
+
+DEFINE COMPONENT Sphere_monitor_TOF
+
+
+
+SETTING PARAMETERS (int nphi=20, string filename=0, radius=1, side = 0,
+                    int restore_neutron=0,
+		                thmin=0, thmax=180, int nt=100, 
+                    tmin, tmax, 
+                    int nowritefile=0)
+
+
+/* Neutron parameters: (x,y,z,vx,vy,vz,t,sx,sy,sz,p) */
+
+DECLARE
+%{
+  DArray2d PSD_N;
+  DArray2d PSD_p;
+  DArray2d PSD_p2;
+%}
+
+INITIALIZE
+%{
+  PSD_N =  create_darr2d(nphi,nt);
+  PSD_p =  create_darr2d(nphi,nt);
+  PSD_p2 = create_darr2d(nphi,nt);
+
+  // Use instance name for monitor output if no input was given
+  if (!strcmp(filename,"\0")) sprintf(filename,"%s",NAME_CURRENT_COMP);
+%}
+
+TRACE
+%{
+  int i, j;
+  double t0, t1, phi;
+
+  if(sphere_intersect(&t0, &t1, x, y, z, vx, vy, vz, radius) == 1) {
+    if(t0<0) {
+      if(t1>0) {
+	      PROP_DT(t1);
+        // If side is -1, only take the ones with a negative
+        // v_x. Likewise if side is 1 only take positive vx
+	      /* Calculate angle */
+        double v_x = vx;
+        double v_y = vy;
+        double v_z = vz;
+        NORM(v_x, v_y, v_z);
+        if ((side>0 && v_x > 0) || (side<0 && v_x < 0 || side==0)){
+
+
+	      phi=acos(v_z)*RAD2DEG;
+	  
+	      if (phi >= thmin && phi <= thmax) {
+	        if (t >= tmin && t < tmax) {
+	          i=floor((nphi) * (phi-thmin)/(thmax-thmin));
+	          j=floor((nt) * (t-tmin)/(tmax-tmin));
+	          double p2 = p*p;
+	      
+                  #pragma acc atomic
+	          PSD_N[i][j] = PSD_N[i][j]+1;
+      
+                  #pragma acc atomic
+	          PSD_p[i][j] = PSD_p[i][j]+p;
+	      
+                  #pragma acc atomic
+	          PSD_p2[i][j] = PSD_p2[i][j]+p2;
+	        }
+	        }
+          }
+      }
+    }
+  }
+  if (restore_neutron) {
+    RESTORE_NEUTRON(INDEX_CURRENT_COMP, x, y, z, vx, vy, vz, t, sx, sy, sz, p);
+  }
+%}
+
+SAVE
+%{
+if (!nowritefile) {   
+  DETECTOR_OUT_2D(
+      "Spherical angle TOF monitor",
+      "radial position [deg]",
+      "TOF [s]",
+      thmin, thmax, tmin, tmax, nphi, nt,
+      &PSD_N[0][0],&PSD_p[0][0],&PSD_p2[0][0],
+      filename);
+}
+%}
+
+FINALLY
+%{
+  destroy_darr2d(PSD_N);
+  destroy_darr2d(PSD_p);
+  destroy_darr2d(PSD_p2);
+%}
+
+MCDISPLAY
+%{
+  circle("xz", 0, 0, 0, radius );
+  circle("xy", 0, 0, 0, radius );
+  circle("yz", 0, 0, 0, radius );
+%}
+
+END
