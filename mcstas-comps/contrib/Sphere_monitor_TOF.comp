@@ -6,8 +6,7 @@
 *         Institut Laue Langevin, Grenoble, France
 *
 * %I
-* Written by: Daniel Lomholt Christensen, based off of Cyl_monitor_TOF.comp by 
-* Kim Lefmann
+* Written by: Daniel Lomholt Christensen, based off of Cyl_monitor_TOF.comp by Kim Lefmann
 * Date: December 17, 2025
 * Origin: University of Copenhagen 
 *
@@ -16,13 +15,13 @@
 * left/right side of scattering
 *
 * %D
-* An (n times m) pixel angle sensitive time-of-flight monitor with spherical shape,
+* An (nphi times nt) pixel angle sensitive time-of-flight monitor with spherical shape,
 * centered at (0,0,0).
 * 
 * The angle is calculated using the speed vectors angle to the z direction,
 * therefore mistakes may be prevalent for a large sample.
 *
-* %Example: det = Sphere_monitor_TOF(tmin = 0, tmax = 10, radius=0.1)
+* See Test_Spherical_tof_monitor.instr for an example implementation of this component.
 *
 * %P
 * INPUT PARAMETERS:
