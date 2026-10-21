@@ -35,7 +35,8 @@
 * Number of intersections per ray: a concave mesh, or one made of several parts,
 * can be crossed any number of times. geometry-mesh-lib keeps every crossing: its
 * hit buffer grows as soon as a ray has more crossings than fit, and Union_master
-* enlarges its intersection table to match, so no setting is needed.
+* enlarges its intersection table to match, so no setting is needed. With
+* OPENACC the buffers can not grow and hold GMESH_ACC_MAX_HITS (100) crossings.
 *
 * It is allowed to overlap components, but it is not allowed to have two
 *  parallel planes that coincides. This will crash the code on run time.
@@ -386,7 +387,12 @@ INITIALIZE
 
   sprintf (mesh_vol.name, "%s", NAME_CURRENT_COMP);
   sprintf (mesh_vol.geometry.shape, "mesh");
-  mesh_vol.geometry.max_intersections = 4; // crossings kept by callers with fixed-size tables (Union_master_GPU)
+  // crossings kept by callers with fixed-size tables (Union_master_GPU)
+  #ifdef OPENACC
+  mesh_vol.geometry.max_intersections = GMESH_ACC_MAX_HITS;
+  #else
+  mesh_vol.geometry.max_intersections = 4;
+  #endif
   mesh_vol.geometry.eShape = mesh;
   mesh_vol.geometry.priority_value = priority;
   mesh_vol.geometry.visualization_on = visualize;

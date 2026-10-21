@@ -2799,6 +2799,13 @@ int union_mesh_trace(double *r, double *v, struct geometry_struct *geometry) {
   Coords position = rot_apply(geometry->transpose_rotation_matrix, coords_sub(coords_set(r[0], r[1], r[2]), geometry->center));
   Coords velocity = rot_apply(geometry->transpose_rotation_matrix, coords_set(v[0], v[1], v[2]));
   double t_min = -1e-9*triangle_mesh->length_scale/coords_len(velocity);
+  #ifdef OPENACC
+  // with OPENACC the library can not enlarge the buffer: a fixed one of GMESH_ACC_MAX_HITS hits
+  if (!union_mesh_hits) {
+    union_mesh_hits = union_xrealloc(NULL, GMESH_ACC_MAX_HITS*sizeof(gmesh_hit));
+    union_mesh_hits_size = GMESH_ACC_MAX_HITS;
+  }
+  #endif
   return gmesh_intersect(triangle_mesh, position, velocity, t_min, &union_mesh_hits, &union_mesh_hits_size);
 }
 

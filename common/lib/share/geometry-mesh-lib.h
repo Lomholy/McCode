@@ -72,6 +72,11 @@
   #ifndef GMESH_BVH_STACK
     #define GMESH_BVH_STACK 64
   #endif
+  /* size of the hit buffer to give gmesh_intersect when compiled with OPENACC,
+     where the buffer can not grow: the nearest GMESH_ACC_MAX_HITS hits are kept */
+  #ifndef GMESH_ACC_MAX_HITS
+    #define GMESH_ACC_MAX_HITS 100
+  #endif
   #ifndef GMESH_DISPLAY_MAX
     #define GMESH_DISPLAY_MAX 200000
   #endif
@@ -153,8 +158,9 @@ int gmesh_init (char* filename, double scale, int face_props, gmesh_struct* mesh
    *         0, free it at the end). As soon as a line has more hits than fit,
    *         the buffer is enlarged during the trace, 2 hits at a time, so every
    *         hit is returned in one call and the buffer keeps its size for the
-   *         next lines. On the GPU (OPENACC) memory can not be allocated: the
-   *         *max_hits nearest hits are kept and farther ones dropped.
+   *         next lines. With OPENACC memory can not be allocated during the
+   *         trace: give a buffer of GMESH_ACC_MAX_HITS (100) hits, the nearest
+   *         *max_hits hits are kept and farther ones dropped.
    * RETURN: number of hits stored
    *******************************************************************************/
   #pragma acc routine seq
