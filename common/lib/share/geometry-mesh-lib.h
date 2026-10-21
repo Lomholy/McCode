@@ -143,7 +143,7 @@ typedef struct gmesh_struct {
 
 /*******************************************************************************
 * long gmesh_init(char *filename, double scale, int face_props, gmesh_struct *mesh)
-* ACTION: read an STL/OFF/PLY file and build the mesh structure.
+* ACTION: read an STL/OFF/PLY/glTF file and build the mesh structure.
 * INPUT:  scale: multiply file coordinates (1 for m, 1e-3 for mm, 0 same as 1)
 *         face_props: GMESH_PROPS_IGNORE, GMESH_PROPS_OPTIONAL or GMESH_PROPS_REQUIRED
 * RETURN: number of triangles, 0 on error

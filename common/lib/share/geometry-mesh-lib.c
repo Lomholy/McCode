@@ -2071,7 +2071,7 @@ static int gmesh_read_file(char *filename, const char *extension, gmesh_raw *raw
   return ok;
 }
 
-/* read an STL/OFF/PLY file into mesh, see geometry-mesh-lib.h */
+/* read an STL/OFF/PLY/glTF file into mesh, see geometry-mesh-lib.h */
 long gmesh_init(char *filename, double scale, int face_props, gmesh_struct *mesh)
 {
   gmesh_raw raw;
@@ -2086,7 +2086,7 @@ long gmesh_init(char *filename, double scale, int face_props, gmesh_struct *mesh
   memset(&raw, 0, sizeof(gmesh_raw));
   mesh->filename = filename;
 
-  MPI_MASTER( printf("Loading geometry file (STL/OFF/PLY): %s\n", filename); );
+  MPI_MASTER( printf("Loading geometry file (STL/OFF/PLY/glTF): %s\n", filename); );
 
   extension = strrchr(filename, '.');
   if (gmesh_is_extension(extension, ".step", ".STEP") || gmesh_is_extension(extension, ".stp", ".STP")) {
