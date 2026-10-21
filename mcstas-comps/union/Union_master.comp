@@ -1046,7 +1046,7 @@ INITIALIZE
 
   for (iterator = 0; iterator < intersection_time_table.num_volumes; iterator++) {
     if (strcmp (Volumes[iterator]->geometry.shape, "mesh") == 0) {
-      intersection_time_table.n_elements[iterator] = (int)GMESH_MAX_HITS; // Meshes report up to GMESH_MAX_HITS intersections (geometry-mesh-lib)
+      intersection_time_table.n_elements[iterator] = Volumes[iterator]->geometry.max_intersections; // grown by intersect_function_growing
     } else {
       intersection_time_table.n_elements[iterator] = (int)2; // number of intersection for all other geometries
     }
@@ -1293,9 +1293,10 @@ TRACE
                 intersection_time_table.surface_index[*check][1]);
         #endif
         // GPU Flexible intersect_function call
-        geometry_output = intersect_function (intersection_time_table.intersection_times[*check], intersection_time_table.normal_vector_x[*check],
-                                              intersection_time_table.normal_vector_y[*check], intersection_time_table.normal_vector_z[*check],
-                                              intersection_time_table.surface_index[*check], number_of_solutions, r_start, v, &Volumes[*check]->geometry);
+        geometry_output = intersect_function_growing (&intersection_time_table.intersection_times[*check], &intersection_time_table.normal_vector_x[*check],
+                                    &intersection_time_table.normal_vector_y[*check], &intersection_time_table.normal_vector_z[*check],
+                                    &intersection_time_table.surface_index[*check], &intersection_time_table.n_elements[*check],
+                                    number_of_solutions, r_start, v, &Volumes[*check]->geometry);
 
         intersection_time_table.calculated[*check] = 1;
         #ifdef Union_trace_verbal_setting
@@ -1326,9 +1327,10 @@ TRACE
           int selected_index;
           selected_index = Volumes[current_volume]->geometry.mask_intersect_list.elements[mask_iterator];
           geometry_output
-              = intersect_function (intersection_time_table.intersection_times[selected_index], intersection_time_table.normal_vector_x[selected_index],
-                                    intersection_time_table.normal_vector_y[selected_index], intersection_time_table.normal_vector_z[selected_index],
-                                    intersection_time_table.surface_index[selected_index], number_of_solutions, r_start, v, &Volumes[selected_index]->geometry);
+              = intersect_function_growing (&intersection_time_table.intersection_times[selected_index], &intersection_time_table.normal_vector_x[selected_index],
+                                    &intersection_time_table.normal_vector_y[selected_index], &intersection_time_table.normal_vector_z[selected_index],
+                                    &intersection_time_table.surface_index[selected_index], &intersection_time_table.n_elements[selected_index],
+                                    number_of_solutions, r_start, v, &Volumes[selected_index]->geometry);
 
           intersection_time_table.calculated[Volumes[current_volume]->geometry.mask_intersect_list.elements[mask_iterator]] = 1;
           // if printf("succesfully calculated intersection times for volume *check = %d \n",*check);
@@ -1399,9 +1401,10 @@ TRACE
       if (intersection_with_children == 0) {
         // GPU Allowed
         geometry_output
-            = intersect_function (intersection_time_table.intersection_times[current_volume], intersection_time_table.normal_vector_x[current_volume],
-                                  intersection_time_table.normal_vector_y[current_volume], intersection_time_table.normal_vector_z[current_volume],
-                                  intersection_time_table.surface_index[current_volume], number_of_solutions, r_start, v, &Volumes[current_volume]->geometry);
+            = intersect_function_growing (&intersection_time_table.intersection_times[current_volume], &intersection_time_table.normal_vector_x[current_volume],
+                                    &intersection_time_table.normal_vector_y[current_volume], &intersection_time_table.normal_vector_z[current_volume],
+                                    &intersection_time_table.surface_index[current_volume], &intersection_time_table.n_elements[current_volume],
+                                    number_of_solutions, r_start, v, &Volumes[current_volume]->geometry);
 
         intersection_time_table.calculated[current_volume] = 1;
       }

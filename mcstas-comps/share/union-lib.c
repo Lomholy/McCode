@@ -31,6 +31,54 @@ void scattering_process_struct_init(struct scattering_process_struct *sps)
 void geometry_struct_init(struct geometry_struct *geometry){
   memset(geometry, 0, sizeof(struct geometry_struct));
   geometry->skip_hierarchy_optimization = 0;
+  geometry->max_intersections = 2;
+}
+
+void *union_xrealloc(void *pointer, size_t size) {
+  // realloc that exits on failure
+  void *result = realloc(pointer, size);
+  if (!result) {
+    fprintf(stderr, "Failure allocating %lu bytes in Union library - Exit!\n", (unsigned long)size);
+    exit(EXIT_FAILURE);
+  }
+  return result;
+}
+
+int intersect_function_growing(double **t, double **nx, double **ny, double **nz, int **surface_index, int *size,
+                               int *num_solutions, double *r, double *v, struct geometry_struct *geometry) {
+  // Intersections of the ray r + t*v with geometry, in the arrays *t, *nx, *ny, *nz and *surface_index
+  // of *size elements, enlarged as needed. A mesh reports at most geometry->max_intersections crossings
+  // (4 at first). When it uses all of them it may have more, so max_intersections grows by 2 and the
+  // intersections are computed again, until every crossing fits.
+  int output = 0;
+  int complete = 0;
+  while (!complete) {
+    int needed = geometry->max_intersections;
+    if (needed < 2) needed = 2;
+    if (*size < needed) {
+      int i;
+      *t = union_xrealloc(*t, needed*sizeof(double));
+      *nx = union_xrealloc(*nx, needed*sizeof(double));
+      *ny = union_xrealloc(*ny, needed*sizeof(double));
+      *nz = union_xrealloc(*nz, needed*sizeof(double));
+      *surface_index = union_xrealloc(*surface_index, needed*sizeof(int));
+      for (i = *size; i < needed; i++) {
+        (*t)[i] = -1.0;
+        (*nx)[i] = -1.0;
+        (*ny)[i] = -1.0;
+        (*nz)[i] = -1.0;
+        (*surface_index)[i] = -1;
+      }
+      *size = needed;
+    }
+    output = intersect_function(*t, *nx, *ny, *nz, *surface_index, num_solutions, r, v, geometry);
+    complete = 1;
+    if (geometry->eShape == mesh && *num_solutions >= geometry->max_intersections) {
+      geometry->max_intersections += 2;
+      complete = 0;
+    }
+  }
+  return output;
 }
 
 double distance_between(Coords position1,Coords position2) {
@@ -1526,11 +1574,13 @@ struct lines_to_draw draw_line_with_highest_priority(Coords position1,Coords pos
 
     int volume_index,iterate,permanent_list_length = 0;
     int number_of_solutions;
-    double *temp_intersection=malloc(max_number_of_solutions*sizeof(double));
-    if (!temp_intersection) {
-      fprintf(stderr,"Failure allocating list in Union function lines_to_draw 1 - Exit!\n");
-      exit(EXIT_FAILURE);
-    }
+    // intersection buffers, enlarged by intersect_function_growing
+    double *temp_intersection = NULL;
+    double *normal_x = NULL;
+    double *normal_y = NULL;
+    double *normal_z = NULL;
+    int *surface = NULL;
+    int buffer_size = 0;
     double r1[3],r2[3],direction[3];
     struct pointer_to_1d_double_list intersection_list;
 
@@ -1549,47 +1599,23 @@ struct lines_to_draw draw_line_with_highest_priority(Coords position1,Coords pos
     direction[2] = r2[2] - r1[2];
     int geometry_output;
     
-    // Todo: switch to nicer intersect function call
-    double *double_dummy = malloc(max_number_of_solutions*sizeof(double));
-    int *int_dummy = malloc(max_number_of_solutions*sizeof(int));
-    // We need a storing pointer for the reallocs, to ensure that on realloc fail
-    // All is handled correctly
-    double *tmp;
-    int *tmpint;
-	
     // Find intersections
     for (volume_index = 1;volume_index < number_of_volumes; volume_index++) {
         if (volume_index != N) {
-         if (Geometries[volume_index]->eShape==mesh){
-            tmp = realloc(double_dummy, sizeof(double)*1000);
-            tmpint = realloc(int_dummy, sizeof(double)*1000);
-            if ( tmp==NULL || tmpint==NULL ) { 
-              free(tmp); 
-              free(tmpint);
-              printf("\nERROR: Realloc failed on double dummy");
-              exit(1);
-            } else {
-              double_dummy = tmp;
-              int_dummy = tmpint;
-              tmp = realloc(temp_intersection, sizeof(double)*1000);
-              if ( tmp == NULL){
-                free(tmp);
-                printf("\nERROR: Realloc failed on temp intersection");
-                exit(1);
-              } else{ temp_intersection = tmp;}
-            }
-         }
-            geometry_output = Geometries[volume_index]->intersect_function(temp_intersection, double_dummy, double_dummy, double_dummy, int_dummy, 
-			                                                               &number_of_solutions, r1, direction, Geometries[volume_index]);
-                for (iterate=0;iterate<number_of_solutions;iterate++) {
-                    if (temp_intersection[iterate] > 0 && temp_intersection[iterate] < 1) {
-		      add_element_to_double_list(&intersection_list,temp_intersection[iterate]);
-		    }
+            geometry_output = intersect_function_growing(&temp_intersection, &normal_x, &normal_y, &normal_z, &surface, &buffer_size,
+                                                         &number_of_solutions, r1, direction, Geometries[volume_index]);
+            for (iterate=0;iterate<number_of_solutions;iterate++) {
+                if (temp_intersection[iterate] > 0 && temp_intersection[iterate] < 1) {
+                    add_element_to_double_list(&intersection_list,temp_intersection[iterate]);
                 }
+            }
         }
     }
-    free(double_dummy);
     free(temp_intersection);
+    free(normal_x);
+    free(normal_y);
+    free(normal_z);
+    free(surface);
     // Now we have a list of intersection distances between r1 and r2 and all volumes.
     // This list needs to be sorted before we continue!
 	if (intersection_list.num_elements > 0) {
@@ -2772,13 +2798,20 @@ int sample_mesh_intersect(double *t,
   // outward normals rotated back to the frame of the master component.
   // Hits slightly before r are kept, so that the surface the ray leaves is found.
   gmesh_struct *triangle_mesh = geometry->geometry_parameters.p_mesh;
-  gmesh_hit hits[GMESH_MAX_HITS];
+  // the hits, as many as the max_intersections slots the caller provides
+  // ponytail: one static scratch buffer (meshes are traced on the CPU, one ray at a time); per-thread buffers if threaded
+  static gmesh_hit *hits = NULL;
+  static int hits_size = 0;
   Coords position = rot_apply(geometry->transpose_rotation_matrix, coords_sub(coords_set(r[0], r[1], r[2]), geometry->center));
   Coords velocity = rot_apply(geometry->transpose_rotation_matrix, coords_set(v[0], v[1], v[2]));
   double t_min = -1e-9*triangle_mesh->length_scale/coords_len(velocity);
   int i;
 
-  *num_solutions = gmesh_intersect(triangle_mesh, position, velocity, t_min, hits);
+  if (hits_size < geometry->max_intersections) {
+    hits = union_xrealloc(hits, geometry->max_intersections*sizeof(gmesh_hit));
+    hits_size = geometry->max_intersections;
+  }
+  *num_solutions = gmesh_intersect(triangle_mesh, position, velocity, t_min, hits, geometry->max_intersections);
   for (i = 0; i < *num_solutions; i++) {
     Coords normal = rot_apply(geometry->rotation_matrix, hits[i].normal);
     t[i] = hits[i].t;
@@ -2839,26 +2872,32 @@ int box_within_box(struct geometry_struct *geometry_child,struct geometry_struct
 int existence_of_intersection(Coords point1, Coords point2, struct geometry_struct *geometry) {
     Coords vector_between = coords_sub(point2,point1);
     double start_point[3],vector_between_v[3];
-    // room for every crossing of a mesh, at most GMESH_MAX_HITS
-    double temp_solution[GMESH_MAX_HITS];
+    // intersection buffers, enlarged by intersect_function_growing
+    double *temp_solution = NULL;
+    double *normal_x = NULL;
+    double *normal_y = NULL;
+    double *normal_z = NULL;
+    int *surface = NULL;
+    int buffer_size = 0;
     int number_of_solutions;
+    int found = 0;
+    int i;
 
     start_point[0] = point1.x;start_point[1] = point1.y;start_point[2] = point1.z;
     vector_between_v[0] = vector_between.x;vector_between_v[1] = vector_between.y;vector_between_v[2] = vector_between.z;
 	
-	// todo: Switch to nicer intersect call
-	double dummy_double[GMESH_MAX_HITS];
-	int dummy_int[GMESH_MAX_HITS];
-	
-    //printf("\nChecking the existence of intersections");	
-    geometry->intersect_function(temp_solution, dummy_double, dummy_double, dummy_double, dummy_int, &number_of_solutions, start_point, vector_between_v, geometry);
-    if (number_of_solutions > 0) {
-        if (temp_solution[0] > 0 && temp_solution[0] < 1) return 1;
-        if (number_of_solutions == 2) {
-            if (temp_solution[1] > 0 && temp_solution[1] < 1) return 1;
-        }
+    intersect_function_growing(&temp_solution, &normal_x, &normal_y, &normal_z, &surface, &buffer_size,
+                               &number_of_solutions, start_point, vector_between_v, geometry);
+    // an intersection between point1 (t = 0) and point2 (t = 1)
+    for (i = 0; i < number_of_solutions; i++) {
+        if (temp_solution[i] > 0 && temp_solution[i] < 1) found = 1;
     }
-    return 0;
+    free(temp_solution);
+    free(normal_x);
+    free(normal_y);
+    free(normal_z);
+    free(surface);
+    return found;
 }
 
 int box_overlaps_box(struct geometry_struct *geometry1,struct geometry_struct *geometry2) {

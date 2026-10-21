@@ -528,6 +528,7 @@ int mask_index;
 int is_masked_volume; // 1 if this volume is being masked by another volume, the volumes that mask it is in masked_by_list
 int mask_mode; // ALL/ANY 1/2. In ALL mode, only parts covered by all masks is simulated, in ANY mode, area covered by just one mask is simulated
 int skip_hierarchy_optimization;
+int max_intersections; // intersections the intersect function reports at most (meshes: 4 at first, grown by intersect_function_growing)
 double geometry_p_interact; // fraction of rays that interact with this volume for each scattering (between 0 and 1, 0 for disable)
 union geometry_parameter_union geometry_parameters; // relevant parameters for this shape
 union geometry_parameter_union (*copy_geometry_parameters)(union geometry_parameter_union*);
@@ -1299,6 +1300,9 @@ int box_within_cone(struct geometry_struct *geometry_child,struct geometry_struc
 
 // Flexible intersection function
 int intersect_function(double *t, double *nx, double *ny, double *nz, int *surface_index, int *num_solutions, double *r, double *v, struct geometry_struct *geometry);
+
+int intersect_function_growing(double **t, double **nx, double **ny, double **nz, int **surface_index, int *size,
+                               int *num_solutions, double *r, double *v, struct geometry_struct *geometry);
 
 // Flexible within function
 int r_within_function(Coords pos,struct geometry_struct *geometry);

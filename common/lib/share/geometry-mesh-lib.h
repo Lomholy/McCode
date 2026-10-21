@@ -39,8 +39,8 @@
  *     O(log N) instead of O(N) triangle tests, without any allocation per ray.
  *
  * Ray tracing
- *   gmesh_intersect()      the GMESH_MAX_HITS nearest intersections of a
- *                          straight line, sorted in t
+ *   gmesh_intersect()      the nearest intersections of a straight line, as
+ *                          many as fit in the caller's buffer, sorted in t
  *   gmesh_inside()         point-in-mesh test (deterministic, no random numbers)
  *   Hits exactly on an edge or vertex shared by several triangles are
  *   reported once.
@@ -71,11 +71,6 @@
   /* traversal stack depth (the tree depth is limited accordingly at build) */
   #ifndef GMESH_BVH_STACK
     #define GMESH_BVH_STACK 64
-  #endif
-  /* size of the hit buffer of gmesh_intersect. To change it from an instrument,
-     add DEPENDENCY " -DGMESH_MAX_HITS=20 " after its DEFINE INSTRUMENT line */
-  #ifndef GMESH_MAX_HITS
-    #define GMESH_MAX_HITS 4
   #endif
   #ifndef GMESH_DISPLAY_MAX
     #define GMESH_DISPLAY_MAX 200000
@@ -150,16 +145,17 @@ int gmesh_init (char* filename, double scale, int face_props, gmesh_struct* mesh
 
   /*******************************************************************************
    * int gmesh_intersect(gmesh_struct *mesh, Coords position, Coords direction,
-   *                     double t_min, gmesh_hit hits[GMESH_MAX_HITS])
+   *                     double t_min, gmesh_hit *hits, int max_hits)
    * ACTION: intersections of the line position + t*direction with the mesh, for
-   *         t > t_min (use -FLT_MAX for the whole line). The GMESH_MAX_HITS hits
-   *         with the smallest t are stored in 'hits', sorted by increasing t.
-   *         When the line has more hits, the farther ones are dropped and a
-   *         warning (shown once) explains how to raise GMESH_MAX_HITS.
+   *         t > t_min (use -FLT_MAX for the whole line). The max_hits hits with
+   *         the smallest t are stored in 'hits', sorted by increasing t; farther
+   *         ones are dropped. No memory is allocated (GPU safe): when the return
+   *         value equals max_hits there may be more hits, and the caller can
+   *         call again with a larger buffer.
    * RETURN: number of hits stored
    *******************************************************************************/
   #pragma acc routine seq
-int gmesh_intersect (gmesh_struct* mesh, Coords position, Coords direction, double t_min, gmesh_hit hits[GMESH_MAX_HITS]);
+int gmesh_intersect (gmesh_struct* mesh, Coords position, Coords direction, double t_min, gmesh_hit* hits, int max_hits);
 
   /*******************************************************************************
    * int gmesh_inside(gmesh_struct *mesh, Coords position)

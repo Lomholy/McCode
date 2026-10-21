@@ -32,16 +32,11 @@
 * The mesh geometry that is loaded must be a watertight mesh: every edge must be
 * shared by exactly two triangles.
 *
-* Number of intersections per ray: for each mesh, Union_master stores the
-* GMESH_MAX_HITS (default 4) nearest crossings of the ray with the mesh surface.
-* A concave mesh, or one made of several parts, can be crossed more often. Then
-* the farther crossings are lost, the ray can not find the surface where it
-* leaves the mesh, and Union_master reports trace errors. geometry-mesh-lib
-* warns once when this happens:
-*   Warning: <file>: a ray crossed the mesh N times, but only the 4 nearest hits are kept
-* To fix it, add this line after the DEFINE INSTRUMENT line of the instrument,
-* with N at least the number given in the warning:
-*   DEPENDENCY " -DGMESH_MAX_HITS=N "
+* Number of intersections per ray: Union_master stores up to 4 crossings of a ray
+* with each mesh at first. A concave mesh, or one made of several parts, can be
+* crossed more often: when a ray uses all the slots, the number is raised by 2
+* (and the intersections computed again) until every crossing fits, so no
+* setting is needed.
 *
 * It is allowed to overlap components, but it is not allowed to have two
 *  parallel planes that coincides. This will crash the code on run time.
@@ -392,6 +387,7 @@ INITIALIZE
 
   sprintf (mesh_vol.name, "%s", NAME_CURRENT_COMP);
   sprintf (mesh_vol.geometry.shape, "mesh");
+  mesh_vol.geometry.max_intersections = 4; // raised by 2 when a ray crosses the mesh more often
   mesh_vol.geometry.eShape = mesh;
   mesh_vol.geometry.priority_value = priority;
   mesh_vol.geometry.visualization_on = visualize;

@@ -29,8 +29,6 @@
 *******************************************************************************/
 
 DEFINE INSTRUMENT Geometry_test(string meshfile="torus.STL")
-/* some rays cross the faceted torus more often than the default GMESH_MAX_HITS of 4 */
-DEPENDENCY " -DGMESH_MAX_HITS=8 "
 
 DECLARE
 %{

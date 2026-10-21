@@ -1918,27 +1918,13 @@ gmesh_trace (gmesh_struct* mesh, Coords origin, Coords direction, double t_min, 
   return total;
 }
 
-/* set once a hit buffer overflow has been reported */
-int gmesh_overflow_warned = 0;
-  #pragma acc declare create(gmesh_overflow_warned)
-
   /* intersections of a line with mesh, see geometry-mesh-lib.h */
   #pragma acc routine seq
 int
-gmesh_intersect (gmesh_struct* mesh, Coords position, Coords direction, double t_min, gmesh_hit hits[GMESH_MAX_HITS]) {
+gmesh_intersect (gmesh_struct* mesh, Coords position, Coords direction, double t_min, gmesh_hit* hits, int max_hits) {
   int stored = 0;
   int ambiguous = 0;
-  int total = gmesh_trace (mesh, position, direction, t_min, hits, GMESH_MAX_HITS, &stored, &ambiguous);
-  if (total > stored && !gmesh_overflow_warned) {
-    gmesh_overflow_warned = 1;
-    fprintf (stderr,
-             "Warning: %s: a ray crossed the mesh %d times, but only the %d nearest hits are kept "
-             "(geometry-mesh-lib).\n"
-             "  To keep more, add this line after the DEFINE INSTRUMENT line of your .instr file:\n"
-             "    DEPENDENCY \" -DGMESH_MAX_HITS=%d \"\n"
-             "  This warning is shown once.\n",
-             mesh->filename, total, GMESH_MAX_HITS, total);
-  }
+  gmesh_trace (mesh, position, direction, t_min, hits, max_hits, &stored, &ambiguous);
   return stored;
 }
 
