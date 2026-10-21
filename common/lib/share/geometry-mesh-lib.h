@@ -39,8 +39,8 @@
  *     O(log N) instead of O(N) triangle tests, without any allocation per ray.
  *
  * Ray tracing
- *   gmesh_intersect()      the nearest intersections of a straight line, as
- *                          many as fit in the caller's buffer, sorted in t
+ *   gmesh_intersect()      all intersections of a straight line, sorted in t,
+ *                          in a hit buffer that grows as needed
  *   gmesh_inside()         point-in-mesh test (deterministic, no random numbers)
  *   Hits exactly on an edge or vertex shared by several triangles are
  *   reported once.
@@ -145,17 +145,20 @@ int gmesh_init (char* filename, double scale, int face_props, gmesh_struct* mesh
 
   /*******************************************************************************
    * int gmesh_intersect(gmesh_struct *mesh, Coords position, Coords direction,
-   *                     double t_min, gmesh_hit *hits, int max_hits)
+   *                     double t_min, gmesh_hit **hits, int *max_hits)
    * ACTION: intersections of the line position + t*direction with the mesh, for
-   *         t > t_min (use -FLT_MAX for the whole line). The max_hits hits with
-   *         the smallest t are stored in 'hits', sorted by increasing t; farther
-   *         ones are dropped. No memory is allocated (GPU safe): when the return
-   *         value equals max_hits there may be more hits, and the caller can
-   *         call again with a larger buffer.
+   *         t > t_min (use -FLT_MAX for the whole line), stored in the buffer
+   *         *hits of *max_hits hits, sorted by increasing t. The buffer is
+   *         allocated with malloc and owned by the caller (start with NULL and
+   *         0, free it at the end). As soon as a line has more hits than fit,
+   *         the buffer is enlarged during the trace, 2 hits at a time, so every
+   *         hit is returned in one call and the buffer keeps its size for the
+   *         next lines. On the GPU (OPENACC) memory can not be allocated: the
+   *         *max_hits nearest hits are kept and farther ones dropped.
    * RETURN: number of hits stored
    *******************************************************************************/
   #pragma acc routine seq
-int gmesh_intersect (gmesh_struct* mesh, Coords position, Coords direction, double t_min, gmesh_hit* hits, int max_hits);
+int gmesh_intersect (gmesh_struct* mesh, Coords position, Coords direction, double t_min, gmesh_hit** hits, int* max_hits);
 
   /*******************************************************************************
    * int gmesh_inside(gmesh_struct *mesh, Coords position)

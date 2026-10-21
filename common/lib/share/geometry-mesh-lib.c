@@ -1820,15 +1820,17 @@ gmesh_tri_hit (gmesh_struct* mesh, int triangle, Coords origin, Coords direction
   return 1;
 }
 
-  /* BVH traversal for the line origin + t*direction, t > t_min. Stores the
-     max_hits nearest hits in hits, sorted by t, with hits on shared edges and
-     vertices kept once; every hit is visited, so a return value above
-     *stored_count means hits were dropped. When hits is NULL the hits are only counted, each
-     triangle hit once, with *ambiguous = 1 when a hit is on an edge or at the
-     origin. Returns the number of hits found. */
+  /* BVH traversal for the line origin + t*direction, t > t_min. Stores the hits
+   in the buffer *hits of *max_hits hits, sorted by t, with hits on shared edges
+   and vertices kept once. When the buffer is full it is enlarged by 2 at once,
+   so that every hit of the line is kept (on the GPU, where memory can not be
+   allocated, the farthest hits are dropped instead). When hits is NULL the hits
+   are only counted, each triangle hit once, with *ambiguous = 1 when a hit is on
+   an edge or at the origin. Returns the number of hits found. */
   #pragma acc routine seq
 static int
-gmesh_trace (gmesh_struct* mesh, Coords origin, Coords direction, double t_min, gmesh_hit* hits, int max_hits, int* stored_count, int* ambiguous) {
+gmesh_trace (gmesh_struct* mesh, Coords origin, Coords direction, double t_min, gmesh_hit** hits, int* max_hits, int* stored_count,
+             int* ambiguous) {
   int count_only = (hits == NULL);
   int stack[GMESH_BVH_STACK + 2];
   int top = 0;
@@ -1890,7 +1892,7 @@ gmesh_trace (gmesh_struct* mesh, Coords origin, Coords direction, double t_min, 
       hit.edge = on_edge;
       /* hits on shared edges/vertices: keep once */
       for (k = 0; k < *stored_count; k++) {
-        if (hits[k].in_out == in_out && fabs (hits[k].t - hit_t) <= t_tolerance) {
+        if ((*hits)[k].in_out == in_out && fabs ((*hits)[k].t - hit_t) <= t_tolerance) {
           duplicate = 1;
           break;
         }
@@ -1899,20 +1901,28 @@ gmesh_trace (gmesh_struct* mesh, Coords origin, Coords direction, double t_min, 
         continue;
       total++;
       position = *stored_count;
-      if (position == max_hits) {
-        if (max_hits == 0)
+      if (position == *max_hits) {
+  #ifndef OPENACC
+        /* the buffer is full: enlarge it by 2 so that this and later hits are kept */
+        *hits = gmesh_xrealloc (*hits, (*max_hits + 2) * sizeof (gmesh_hit));
+        *max_hits += 2;
+        (*stored_count)++;
+  #else
+        /* on the GPU the buffer can not grow: drop the farthest hit */
+        if (*max_hits == 0)
           continue;
-        if (hit_t >= hits[max_hits - 1].t)
+        if (hit_t >= (*hits)[*max_hits - 1].t)
           continue;
-        position = max_hits - 1;
+        position = *max_hits - 1;
+  #endif
       } else {
         (*stored_count)++;
       }
-      while (position > 0 && hits[position - 1].t > hit_t) {
-        hits[position] = hits[position - 1];
+      while (position > 0 && (*hits)[position - 1].t > hit_t) {
+        (*hits)[position] = (*hits)[position - 1];
         position--;
       }
-      hits[position] = hit;
+      (*hits)[position] = hit;
     }
   }
   return total;
@@ -1921,7 +1931,7 @@ gmesh_trace (gmesh_struct* mesh, Coords origin, Coords direction, double t_min, 
   /* intersections of a line with mesh, see geometry-mesh-lib.h */
   #pragma acc routine seq
 int
-gmesh_intersect (gmesh_struct* mesh, Coords position, Coords direction, double t_min, gmesh_hit* hits, int max_hits) {
+gmesh_intersect (gmesh_struct* mesh, Coords position, Coords direction, double t_min, gmesh_hit** hits, int* max_hits) {
   int stored = 0;
   int ambiguous = 0;
   gmesh_trace (mesh, position, direction, t_min, hits, max_hits, &stored, &ambiguous);
@@ -1955,7 +1965,7 @@ gmesh_inside (gmesh_struct* mesh, Coords position) {
     int stored = 0;
     int ambiguous = 0;
     Coords direction = coords_set (D[j][0], D[j][1], D[j][2]);
-    int n = gmesh_trace (mesh, position, direction, 0, NULL, 0, &stored, &ambiguous);
+    int n = gmesh_trace (mesh, position, direction, 0, NULL, NULL, &stored, &ambiguous);
     if (!ambiguous)
       return (int)(n % 2);
     votes += (int)(n % 2);

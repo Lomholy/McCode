@@ -47,38 +47,36 @@ void *union_xrealloc(void *pointer, size_t size) {
 int intersect_function_growing(double **t, double **nx, double **ny, double **nz, int **surface_index, int *size,
                                int *num_solutions, double *r, double *v, struct geometry_struct *geometry) {
   // Intersections of the ray r + t*v with geometry, in the arrays *t, *nx, *ny, *nz and *surface_index
-  // of *size elements, enlarged as needed. A mesh reports at most geometry->max_intersections crossings
-  // (4 at first). When it uses all of them it may have more, so max_intersections grows by 2 and the
-  // intersections are computed again, until every crossing fits.
-  int output = 0;
-  int complete = 0;
-  while (!complete) {
-    int needed = geometry->max_intersections;
-    if (needed < 2) needed = 2;
-    if (*size < needed) {
-      int i;
-      *t = union_xrealloc(*t, needed*sizeof(double));
-      *nx = union_xrealloc(*nx, needed*sizeof(double));
-      *ny = union_xrealloc(*ny, needed*sizeof(double));
-      *nz = union_xrealloc(*nz, needed*sizeof(double));
-      *surface_index = union_xrealloc(*surface_index, needed*sizeof(int));
-      for (i = *size; i < needed; i++) {
-        (*t)[i] = -1.0;
-        (*nx)[i] = -1.0;
-        (*ny)[i] = -1.0;
-        (*nz)[i] = -1.0;
-        (*surface_index)[i] = -1;
-      }
-      *size = needed;
-    }
-    output = intersect_function(*t, *nx, *ny, *nz, *surface_index, num_solutions, r, v, geometry);
-    complete = 1;
-    if (geometry->eShape == mesh && *num_solutions >= geometry->max_intersections) {
-      geometry->max_intersections += 2;
-      complete = 0;
-    }
+  // of *size elements. A mesh is traced once with every crossing kept, and the arrays are enlarged
+  // at once to hold all of them; other geometries have at most 2 intersections.
+  int needed = 2;
+  int n = 0;
+  if (geometry->eShape == mesh) {
+    n = union_mesh_trace(r, v, geometry);
+    if (n > needed) needed = n;
   }
-  return output;
+  if (*size < needed) {
+    int i;
+    *t = union_xrealloc(*t, needed*sizeof(double));
+    *nx = union_xrealloc(*nx, needed*sizeof(double));
+    *ny = union_xrealloc(*ny, needed*sizeof(double));
+    *nz = union_xrealloc(*nz, needed*sizeof(double));
+    *surface_index = union_xrealloc(*surface_index, needed*sizeof(int));
+    for (i = *size; i < needed; i++) {
+      (*t)[i] = -1.0;
+      (*nx)[i] = -1.0;
+      (*ny)[i] = -1.0;
+      (*nz)[i] = -1.0;
+      (*surface_index)[i] = -1;
+    }
+    *size = needed;
+  }
+  if (geometry->eShape == mesh) {
+    union_mesh_copy(n, *t, *nx, *ny, *nz, *surface_index, geometry);
+    *num_solutions = n;
+    return n > 0;
+  }
+  return intersect_function(*t, *nx, *ny, *nz, *surface_index, num_solutions, r, v, geometry);
 }
 
 double distance_between(Coords position1,Coords position2) {
@@ -2789,38 +2787,46 @@ int r_within_mesh(Coords pos,struct geometry_struct *geometry) {
   return gmesh_inside(geometry->geometry_parameters.p_mesh, local_position);
 }
 
-int sample_mesh_intersect(double *t,
-                          double *nx, double *ny, double*nz,
-                          int *surface_index,
-                          int *num_solutions,double *r,double *v,
-                          struct geometry_struct *geometry) {
-  // Times of intersection with a mesh component, nearest first, with the unit
-  // outward normals rotated back to the frame of the master component.
-  // Hits slightly before r are kept, so that the surface the ray leaves is found.
+// hit buffer of geometry-mesh-lib, shared by all meshes and enlarged by it whenever a ray has more hits
+// ponytail: one static buffer (meshes are traced on the CPU, one ray at a time); per-thread buffers if threaded
+static gmesh_hit *union_mesh_hits = NULL;
+static int union_mesh_hits_size = 0;
+
+int union_mesh_trace(double *r, double *v, struct geometry_struct *geometry) {
+  // Every intersection of the ray r + t*v with a mesh, nearest first, in union_mesh_hits (frame of the
+  // mesh component). Hits slightly before r are kept, so that the surface the ray leaves is found.
   gmesh_struct *triangle_mesh = geometry->geometry_parameters.p_mesh;
-  // the hits, as many as the max_intersections slots the caller provides
-  // ponytail: one static scratch buffer (meshes are traced on the CPU, one ray at a time); per-thread buffers if threaded
-  static gmesh_hit *hits = NULL;
-  static int hits_size = 0;
   Coords position = rot_apply(geometry->transpose_rotation_matrix, coords_sub(coords_set(r[0], r[1], r[2]), geometry->center));
   Coords velocity = rot_apply(geometry->transpose_rotation_matrix, coords_set(v[0], v[1], v[2]));
   double t_min = -1e-9*triangle_mesh->length_scale/coords_len(velocity);
-  int i;
+  return gmesh_intersect(triangle_mesh, position, velocity, t_min, &union_mesh_hits, &union_mesh_hits_size);
+}
 
-  if (hits_size < geometry->max_intersections) {
-    hits = union_xrealloc(hits, geometry->max_intersections*sizeof(gmesh_hit));
-    hits_size = geometry->max_intersections;
-  }
-  *num_solutions = gmesh_intersect(triangle_mesh, position, velocity, t_min, hits, geometry->max_intersections);
-  for (i = 0; i < *num_solutions; i++) {
-    Coords normal = rot_apply(geometry->rotation_matrix, hits[i].normal);
-    t[i] = hits[i].t;
+void union_mesh_copy(int n, double *t, double *nx, double *ny, double *nz, int *surface_index, struct geometry_struct *geometry) {
+  // The first n hits of union_mesh_hits, with the unit outward normals rotated back to the frame of the master component
+  int i;
+  for (i = 0; i < n; i++) {
+    Coords normal = rot_apply(geometry->rotation_matrix, union_mesh_hits[i].normal);
+    t[i] = union_mesh_hits[i].t;
     nx[i] = normal.x;
     ny[i] = normal.y;
     nz[i] = normal.z;
     surface_index[i] = 0;
   }
-  return *num_solutions > 0;
+}
+
+int sample_mesh_intersect(double *t,
+                          double *nx, double *ny, double*nz,
+                          int *surface_index,
+                          int *num_solutions,double *r,double *v,
+                          struct geometry_struct *geometry) {
+  // Intersections with a mesh for callers with fixed-size arrays of geometry->max_intersections elements
+  // (Union_master_GPU): the nearest ones are kept. intersect_function_growing returns all of them.
+  int n = union_mesh_trace(r, v, geometry);
+  if (n > geometry->max_intersections) n = geometry->max_intersections;
+  union_mesh_copy(n, t, nx, ny, nz, surface_index, geometry);
+  *num_solutions = n;
+  return n > 0;
 }
 
 int r_within_box_advanced(Coords pos,struct geometry_struct *geometry) {
