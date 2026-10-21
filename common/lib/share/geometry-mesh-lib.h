@@ -23,7 +23,12 @@
 *        numbers after the vertex indices are kept as face properties
 *   PLY  ascii, binary_little_endian and binary_big_endian, any extra
 *        elements/properties are skipped; scalar face properties are kept
-*   (STEP is not supported: export the geometry as STL, OFF or PLY)
+*   glTF 2.0 .gltf (JSON, buffers embedded as base64 or in .bin files next to
+*        it) and .glb (binary). The triangles (also strips and fans) of the
+*        default scene are read with the node transformations applied;
+*        Draco/meshopt compression, quantized positions and sparse accessors
+*        are not supported. glTF has no face properties.
+*   (STEP is not supported: export the geometry as STL, OFF, PLY or glTF)
 *
 * What the library does at init
 *   - optional scaling (e.g. 1e-3 for files in mm), no re-sizing or centring

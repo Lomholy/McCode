@@ -761,6 +761,837 @@ truncated:
 }
 
 /* ========================================================================== */
+/*  glTF 2.0 reader (.gltf and .glb)                                          */
+/* ========================================================================== */
+
+/* maximum nesting depth of JSON values and of glTF nodes */
+#define GMESH_GLTF_DEPTH 64
+
+/* JSON value types */
+enum { GMJ_OBJECT = 1, GMJ_ARRAY, GMJ_STRING, GMJ_PRIMITIVE };
+
+/* one JSON value, text[start..end-1] (a string without its quotes).
+   size: number of members of an object or elements of an array.
+   next: index of the first token after this value and the values inside it. */
+typedef struct gmesh_json_token {
+  int type;
+  long start;
+  long end;
+  long size;
+  long next;
+} gmesh_json_token;
+
+/* a parsed JSON document: the tokens in document order, the root is token 0 */
+typedef struct gmesh_json {
+  const char *text;
+  long length;
+  gmesh_json_token *tokens;
+  long ntokens;
+  long capacity;
+} gmesh_json;
+
+/* append a token of the given type starting at text position start.
+   Returns its index. */
+static long gmesh_json_add(gmesh_json *json, int type, long start)
+{
+  gmesh_json_token *token;
+  if (json->ntokens >= json->capacity) {
+    if (json->capacity == 0) {
+      json->capacity = 256;
+    } else {
+      json->capacity *= 2;
+    }
+    json->tokens = gmesh_xrealloc(json->tokens, json->capacity*sizeof(gmesh_json_token));
+  }
+  token = &json->tokens[json->ntokens];
+  token->type = type;
+  token->start = start;
+  token->end = start;
+  token->size = 0;
+  token->next = json->ntokens + 1;
+  json->ntokens++;
+  return json->ntokens - 1;
+}
+
+/* the first position at or after position that is not a blank */
+static long gmesh_json_skip_blanks(gmesh_json *json, long position)
+{
+  while (position < json->length && isspace((unsigned char)json->text[position])) {
+    position++;
+  }
+  return position;
+}
+
+/* parse the JSON value at position (after blanks), depth levels deep.
+   Returns the position after the value, -1 on a syntax error. */
+static long gmesh_json_value(gmesh_json *json, long position, int depth)
+{
+  long token;
+  char character;
+  position = gmesh_json_skip_blanks(json, position);
+  if (position >= json->length) return -1;
+  if (depth > GMESH_GLTF_DEPTH) return -1;
+  character = json->text[position];
+  if (character == '"') {
+    token = gmesh_json_add(json, GMJ_STRING, position + 1);
+    position++;
+    while (position < json->length && json->text[position] != '"') {
+      /* skip the escaped character */
+      if (json->text[position] == '\\') position++;
+      position++;
+    }
+    if (position >= json->length) return -1;
+    json->tokens[token].end = position;
+    return position + 1;
+  }
+  if (character == '{' || character == '[') {
+    int is_object = (character == '{');
+    int type = GMJ_ARRAY;
+    char closing = ']';
+    int more = 1;
+    if (is_object) {
+      type = GMJ_OBJECT;
+      closing = '}';
+    }
+    token = gmesh_json_add(json, type, position);
+    position = gmesh_json_skip_blanks(json, position + 1);
+    if (position >= json->length) return -1;
+    if (json->text[position] == closing) more = 0;
+    while (more) {
+      if (is_object) {
+        long key = json->ntokens;
+        position = gmesh_json_value(json, position, depth + 1);
+        if (position < 0) return -1;
+        if (json->tokens[key].type != GMJ_STRING) return -1;
+        position = gmesh_json_skip_blanks(json, position);
+        if (position >= json->length || json->text[position] != ':') return -1;
+        position++;
+      }
+      position = gmesh_json_value(json, position, depth + 1);
+      if (position < 0) return -1;
+      json->tokens[token].size++;
+      position = gmesh_json_skip_blanks(json, position);
+      if (position >= json->length) return -1;
+      if (json->text[position] == ',') {
+        position++;
+      } else if (json->text[position] == closing) {
+        more = 0;
+      } else {
+        return -1;
+      }
+    }
+    json->tokens[token].end = position + 1;
+    json->tokens[token].next = json->ntokens;
+    return position + 1;
+  }
+  /* number, true, false or null */
+  token = gmesh_json_add(json, GMJ_PRIMITIVE, position);
+  while (position < json->length && !strchr(",}] \t\r\n", json->text[position])) {
+    position++;
+  }
+  json->tokens[token].end = position;
+  if (position == json->tokens[token].start) return -1;
+  return position;
+}
+
+/* parse text[0..length-1] into json. Returns 1 on success, 0 on a syntax error. */
+static int gmesh_json_parse(gmesh_json *json, const char *text, long length)
+{
+  json->text = text;
+  json->length = length;
+  json->ntokens = 0;
+  return gmesh_json_value(json, 0, 0) >= 0;
+}
+
+/* 1 when the string token equals word */
+static int gmesh_json_equals(gmesh_json *json, long token, const char *word)
+{
+  long length;
+  if (token < 0) return 0;
+  if (json->tokens[token].type != GMJ_STRING) return 0;
+  length = json->tokens[token].end - json->tokens[token].start;
+  if (length != (long)strlen(word)) return 0;
+  return !strncmp(json->text + json->tokens[token].start, word, length);
+}
+
+/* the value of member key of the object token object, -1 when missing */
+static long gmesh_json_member(gmesh_json *json, long object, const char *key)
+{
+  long member;
+  long i;
+  if (object < 0) return -1;
+  if (json->tokens[object].type != GMJ_OBJECT) return -1;
+  member = object + 1;
+  for (i = 0; i < json->tokens[object].size; i++) {
+    long value = json->tokens[member].next;
+    if (gmesh_json_equals(json, member, key)) return value;
+    member = json->tokens[value].next;
+  }
+  return -1;
+}
+
+/* the number of elements of the array token array, 0 when it is missing */
+static long gmesh_json_count(gmesh_json *json, long array)
+{
+  if (array < 0) return 0;
+  if (json->tokens[array].type != GMJ_ARRAY) return 0;
+  return json->tokens[array].size;
+}
+
+/* element number index of the array token array, -1 when missing */
+static long gmesh_json_element(gmesh_json *json, long array, long index)
+{
+  long element;
+  long i;
+  if (index < 0 || index >= gmesh_json_count(json, array)) return -1;
+  element = array + 1;
+  for (i = 0; i < index; i++) {
+    element = json->tokens[element].next;
+  }
+  return element;
+}
+
+/* the value of the number token, fallback when token is missing or not a number */
+static double gmesh_json_number(gmesh_json *json, long token, double fallback)
+{
+  char buffer[64];
+  long length;
+  if (token < 0) return fallback;
+  if (json->tokens[token].type != GMJ_PRIMITIVE) return fallback;
+  length = json->tokens[token].end - json->tokens[token].start;
+  if (length > 63) return fallback;
+  memcpy(buffer, json->text + json->tokens[token].start, length);
+  buffer[length] = '\0';
+  return strtod(buffer, NULL);
+}
+
+/* the value of the number token as an integer, fallback when the token is
+   missing, not a number, or outside the range of a 32 bit integer */
+static long gmesh_json_integer(gmesh_json *json, long token, long fallback)
+{
+  double value = gmesh_json_number(json, token, (double)fallback);
+  if (value != value) return fallback;
+  if (value < -2147483647.0 || value > 2147483647.0) return fallback;
+  return (long)value;
+}
+
+/* a glTF file being read: its JSON document and the bytes of its buffers */
+typedef struct gmesh_gltf {
+  char *filename;
+  gmesh_json json;
+  unsigned char *file_data;   /* the whole .gltf or .glb file */
+  long file_length;
+  unsigned char *bin_chunk;   /* the BIN chunk of a .glb, inside file_data */
+  long bin_length;
+  long nbuffers;
+  unsigned char **buffers;    /* the bytes of each buffer */
+  long *buffer_lengths;
+  int *buffer_owned;          /* 1 when buffers[i] was allocated for it */
+} gmesh_gltf;
+
+/* an accessor resolved to bytes: count elements of ncomponents values of
+   component_type each, element i at data + i*stride */
+typedef struct gmesh_gltf_view {
+  const unsigned char *data;
+  long count;
+  long stride;
+  int component_type;
+  int ncomponents;
+} gmesh_gltf_view;
+
+/* glTF component types */
+#define GMESH_GLTF_UBYTE  5121
+#define GMESH_GLTF_USHORT 5123
+#define GMESH_GLTF_UINT   5125
+#define GMESH_GLTF_FLOAT  5126
+
+/* read the whole file name into a new buffer (with a final '\0') and its
+   length into *length. Returns NULL (with a message) on error. */
+static unsigned char *gmesh_read_whole_file(char *name, long *length)
+{
+  FILE *file = Open_File(name, "rb", NULL);
+  unsigned char *data;
+  if (!file) {
+    fprintf(stderr, "Error: can not open %s (geometry-mesh-lib)\n", name);
+    return NULL;
+  }
+  fseek(file, 0, SEEK_END);
+  *length = ftell(file);
+  fseek(file, 0, SEEK_SET);
+  if (*length < 0) {
+    fclose(file);
+    fprintf(stderr, "Error: can not read %s (geometry-mesh-lib)\n", name);
+    return NULL;
+  }
+  data = gmesh_xrealloc(NULL, *length + 1);
+  if ((long)fread(data, 1, *length, file) != *length) {
+    free(data);
+    fclose(file);
+    fprintf(stderr, "Error: can not read %s (geometry-mesh-lib)\n", name);
+    return NULL;
+  }
+  data[*length] = '\0';
+  fclose(file);
+  return data;
+}
+
+/* the value of a base64 character, -1 for any other character */
+static int gmesh_base64_value(char character)
+{
+  if (character >= 'A' && character <= 'Z') return character - 'A';
+  if (character >= 'a' && character <= 'z') return character - 'a' + 26;
+  if (character >= '0' && character <= '9') return character - '0' + 52;
+  if (character == '+') return 62;
+  if (character == '/') return 63;
+  return -1;
+}
+
+/* decode the base64 text[0..length-1], up to the first '=', into a new
+   buffer and its length into *decoded_length */
+static unsigned char *gmesh_base64_decode(const char *text, long length, long *decoded_length)
+{
+  unsigned char *data = gmesh_xrealloc(NULL, length*3/4 + 3);
+  unsigned long bits = 0;
+  int nbits = 0;
+  long n = 0;
+  long i;
+  for (i = 0; i < length; i++) {
+    int value;
+    if (text[i] == '=') break;
+    value = gmesh_base64_value(text[i]);
+    if (value < 0) continue;
+    bits = ((bits << 6) | (unsigned long)value) & 0xFFFFFF;
+    nbits += 6;
+    if (nbits >= 8) {
+      nbits -= 8;
+      data[n] = (unsigned char)((bits >> nbits) & 0xFF);
+      n++;
+    }
+  }
+  *decoded_length = n;
+  return data;
+}
+
+/* the path of uri (length characters), relative to the directory of filename */
+static char *gmesh_gltf_path(const char *filename, const char *uri, long length)
+{
+  const char *slash = strrchr(filename, '/');
+  const char *backslash = strrchr(filename, '\\');
+  long directory = 0;
+  char *path;
+  if (slash) directory = slash - filename + 1;
+  if (backslash) {
+    if (backslash - filename + 1 > directory) directory = backslash - filename + 1;
+  }
+  path = gmesh_xrealloc(NULL, directory + length + 1);
+  memcpy(path, filename, directory);
+  memcpy(path + directory, uri, length);
+  path[directory + length] = '\0';
+  return path;
+}
+
+/* split the .glb file of gltf into its JSON chunk (*json_text, *json_length)
+   and its BIN chunk. Returns 1 on success, 0 (with a message) on error. */
+static int gmesh_gltf_glb(gmesh_gltf *gltf, const unsigned char **json_text, long *json_length)
+{
+  const unsigned char *data = gltf->file_data;
+  long length = gltf->file_length;
+  long chunk_length;
+  long position;
+  if (length < 20) {
+    fprintf(stderr, "Error: %s: truncated glb file (geometry-mesh-lib)\n", gltf->filename);
+    return 0;
+  }
+  if (gmesh_uint32_le(data + 4) != 2) {
+    fprintf(stderr, "Error: %s: only glTF 2.0 is supported (geometry-mesh-lib)\n", gltf->filename);
+    return 0;
+  }
+  chunk_length = (long)gmesh_uint32_le(data + 12);
+  if (gmesh_uint32_le(data + 16) != 0x4E4F534A || chunk_length > length - 20) {
+    fprintf(stderr, "Error: %s: glb file without a valid JSON chunk (geometry-mesh-lib)\n", gltf->filename);
+    return 0;
+  }
+  *json_text = data + 20;
+  *json_length = chunk_length;
+  /* the optional BIN chunk follows the JSON chunk */
+  position = 20 + chunk_length;
+  if (position + 8 <= length) {
+    chunk_length = (long)gmesh_uint32_le(data + position);
+    if (gmesh_uint32_le(data + position + 4) == 0x004E4942) {
+      if (chunk_length > length - position - 8) {
+        fprintf(stderr, "Error: %s: truncated glb BIN chunk (geometry-mesh-lib)\n", gltf->filename);
+        return 0;
+      }
+      gltf->bin_chunk = gltf->file_data + position + 8;
+      gltf->bin_length = chunk_length;
+    }
+  }
+  return 1;
+}
+
+/* load the bytes of every buffer of gltf: the BIN chunk of a .glb, a base64
+   data: URI, or a file next to the glTF file.
+   Returns 1 on success, 0 (with a message) on error. */
+static int gmesh_gltf_load_buffers(gmesh_gltf *gltf)
+{
+  gmesh_json *json = &gltf->json;
+  long buffers = gmesh_json_member(json, 0, "buffers");
+  long i;
+  gltf->nbuffers = gmesh_json_count(json, buffers);
+  gltf->buffers = gmesh_xcalloc(gltf->nbuffers, sizeof(unsigned char*));
+  gltf->buffer_lengths = gmesh_xcalloc(gltf->nbuffers, sizeof(long));
+  gltf->buffer_owned = gmesh_xcalloc(gltf->nbuffers, sizeof(int));
+  for (i = 0; i < gltf->nbuffers; i++) {
+    long buffer = gmesh_json_element(json, buffers, i);
+    long uri = gmesh_json_member(json, buffer, "uri");
+    long declared = gmesh_json_integer(json, gmesh_json_member(json, buffer, "byteLength"), 0);
+    if (uri < 0) {
+      /* only the first buffer of a .glb may refer to its BIN chunk */
+      if (i != 0 || !gltf->bin_chunk) {
+        fprintf(stderr, "Error: %s: buffer %ld has no data (geometry-mesh-lib)\n", gltf->filename, i);
+        return 0;
+      }
+      gltf->buffers[i] = gltf->bin_chunk;
+      gltf->buffer_lengths[i] = gltf->bin_length;
+    } else {
+      const char *text = json->text + json->tokens[uri].start;
+      long length = json->tokens[uri].end - json->tokens[uri].start;
+      if (length > 5 && !strncmp(text, "data:", 5)) {
+        const char *comma = memchr(text, ',', length);
+        long start;
+        if (!comma) {
+          fprintf(stderr, "Error: %s: invalid data URI in buffer %ld (geometry-mesh-lib)\n", gltf->filename, i);
+          return 0;
+        }
+        start = comma + 1 - text;
+        gltf->buffers[i] = gmesh_base64_decode(comma + 1, length - start, &gltf->buffer_lengths[i]);
+      } else {
+        char *path = gmesh_gltf_path(gltf->filename, text, length);
+        gltf->buffers[i] = gmesh_read_whole_file(path, &gltf->buffer_lengths[i]);
+        free(path);
+        if (!gltf->buffers[i]) return 0;
+      }
+      gltf->buffer_owned[i] = 1;
+    }
+    if (gltf->buffer_lengths[i] < declared) {
+      fprintf(stderr, "Error: %s: buffer %ld has %ld bytes instead of %ld (geometry-mesh-lib)\n",
+              gltf->filename, i, gltf->buffer_lengths[i], declared);
+      return 0;
+    }
+  }
+  return 1;
+}
+
+/* size in bytes of a glTF component type, 0 when unknown */
+static int gmesh_gltf_component_size(int component_type)
+{
+  if (component_type == 5120 || component_type == GMESH_GLTF_UBYTE) return 1;
+  if (component_type == 5122 || component_type == GMESH_GLTF_USHORT) return 2;
+  if (component_type == GMESH_GLTF_UINT || component_type == GMESH_GLTF_FLOAT) return 4;
+  return 0;
+}
+
+/* number of components of the accessor type token ("SCALAR", "VEC3", ...),
+   0 when unknown */
+static int gmesh_gltf_type_components(gmesh_json *json, long type)
+{
+  if (gmesh_json_equals(json, type, "SCALAR")) return 1;
+  if (gmesh_json_equals(json, type, "VEC2")) return 2;
+  if (gmesh_json_equals(json, type, "VEC3")) return 3;
+  if (gmesh_json_equals(json, type, "VEC4")) return 4;
+  if (gmesh_json_equals(json, type, "MAT2")) return 4;
+  if (gmesh_json_equals(json, type, "MAT3")) return 9;
+  if (gmesh_json_equals(json, type, "MAT4")) return 16;
+  return 0;
+}
+
+/* resolve accessor number index of gltf into *view.
+   Returns 1 on success, 0 (with a message) on error. */
+static int gmesh_gltf_accessor(gmesh_gltf *gltf, long index, gmesh_gltf_view *view)
+{
+  gmesh_json *json = &gltf->json;
+  long accessor = gmesh_json_element(json, gmesh_json_member(json, 0, "accessors"), index);
+  long buffer_view;
+  long buffer;
+  long element_size;
+  long view_offset;
+  long view_length;
+  long offset;
+  int inside;
+  if (accessor < 0) {
+    fprintf(stderr, "Error: %s: accessor %ld is missing (geometry-mesh-lib)\n", gltf->filename, index);
+    return 0;
+  }
+  if (gmesh_json_member(json, accessor, "sparse") >= 0) {
+    fprintf(stderr, "Error: %s: sparse accessors are not supported (geometry-mesh-lib)\n", gltf->filename);
+    return 0;
+  }
+  buffer_view = gmesh_json_element(json, gmesh_json_member(json, 0, "bufferViews"),
+                                   gmesh_json_integer(json, gmesh_json_member(json, accessor, "bufferView"), -1));
+  if (buffer_view < 0) {
+    fprintf(stderr, "Error: %s: accessor %ld has no bufferView (geometry-mesh-lib)\n", gltf->filename, index);
+    return 0;
+  }
+  buffer = gmesh_json_integer(json, gmesh_json_member(json, buffer_view, "buffer"), -1);
+  if (buffer < 0 || buffer >= gltf->nbuffers) {
+    fprintf(stderr, "Error: %s: accessor %ld refers to a missing buffer (geometry-mesh-lib)\n", gltf->filename, index);
+    return 0;
+  }
+  view->component_type = (int)gmesh_json_integer(json, gmesh_json_member(json, accessor, "componentType"), 0);
+  view->ncomponents = gmesh_gltf_type_components(json, gmesh_json_member(json, accessor, "type"));
+  view->count = gmesh_json_integer(json, gmesh_json_member(json, accessor, "count"), -1);
+  element_size = (long)gmesh_gltf_component_size(view->component_type)*view->ncomponents;
+  view_offset = gmesh_json_integer(json, gmesh_json_member(json, buffer_view, "byteOffset"), 0);
+  view_length = gmesh_json_integer(json, gmesh_json_member(json, buffer_view, "byteLength"), 0);
+  view->stride = gmesh_json_integer(json, gmesh_json_member(json, buffer_view, "byteStride"), 0);
+  if (view->stride == 0) view->stride = element_size;
+  offset = gmesh_json_integer(json, gmesh_json_member(json, accessor, "byteOffset"), 0);
+  /* the elements must lie inside the buffer view, and the view inside the
+     buffer (in double precision, so that huge values can not overflow) */
+  inside = (element_size > 0 && view->count >= 0);
+  if (view->stride < element_size) inside = 0;
+  if (view_offset < 0 || offset < 0) inside = 0;
+  if ((double)view_offset + view_length > (double)gltf->buffer_lengths[buffer]) inside = 0;
+  if (inside && view->count > 0) {
+    inside = ((double)offset + (double)(view->count - 1)*view->stride + element_size <= (double)view_length);
+  }
+  if (!inside) {
+    fprintf(stderr, "Error: %s: accessor %ld is invalid or lies outside its buffer (geometry-mesh-lib)\n",
+            gltf->filename, index);
+    return 0;
+  }
+  view->data = gltf->buffers[buffer] + view_offset + offset;
+  return 1;
+}
+
+/* the float32 stored little endian in bytes[0..3] */
+static float gmesh_float_le(const unsigned char *bytes)
+{
+  uint32_t bits = gmesh_uint32_le(bytes);
+  float value;
+  memcpy(&value, &bits, 4);
+  return value;
+}
+
+/* element number i of an index accessor view (unsigned byte, short or int) */
+static unsigned long gmesh_gltf_index(gmesh_gltf_view *view, long i)
+{
+  const unsigned char *bytes = view->data + i*view->stride;
+  if (view->component_type == GMESH_GLTF_UBYTE) return bytes[0];
+  if (view->component_type == GMESH_GLTF_USHORT) return (unsigned long)bytes[0] | ((unsigned long)bytes[1] << 8);
+  return gmesh_uint32_le(bytes);
+}
+
+/* positions in the index stream of the corners of triangle number triangle of
+   a primitive in mode 4 (triangles), 5 (triangle strip) or 6 (triangle fan) */
+static void gmesh_gltf_triangle(int mode, long triangle, long corner[3])
+{
+  if (mode == 4) {
+    corner[0] = 3*triangle;
+    corner[1] = 3*triangle + 1;
+    corner[2] = 3*triangle + 2;
+  } else if (mode == 5) {
+    /* every other triangle of a strip is reversed to keep the winding */
+    corner[0] = triangle;
+    corner[1] = triangle + 1;
+    if (triangle % 2) {
+      corner[0] = triangle + 1;
+      corner[1] = triangle;
+    }
+    corner[2] = triangle + 2;
+  } else {
+    corner[0] = 0;
+    corner[1] = triangle + 1;
+    corner[2] = triangle + 2;
+  }
+}
+
+/* add the mesh primitive token primitive of gltf to raw, with its vertices
+   transformed by the 4x4 column-major matrix.
+   Returns 1 on success, 0 (with a message) on error. */
+static int gmesh_gltf_primitive(gmesh_gltf *gltf, long primitive, const double *matrix, gmesh_raw *raw)
+{
+  gmesh_json *json = &gltf->json;
+  gmesh_gltf_view positions;
+  gmesh_gltf_view indices;
+  long attributes = gmesh_json_member(json, primitive, "attributes");
+  long position_accessor = gmesh_json_integer(json, gmesh_json_member(json, attributes, "POSITION"), -1);
+  long index_accessor = gmesh_json_integer(json, gmesh_json_member(json, primitive, "indices"), -1);
+  int mode = (int)gmesh_json_integer(json, gmesh_json_member(json, primitive, "mode"), 4);
+  long first = raw->nverts;
+  long nindices;
+  long ntriangles = 0;
+  long i;
+  /* points (0) and lines (1-3) have no surface */
+  if (mode < 4) return 1;
+  if (mode > 6) {
+    fprintf(stderr, "Error: %s: unknown primitive mode %d (geometry-mesh-lib)\n", gltf->filename, mode);
+    return 0;
+  }
+  if (!gmesh_gltf_accessor(gltf, position_accessor, &positions)) return 0;
+  if (positions.component_type != GMESH_GLTF_FLOAT || positions.ncomponents != 3) {
+    fprintf(stderr, "Error: %s: POSITION must be float VEC3 (geometry-mesh-lib)\n", gltf->filename);
+    return 0;
+  }
+  for (i = 0; i < positions.count; i++) {
+    const unsigned char *bytes = positions.data + i*positions.stride;
+    double x = gmesh_float_le(bytes);
+    double y = gmesh_float_le(bytes + 4);
+    double z = gmesh_float_le(bytes + 8);
+    gmesh_raw_vertex(raw, matrix[0]*x + matrix[4]*y + matrix[8]*z + matrix[12],
+                          matrix[1]*x + matrix[5]*y + matrix[9]*z + matrix[13],
+                          matrix[2]*x + matrix[6]*y + matrix[10]*z + matrix[14]);
+  }
+  nindices = positions.count;
+  if (index_accessor >= 0) {
+    int known_type;
+    if (!gmesh_gltf_accessor(gltf, index_accessor, &indices)) return 0;
+    known_type = (indices.component_type == GMESH_GLTF_UBYTE || indices.component_type == GMESH_GLTF_USHORT);
+    if (indices.component_type == GMESH_GLTF_UINT) known_type = 1;
+    if (!known_type || indices.ncomponents != 1) {
+      fprintf(stderr, "Error: %s: indices must be unsigned byte, short or int scalars (geometry-mesh-lib)\n",
+              gltf->filename);
+      return 0;
+    }
+    nindices = indices.count;
+  }
+  if (mode == 4) {
+    ntriangles = nindices/3;
+  } else if (nindices >= 3) {
+    ntriangles = nindices - 2;
+  }
+  for (i = 0; i < ntriangles; i++) {
+    long corner[3];
+    Coords **corners;
+    int k;
+    gmesh_gltf_triangle(mode, i, corner);
+    corners = gmesh_raw_face(raw, 3);
+    for (k = 0; k < 3; k++) {
+      unsigned long vertex = (unsigned long)corner[k];
+      if (index_accessor >= 0) vertex = gmesh_gltf_index(&indices, corner[k]);
+      if (vertex >= (unsigned long)positions.count) {
+        fprintf(stderr, "Error: %s: vertex index %lu out of range (geometry-mesh-lib)\n", gltf->filename, vertex);
+        return 0;
+      }
+      if (corners) {
+        corners[k] = &raw->verts[first + vertex];
+      }
+    }
+  }
+  return 1;
+}
+
+/* add the primitives of mesh number index of gltf to raw, transformed by
+   matrix. Returns 1 on success, 0 (with a message) on error. */
+static int gmesh_gltf_mesh(gmesh_gltf *gltf, long index, const double *matrix, gmesh_raw *raw)
+{
+  gmesh_json *json = &gltf->json;
+  long mesh = gmesh_json_element(json, gmesh_json_member(json, 0, "meshes"), index);
+  long primitives = gmesh_json_member(json, mesh, "primitives");
+  long i;
+  if (mesh < 0) {
+    fprintf(stderr, "Error: %s: mesh %ld is missing (geometry-mesh-lib)\n", gltf->filename, index);
+    return 0;
+  }
+  for (i = 0; i < gmesh_json_count(json, primitives); i++) {
+    if (!gmesh_gltf_primitive(gltf, gmesh_json_element(json, primitives, i), matrix, raw)) return 0;
+  }
+  return 1;
+}
+
+/* product = left*right for 4x4 column-major matrices */
+static void gmesh_matrix_multiply(const double *left, const double *right, double *product)
+{
+  int row, column, k;
+  for (column = 0; column < 4; column++) {
+    for (row = 0; row < 4; row++) {
+      double sum = 0;
+      for (k = 0; k < 4; k++) {
+        sum += left[k*4 + row]*right[column*4 + k];
+      }
+      product[column*4 + row] = sum;
+    }
+  }
+}
+
+/* the local transformation of the node token node as a 4x4 column-major
+   matrix: its "matrix", or translation * rotation * scale */
+static void gmesh_gltf_node_matrix(gmesh_json *json, long node, double *matrix)
+{
+  long values = gmesh_json_member(json, node, "matrix");
+  long translation = gmesh_json_member(json, node, "translation");
+  long rotation = gmesh_json_member(json, node, "rotation");
+  long scale = gmesh_json_member(json, node, "scale");
+  double t[3], q[4], s[3], r[3][3];
+  int row, column, k;
+  if (values >= 0) {
+    for (k = 0; k < 16; k++) {
+      matrix[k] = gmesh_json_number(json, gmesh_json_element(json, values, k), 0);
+    }
+    return;
+  }
+  for (k = 0; k < 3; k++) {
+    t[k] = gmesh_json_number(json, gmesh_json_element(json, translation, k), 0);
+    s[k] = gmesh_json_number(json, gmesh_json_element(json, scale, k), 1);
+  }
+  /* unit quaternion (x, y, z, w) */
+  for (k = 0; k < 4; k++) {
+    q[k] = gmesh_json_number(json, gmesh_json_element(json, rotation, k), 0);
+  }
+  if (rotation < 0) q[3] = 1;
+  r[0][0] = 1 - 2*(q[1]*q[1] + q[2]*q[2]);
+  r[0][1] = 2*(q[0]*q[1] - q[2]*q[3]);
+  r[0][2] = 2*(q[0]*q[2] + q[1]*q[3]);
+  r[1][0] = 2*(q[0]*q[1] + q[2]*q[3]);
+  r[1][1] = 1 - 2*(q[0]*q[0] + q[2]*q[2]);
+  r[1][2] = 2*(q[1]*q[2] - q[0]*q[3]);
+  r[2][0] = 2*(q[0]*q[2] - q[1]*q[3]);
+  r[2][1] = 2*(q[1]*q[2] + q[0]*q[3]);
+  r[2][2] = 1 - 2*(q[0]*q[0] + q[1]*q[1]);
+  for (column = 0; column < 3; column++) {
+    for (row = 0; row < 3; row++) {
+      matrix[column*4 + row] = r[row][column]*s[column];
+    }
+    matrix[column*4 + 3] = 0;
+  }
+  matrix[12] = t[0];
+  matrix[13] = t[1];
+  matrix[14] = t[2];
+  matrix[15] = 1;
+}
+
+/* add the meshes of node number index of gltf and of its children to raw,
+   transformed by parent_matrix and the node transformations; depth guards
+   against cycles. Returns 1 on success, 0 (with a message) on error. */
+static int gmesh_gltf_node(gmesh_gltf *gltf, long index, const double *parent_matrix, int depth, gmesh_raw *raw)
+{
+  gmesh_json *json = &gltf->json;
+  long node = gmesh_json_element(json, gmesh_json_member(json, 0, "nodes"), index);
+  long children = gmesh_json_member(json, node, "children");
+  long mesh;
+  double local[16];
+  double matrix[16];
+  long i;
+  if (node < 0) {
+    fprintf(stderr, "Error: %s: node %ld is missing (geometry-mesh-lib)\n", gltf->filename, index);
+    return 0;
+  }
+  if (depth > GMESH_GLTF_DEPTH) {
+    fprintf(stderr, "Error: %s: node hierarchy deeper than %d levels (geometry-mesh-lib)\n",
+            gltf->filename, GMESH_GLTF_DEPTH);
+    return 0;
+  }
+  gmesh_gltf_node_matrix(json, node, local);
+  gmesh_matrix_multiply(parent_matrix, local, matrix);
+  mesh = gmesh_json_integer(json, gmesh_json_member(json, node, "mesh"), -1);
+  if (mesh >= 0) {
+    if (!gmesh_gltf_mesh(gltf, mesh, matrix, raw)) return 0;
+  }
+  for (i = 0; i < gmesh_json_count(json, children); i++) {
+    long child = gmesh_json_integer(json, gmesh_json_element(json, children, i), -1);
+    if (!gmesh_gltf_node(gltf, child, matrix, depth + 1, raw)) return 0;
+  }
+  return 1;
+}
+
+/* add the meshes of the default scene of gltf to raw, or every mesh
+   untransformed when the file has no scene.
+   Returns 1 on success, 0 (with a message) on error. */
+static int gmesh_gltf_scene(gmesh_gltf *gltf, gmesh_raw *raw)
+{
+  gmesh_json *json = &gltf->json;
+  double identity[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+  long scene_index = gmesh_json_integer(json, gmesh_json_member(json, 0, "scene"), 0);
+  long scene = gmesh_json_element(json, gmesh_json_member(json, 0, "scenes"), scene_index);
+  long nodes = gmesh_json_member(json, scene, "nodes");
+  long i;
+  if (scene < 0) {
+    long nmeshes = gmesh_json_count(json, gmesh_json_member(json, 0, "meshes"));
+    for (i = 0; i < nmeshes; i++) {
+      if (!gmesh_gltf_mesh(gltf, i, identity, raw)) return 0;
+    }
+    return 1;
+  }
+  for (i = 0; i < gmesh_json_count(json, nodes); i++) {
+    long node = gmesh_json_integer(json, gmesh_json_element(json, nodes, i), -1);
+    if (!gmesh_gltf_node(gltf, node, identity, 0, raw)) return 0;
+  }
+  return 1;
+}
+
+/* 1 (with a message) when gltf requires an extension that changes how the
+   geometry is stored (compression or quantization), which is not supported */
+static int gmesh_gltf_unsupported(gmesh_gltf *gltf)
+{
+  gmesh_json *json = &gltf->json;
+  long required = gmesh_json_member(json, 0, "extensionsRequired");
+  const char *unsupported[] = {"KHR_draco_mesh_compression", "EXT_meshopt_compression",
+                               "KHR_meshopt_compression", "KHR_mesh_quantization"};
+  long i;
+  int k;
+  for (i = 0; i < gmesh_json_count(json, required); i++) {
+    long extension = gmesh_json_element(json, required, i);
+    for (k = 0; k < 4; k++) {
+      if (gmesh_json_equals(json, extension, unsupported[k])) {
+        fprintf(stderr, "Error: %s: the glTF extension %s is not supported, "
+                "please export without compression/quantization (geometry-mesh-lib)\n",
+                gltf->filename, unsupported[k]);
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+/* read a glTF 2.0 file (.gltf JSON or .glb binary) into raw: the triangles
+   of the default scene, with the node transformations applied.
+   Returns 1 on success, 0 (with a message) on error. */
+static int gmesh_read_gltf(char *filename, gmesh_raw *raw)
+{
+  gmesh_gltf gltf;
+  const unsigned char *json_text;
+  long json_length;
+  long version;
+  int ok = 0;
+  long i;
+  memset(&gltf, 0, sizeof(gmesh_gltf));
+  gltf.filename = filename;
+  gltf.file_data = gmesh_read_whole_file(filename, &gltf.file_length);
+  if (!gltf.file_data) return 0;
+  json_text = gltf.file_data;
+  json_length = gltf.file_length;
+  if (gltf.file_length >= 4 && !memcmp(gltf.file_data, "glTF", 4)) {
+    if (!gmesh_gltf_glb(&gltf, &json_text, &json_length)) goto done;
+  }
+  if (!gmesh_json_parse(&gltf.json, (const char*)json_text, json_length)) {
+    fprintf(stderr, "Error: %s: invalid glTF JSON (geometry-mesh-lib)\n", filename);
+    goto done;
+  }
+  version = gmesh_json_member(&gltf.json, gmesh_json_member(&gltf.json, 0, "asset"), "version");
+  if (version < 0 || gltf.json.text[gltf.json.tokens[version].start] != '2') {
+    fprintf(stderr, "Error: %s: only glTF 2.0 is supported (geometry-mesh-lib)\n", filename);
+    goto done;
+  }
+  if (gmesh_gltf_unsupported(&gltf)) goto done;
+  if (!gmesh_gltf_load_buffers(&gltf)) goto done;
+  ok = gmesh_gltf_scene(&gltf, raw);
+  if (ok && !raw->nfaces) {
+    fprintf(stderr, "Error: %s: no triangles found (geometry-mesh-lib)\n", filename);
+    ok = 0;
+  }
+done:
+  for (i = 0; i < gltf.nbuffers; i++) {
+    if (gltf.buffer_owned[i]) free(gltf.buffers[i]);
+  }
+  free(gltf.buffers);
+  free(gltf.buffer_lengths);
+  free(gltf.buffer_owned);
+  free(gltf.json.tokens);
+  free(gltf.file_data);
+  return ok;
+}
+
+/* ========================================================================== */
 /*  Hash for vertex welding and edges                                         */
 /* ========================================================================== */
 
@@ -1200,7 +2031,7 @@ static void gmesh_build_bvh(gmesh_struct *mesh)
 /*  Init                                                                      */
 /* ========================================================================== */
 
-/* read filename (STL, PLY or OFF) into raw, choosing the reader from the
+/* read filename (STL, PLY, OFF or glTF) into raw, choosing the reader from the
    extension or the first bytes. Returns 1 on success, 0 on error. */
 static int gmesh_read_file(char *filename, const char *extension, gmesh_raw *raw)
 {
@@ -1209,6 +2040,9 @@ static int gmesh_read_file(char *filename, const char *extension, gmesh_raw *raw
   int ok;
   if (gmesh_is_extension(extension, ".stl", ".STL")) {
     return gmesh_read_stl(filename, raw);
+  }
+  if (gmesh_is_extension(extension, ".gltf", ".GLTF") || gmesh_is_extension(extension, ".glb", ".GLB")) {
+    return gmesh_read_gltf(filename, raw);
   }
   file = Open_File(filename, "rb", NULL);
   if (!file) return 0;
@@ -1222,6 +2056,11 @@ static int gmesh_read_file(char *filename, const char *extension, gmesh_raw *raw
     /* STL without .stl extension */
     fclose(file);
     return gmesh_read_stl(filename, raw);
+  }
+  if (!strncmp(head, "glT", 3) || head[0] == '{') {
+    /* glb or glTF JSON without extension */
+    fclose(file);
+    return gmesh_read_gltf(filename, raw);
   }
   if (!strncmp(head, "ply", 3)) {
     ok = gmesh_read_ply(file, filename, raw);
@@ -1251,7 +2090,7 @@ long gmesh_init(char *filename, double scale, int face_props, gmesh_struct *mesh
 
   extension = strrchr(filename, '.');
   if (gmesh_is_extension(extension, ".step", ".STEP") || gmesh_is_extension(extension, ".stp", ".STP")) {
-    fprintf(stderr, "Error: %s: STEP files are not supported, please export the geometry as STL, OFF or PLY (geometry-mesh-lib)\n", filename);
+    fprintf(stderr, "Error: %s: STEP files are not supported, please export the geometry as STL, OFF, PLY or glTF (geometry-mesh-lib)\n", filename);
     return 0;
   }
   /* counting pass, then allocate and read again to fill the arrays */
