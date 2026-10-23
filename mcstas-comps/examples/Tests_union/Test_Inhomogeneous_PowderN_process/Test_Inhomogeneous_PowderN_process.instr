@@ -1,0 +1,256 @@
+/*******************************************************************************
+*         McStas instrument definition URL=http://www.mcstas.org
+*
+* Instrument: Test_Inhomogeneous_PowderN_process
+*
+* %Identification
+* Written by: Daniel Lomholt Christensen
+* Date: 29/09/2026
+* Origin: Niels Bohr Institute @ UCPH
+* %INSTRUMENT_SITE: Test_samples
+*
+* Compares Inhomogeneous_PowderN_process with Powder_process for aluminium powder
+*
+* %Description
+* A 2-3 AA beam hits a 10x20x10 mm box of aluminium powder, and a 1 m radius
+* banana detector records the Debye-Scherrer rings. Both processes focus into
+* d_phi = 6 deg around the horizontal plane, which covers the detector height.
+*
+* The Powder_process references read .laz files made by NCrystal from the same
+* materials (see make_reference_files.sh), so both processes use the same
+* reflections. The inhomogeneous process reads the NCrystal material with
+* cfg = "temp=300K" unless stated otherwise.
+*
+* Powder_process references:
+*   sample_choice=0: Al, 300 K
+*   sample_choice=4: Al with a 1% larger lattice parameter, 300 K
+*   sample_choice=2: Al, 300 K, with a higher priority box over x > 0 whose
+*                    lattice parameter is 1% larger. The inner box is 20 um larger
+*                    in y, z and +x, so no faces coincide.
+*   sample_choice=6: as 2, but the inner box is Al at 600 K
+*   sample_choice=8: as 2, but the inner box has gamma = 92 deg instead of 90, which
+*                    lowers the symmetry from cubic (space group 225) and splits the
+*                    peaks. Its .laz is written from NCrystal without a space group.
+*
+* Inhomogeneous_PowderN_process in one box:
+*   sample_choice=1: Al_sg225.ncmat, no templates (no cache axes); should equal 0
+*   sample_choice=3: lattice parameter steps by 1% at x = 0 (.ncmat template, cache
+*                    along x); should equal 2
+*   sample_choice=7: temperature steps from 300 to 600 K at x = 0 (cfg template,
+*                    cache along x); should equal 6
+*   sample_choice=9: the cell angle gamma steps from 90 to 92 deg at x = 0 (cubic to
+*                    lower symmetry). The template keeps @SPACEGROUP 225, which the
+*                    process removes; should equal 8
+*   sample_choice=5: lattice parameter steps by 1% at time t0, the median arrival
+*                    time (cache along t); banana_early should equal choice 0 and
+*                    banana_late choice 4
+*
+* The cache spreads a step over one cache cell (linear interpolation between the
+* materials on either side), so the steps are resolved with 101 nodes along x and
+* 401 along t, which makes the spread negligible here.
+*
+* The detectors count all scattered rays. banana_early and banana_late split them
+* by the time the ray reached the sample.
+*
+* %Example: sample_choice=0 Detector: banana_I=5.66128e-08
+* %Example: sample_choice=1 Detector: banana_I=5.6595e-08
+* %Example: sample_choice=2 Detector: banana_I=5.62245e-08
+* %Example: sample_choice=3 Detector: banana_I=5.61504e-08
+* %Example: sample_choice=4 Detector: banana_late_I=2.50204e-08
+* %Example: sample_choice=5 Detector: banana_early_I=3.11627e-08
+* %Example: sample_choice=5 Detector: banana_late_I=2.49936e-08
+* %Example: sample_choice=6 Detector: banana_I=5.30465e-08
+* %Example: sample_choice=7 Detector: banana_I=5.30207e-08
+* %Example: sample_choice=8 Detector: banana_I=5.67306e-08
+* %Example: sample_choice=9 Detector: banana_I=5.66033e-08
+*
+* %Parameters
+* lambda0: [AA] Mean wavelength of the source.
+* dlambda: [AA] Half width of the wavelength band.
+* sample_choice: [1] Sample to use, see the description.
+*
+* %Link
+*
+* %End
+*******************************************************************************/
+DEFINE INSTRUMENT Test_Inhomogeneous_PowderN_process(lambda0=2.5, dlambda=0.5, int sample_choice=0)
+
+DECLARE
+%{
+  double samp_w;
+  double samp_h;
+  double samp_d;
+  double focus_dphi;
+  double a_al;
+  double a_large;
+  double t0;
+  char hom_laz[256];
+  char inner_laz[256];
+  char inh_template[256];
+  char inh_cfg[256];
+  int scattered;
+  double t_sample;
+%}
+
+INITIALIZE
+%{
+  samp_w = 0.01;
+  samp_h = 0.02;
+  samp_d = 0.01;
+  focus_dphi = 6;
+  a_al = 4.04958;
+  a_large = a_al * 1.01;
+  /* Median arrival time at the sample, 10.5 m at the speed of lambda0 */
+  t0 = 10.5 * lambda0 / 3956.0346;
+
+  sprintf (hom_laz, "%s", sample_choice == 4 ? "Al_a101_300K.laz" : "Al_300K.laz");
+  sprintf (inner_laz, "%s", sample_choice == 6 ? "Al_600K.laz" : sample_choice == 8 ? "Al_gamma92_300K.laz" : "Al_a101_300K.laz");
+  sprintf (inh_cfg, "temp=300K");
+  if (sample_choice == 3)
+    sprintf (inh_template, "Al_lattice_x.ncmat");
+  else if (sample_choice == 9)
+    sprintf (inh_template, "Al_angle_x.ncmat");
+  else if (sample_choice == 5)
+    sprintf (inh_template, "Al_lattice_t.ncmat");
+  else {
+    sprintf (inh_template, "Al_sg225.ncmat");
+    if (sample_choice == 7)
+      sprintf (inh_cfg, "temp=${hvs(x,0,600,300)}K");
+  }
+%}
+
+TRACE
+
+COMPONENT Origin = Progress_bar()
+  AT (0,0,0) ABSOLUTE
+EXTEND %{
+  scattered = 0;
+%}
+
+COMPONENT init = Union_init()
+  AT (0,0,0) ABSOLUTE
+
+COMPONENT source = Source_simple(
+    radius = 0.02,
+    dist = 10.5,
+    focus_xw = samp_w,
+    focus_yh = samp_h,
+    lambda0 = lambda0,
+    dlambda = dlambda,
+    flux = 1
+) AT (0, 0, 0) RELATIVE Origin
+
+COMPONENT arm_sample = Arm(
+) AT (0, 0, 10.5) RELATIVE source
+EXTEND %{
+  /* The Arm does not move the ray, so extrapolate to the sample plane */
+  t_sample = t - z / vz;
+%}
+
+// Homogeneous sample, sample_choice 0, 4
+
+COMPONENT hom_proc = Powder_process(
+    reflections = hom_laz, d_phi = focus_dphi
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT hom_material = Union_make_material(
+    my_absorption = 0, process_string = "hom_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT hom_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "hom_material"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT hom_master = Union_master(
+) WHEN (sample_choice == 0 || sample_choice == 4)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+// Different material at x > 0, sample_choice 2, 6, 8
+
+COMPONENT outer_proc = Powder_process(
+    reflections = "Al_300K.laz", d_phi = focus_dphi
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inner_proc = Powder_process(
+    reflections = inner_laz, d_phi = focus_dphi
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT outer_material = Union_make_material(
+    my_absorption = 0, process_string = "outer_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inner_material = Union_make_material(
+    my_absorption = 0, process_string = "inner_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT outer_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "outer_material"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inner_box = Union_box(
+    xwidth = samp_w / 2 + 2e-5, yheight = samp_h + 2e-5, zdepth = samp_d + 2e-5,
+    priority = 2, material_string = "inner_material"
+) AT (samp_w / 4 + 1e-5, 0, 0) RELATIVE arm_sample
+
+COMPONENT split_master = Union_master(
+) WHEN (sample_choice == 2 || sample_choice == 6 || sample_choice == 8)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+// Inhomogeneous sample, sample_choice 1, 3, 5, 7, 9
+
+COMPONENT inh_proc = Inhomogeneous_PowderN_process(
+    ncmat_template = inh_template, cfg = inh_cfg,
+    p1 = a_al, p2 = a_large, p3 = t0,
+    n_x = 101, n_t = 401, t_min = t0 * 0.75, t_max = t0 * 1.25,
+    d_phi = focus_dphi
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_material = Union_make_material(
+    my_absorption = 0, process_string = "inh_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "inh_material"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_master = Union_master(
+) WHEN (sample_choice == 1 || sample_choice == 3 || sample_choice == 5 || sample_choice == 7 || sample_choice == 9)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+COMPONENT banana = Monitor_nD(
+    radius = 1, yheight = 0.1,
+    options = "banana, theta limits=[-170 170] bins=680",
+    filename = "banana", restore_neutron = 1
+) WHEN (scattered >= 1)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT banana_early = Monitor_nD(
+    radius = 1, yheight = 0.1,
+    options = "banana, theta limits=[-170 170] bins=680",
+    filename = "banana_early", restore_neutron = 1
+) WHEN (scattered >= 1 && t_sample < t0)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT banana_late = Monitor_nD(
+    radius = 1, yheight = 0.1,
+    options = "banana, theta limits=[-170 170] bins=680",
+    filename = "banana_late", restore_neutron = 1
+) WHEN (scattered >= 1 && t_sample >= t0)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT stop = Union_stop()
+AT (0, 0, 0) ABSOLUTE
+
+END

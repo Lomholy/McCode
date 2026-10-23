@@ -1,0 +1,165 @@
+/*******************************************************************************
+*         McStas instrument definition URL=http://www.mcstas.org
+*
+* Instrument: Test_Sans_expr
+*
+* %Identification
+* Written by: Daniel Lomholt Christensen
+* Date: 29/09/2026
+* Origin: Niels Bohr Institute @ UCPH
+* %INSTRUMENT_SITE: Test_samples
+*
+* Compares Sans_expr with Sans_spheres and SANS_spheres2 for dilute hard spheres
+*
+* %Description
+* A small SANS instrument with three interchangeable samples, all describing the
+* same dilute monodisperse hard spheres (R = 100 AA, volume fraction 1e-2,
+* excess scattering length density 5 fm/AA^3):
+*
+*   sample_choice=0: Sans_spheres
+*   sample_choice=1: SANS_spheres2
+*   sample_choice=2: Sans_expr with the hard-sphere form factor as an expression
+*   sample_choice=3: Sans_expr with the same form factor written in qx, qy, qz
+*
+* All choices should give the same intensity on the detectors. Choice 3 checks the
+* anisotropic code path of Sans_expr, which must agree with choice 2 for an
+* isotropic model.
+*
+* %Example: sample_choice=0 Detector: psd_det_I=9.68222e+06
+* %Example: sample_choice=1 Detector: psd_det_I=9.65918e+06
+* %Example: sample_choice=2 Detector: psd_det_I=9.68222e+06
+* %Example: sample_choice=3 Detector: psd_det_I=9.68222e+06
+*
+* %Parameters
+* E_i: [meV] Energy of the simulated neutrons.
+* sample_choice: [1] Sample to use: 0 Sans_spheres, 1 SANS_spheres2, 2 Sans_expr (q), 3 Sans_expr (qx, qy, qz).
+* flux_mult: [1] Factor multiplied onto the source flux.
+*
+* %Link
+*
+* %End
+*******************************************************************************/
+DEFINE INSTRUMENT Test_Sans_expr(E_i=5, int sample_choice=0, flux_mult=0.5512)
+
+DECLARE
+%{
+  double focus_w;
+  double focus_h;
+  double samp_w;
+  double samp_h;
+  double samp_d;
+  double sphere_R;
+  double sphere_phi;
+  double sphere_drho;
+  double sphere_scale;
+%}
+
+INITIALIZE
+%{
+  focus_w = 1;
+  focus_h = 1;
+  samp_w = 0.01;
+  samp_h = 0.01;
+  samp_d = 0.001;
+  sphere_R = 100;
+  sphere_phi = 1e-2;
+  sphere_drho = 5;
+  /* Phi * Delta_rho^2 * V in fm^2/AA^3 = m^-1 */
+  sphere_scale = sphere_phi * sphere_drho * sphere_drho * 4.0 * PI / 3.0 * pow (sphere_R, 3);
+%}
+
+TRACE
+
+COMPONENT Origin = Progress_bar()
+  AT (0,0,0) ABSOLUTE
+
+COMPONENT source = Source_simple(
+    radius = 0.05,
+    dist = 10.495,
+    focus_xw = samp_w,
+    focus_yh = samp_h,
+    E0 = E_i,
+    dE = 0.475,
+    flux = 1e14*flux_mult
+) AT (0, 0, 0) RELATIVE Origin
+
+COMPONENT post_source_slit = Slit(
+    radius = 0.005
+) AT (0, 0, 0.025) RELATIVE source
+
+COMPONENT pre_samp_arm = Arm(
+) AT (0, 0, 10.495) RELATIVE source
+
+COMPONENT pre_samp_slit = Slit(
+    radius = 0.005
+) AT (0, 0, 0) RELATIVE pre_samp_arm
+
+COMPONENT arm_sample = Arm(
+) AT (0, 0, 0.005) RELATIVE pre_samp_arm
+
+COMPONENT sans_spheres = Sans_spheres(
+    R = sphere_R, Phi = sphere_phi, Delta_rho = sphere_drho, sigma_abs = 0,
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    focus_xw = focus_w, focus_yh = focus_h,
+    target_index = 6
+) WHEN (sample_choice == 0)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT sans_spheres2 = SANS_spheres2(
+    xwidth = samp_w, yheight = samp_h, zthick = samp_d,
+    dsdw_inc = 0, singlesp = 1,
+    R = sphere_R, phi = sphere_phi, drho = sphere_drho*1e11,
+    Qmind = 0.001, Qmaxd = 100.25,
+    sc_aim = 1, sans_aim = 1
+) WHEN (sample_choice == 1)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT sans_expr_q = Sans_expr(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3",
+    structure_factor = "1",
+    p1 = sphere_R, scale = sphere_scale, sigma_abs = 0,
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    focus_xw = focus_w, focus_yh = focus_h,
+    target_index = 4
+) WHEN (sample_choice == 2)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT sans_expr_qvec = Sans_expr(
+    form_factor = "3*(sin(sqrt(qx^2+qy^2+qz^2)*p1)-sqrt(qx^2+qy^2+qz^2)*p1*cos(sqrt(qx^2+qy^2+qz^2)*p1))/(sqrt(qx^2+qy^2+qz^2)*p1)^3",
+    structure_factor = "1",
+    p1 = sphere_R, scale = sphere_scale, sigma_abs = 0,
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    focus_xw = focus_w, focus_yh = focus_h,
+    target_index = 3
+) WHEN (sample_choice == 3)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT total_scat = PSD_monitor_4PI(
+    nx = 360,
+    ny = 360,
+    radius = 0.1,
+    restore_neutron = 1,
+    filename = "total_scat"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT arm_det = Arm(
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT psd_det = PSD_monitor(
+    nx = 200,
+    ny = 200,
+    filename = "psd_det",
+    xwidth = 1,
+    yheight = 1,
+    restore_neutron = 1
+) AT (0, 0, 5) RELATIVE arm_det
+
+COMPONENT q_det = Monitor_nD(
+    xwidth = 1,
+    yheight = 1,
+    options = "square, kxy limits=[0 0.15] bins=150",
+    filename = "q_det",
+    restore_neutron = 1
+) AT (0, 0, 5) RELATIVE arm_det
+
+END
