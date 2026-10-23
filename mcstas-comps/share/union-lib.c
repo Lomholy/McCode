@@ -8254,6 +8254,8 @@ void overwrite_if_empty(char *input_string, char *overwrite) {
     }
     double mu_abs_at_speed = Volume->p_physics->my_a * (2200 / v_length);
     for (int j = 0; j < physics->sampling_points; j++) {
+      if (physics->my_a_function)
+        mu_abs_at_speed = physics->mu_abs[j] * (2200 / v_length);
       physics->total_mus[j] += mu_abs_at_speed;
     }
     double trans_prob;
@@ -8284,6 +8286,8 @@ void overwrite_if_empty(char *input_string, char *overwrite) {
         break;
       }
     }
+    if (physics->my_a_function)
+      mu_abs_at_speed = physics->mu_abs[*selected_sampling] * (2200 / v_length);
     *abs_weight_factor
         *= (physics->total_mus[*selected_sampling] - mu_abs_at_speed ) / physics->total_mus[*selected_sampling];
   
@@ -8297,8 +8301,12 @@ void overwrite_if_empty(char *input_string, char *overwrite) {
   void
   inhomogeneous_choose_process (struct physics_struct* physics, struct Volume_struct* Volume, double* culmative_probability, double mc_prop,
                                double my_sum, int selected_sampling, int* selected_process) {
+    // Homogeneous processes only fill mus[i][0]
+    double mu_sum_at_sampling = 0;
+    for (int i = 0; i < Volume->p_physics->number_of_processes; i++)
+      mu_sum_at_sampling += physics->mus[i][Volume->p_physics->p_scattering_array[i].sampling_points != -1 ? selected_sampling : 0];
     for (int i = 0; i < Volume->p_physics->number_of_processes; i++) {
-      *culmative_probability += physics->mus[i][selected_sampling] / my_sum;
+      *culmative_probability += physics->mus[i][Volume->p_physics->p_scattering_array[i].sampling_points != -1 ? selected_sampling : 0] / mu_sum_at_sampling;
       if (*culmative_probability > mc_prop) {
         *selected_process = i;
         break;

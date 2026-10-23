@@ -1,0 +1,731 @@
+/*******************************************************************************
+*
+*  McStas, neutron ray-tracing package
+*  Copyright(C) 2007 Risoe National Laboratory.
+*
+* %I
+* Written by: Daniel Lomholt Christensen
+* Date: 29.09.2026
+* Version: $Revision: 0.1 $
+* Origin: University of Copenhagen
+*
+* Union process for coherent elastic (Bragg) scattering from a powder whose
+* NCrystal material varies with position and time.
+*
+* %D
+* Inhomogeneous powder process. The material is an NCrystal .ncmat file and an
+* NCrystal cfg-string, both of which are templates: any ${expression} in them is
+* replaced by the value of the tinyexpr expression, which may use
+*   x, y, z    the position in m, relative to the center of the geometry, in the frame
+*              of this process
+*   t          the neutron time in s
+*   p1 ... p6  generic constants
+* For example, a lattice parameter growing along x (in the .ncmat template)
+*   @CELL
+*     cubic ${4.04958*(1+p1*x)}
+* or a temperature changing with time (in cfg)
+*   temp=${300+p2*t}K;dcutoff=0.5
+*
+* Only coherent elastic scattering is simulated, as in PowderN / Powder_process. The
+* reflection list (d-spacing, multiplicity, |F|^2 including the Debye-Waller factor)
+* is computed by NCrystal from the filled-in templates.
+*
+* Any @SPACEGROUP section is removed from the filled-in .ncmat before NCrystal reads it.
+* The reflections only depend on the cell and the atom positions, which NCMAT lists for
+* the whole cell, and without a space group NCrystal accepts any cell. A template can
+* therefore change the cell angles or lengths freely, including across a change of
+* symmetry (e.g. cubic to monoclinic), which NCrystal would otherwise reject.
+*
+* Part of the Union components.
+*
+* Algorithm:
+* The powder cross-section per volume is
+*
+*   mu(lambda) = 100 * n / (2 V N) * lambda^2 * sum_{2 d > lambda} m d |F|^2   [m^-1]
+*
+* with n the number density [AA^-3], V the cell volume [AA^3], N the atoms per cell,
+* m the multiplicity and |F|^2 in barn. Creating an NCrystal material takes tens of
+* ms, so materials are cached on a grid with axes only along the variables among
+* x, y, z, t used in the templates (found by compiling the expressions without each
+* variable). Each grid node keeps only its reflection list, sorted by d-spacing with
+* cumulative strengths, so mu is exact at every wavelength at the node, and is
+* interpolated multilinearly between nodes. Nodes are built the first time they are
+* needed.
+*
+* In a scattering event, a node among the interpolation corners is chosen with
+* probability proportional to its interpolation weight times its mu, and a reflection
+* of that node with probability proportional to its strength, which samples the
+* interpolated scattering exactly. The outgoing direction is on the Debye-Scherrer
+* cone, focused into d_phi if set, as in Powder_process. The weight is multiplied by
+* mu(r, t) / mu_selected, where mu_selected is the value Union_master used when
+* choosing the scattering point.
+*
+* The spatial range of the grid is the bounding box of the geometries using the process,
+* given by Union_master, unless x_min/x_max etc. are set. The time range must be given
+* with t_min/t_max if the templates use t. Points outside the grid use the nearest edge,
+* and the number of such lookups is printed at the end.
+*
+* %P
+* INPUT PARAMETERS:
+* ncmat_template: [str]      .ncmat file (path, or name in the NCrystal data library), may contain ${expressions}
+* cfg: [str]                 NCrystal cfg-string parameters added after the file, e.g. "temp=300K;dcutoff=0.5", may contain ${expressions}
+* p1: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p2: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p3: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p4: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p5: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p6: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* number_of_sample_points: [1] Points per path where Union_master evaluates mu
+* n_x: [1]                   Cache nodes along x, used if the templates use x
+* n_y: [1]                   Cache nodes along y, used if the templates use y
+* n_z: [1]                   Cache nodes along z, used if the templates use z
+* n_t: [1]                   Cache nodes along t, used if the templates use t
+* x_min: [m]                 Lower x of the cache; the geometry bounding box is used unless x_min < x_max
+* x_max: [m]                 Upper x of the cache
+* y_min: [m]                 Lower y of the cache; the geometry bounding box is used unless y_min < y_max
+* y_max: [m]                 Upper y of the cache
+* z_min: [m]                 Lower z of the cache; the geometry bounding box is used unless z_min < z_max
+* z_max: [m]                 Upper z of the cache
+* t_min: [s]                 Lower t of the cache, required if the templates use t
+* t_max: [s]                 Upper t of the cache
+* d_phi: [deg]               Angle around the horizontal scattering plane that scattering is focused into; 0 for the full Debye-Scherrer cone
+* max_cache_mb: [MB]         Largest allowed memory for the reflection lists of all nodes
+* verbose: [0/1]             Print the cfg-string and number of reflections of each node built
+* interact_fraction: [1]     How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
+* init: [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
+*
+* CALCULATED PARAMETERS:
+* IPN_storage:               Storage used to communicate with the probability and scattering functions
+*
+* %L
+* The homogeneous reference <a href="Powder_process.html">Powder_process.comp</a>.
+* NCrystal: https://github.com/mctools/ncrystal
+* The tinyexpr library: https://github.com/codeplea/tinyexpr
+*
+* %E
+******************************************************************************/
+
+DEFINE COMPONENT Inhomogeneous_PowderN_process
+
+SETTING PARAMETERS(string ncmat_template="", string cfg="",
+p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
+int number_of_sample_points=20,
+int n_x=20, int n_y=20, int n_z=20, int n_t=20,
+x_min=0, x_max=0, y_min=0, y_max=0, z_min=0, z_max=0, t_min=0, t_max=0,
+d_phi=0, max_cache_mb=2000, int verbose=0,
+interact_fraction=-1, string init="")
+DEPENDENCY "@NCRYSTALFLAGS@"
+
+SHARE
+%{
+  %include "union-lib"
+
+  %include "tinyexpr.h"
+  %include "tinyexpr.c"
+
+  #if defined(WIN32) || defined(_WIN32)
+  #include "NCrystal\\ncrystal.h"
+  #else
+  #include "NCrystal/ncrystal.h"
+  #endif
+
+  /* vars[]: x, y, z, t, p1..p6; cache dimension d (0..3) is vars[d] */
+  #define IPN_NVARS 10
+
+  /* Text with ${expression} placeholders: text[0] expr[0] text[1] ... expr[n-1] text[n] */
+  struct IPN_template {
+    int n;
+    char** text;
+    char** source;
+    te_expr** expr;
+  };
+
+  /* Reflection list of one grid node, sorted by decreasing d-spacing */
+  struct IPN_node {
+    int n_lines;
+    double* d;
+    double* cum; // cumulative sum of multiplicity * d * |F|^2 [AA barn]
+    double pref; // mu = pref * lambda^2 * cum [m^-1]
+  };
+
+  struct Inhomogeneous_PowderN_physics_storage_struct {
+    char comp_name[256];
+    double vars[IPN_NVARS];
+    struct IPN_template tmpl_ncmat;
+    struct IPN_template tmpl_cfg;
+    double c_d_phi;
+    int c_verbose;
+    long n_virtual;
+
+    int n_dims;
+    int dim_var[4];
+    int n_nodes_dim[4];
+    double lo[4], hi[4];
+    int range_set[4];
+    long n_nodes;
+    struct IPN_node** nodes;
+    long n_built;
+    long n_clamped;
+    double bytes;
+    double c_max_bytes;
+  };
+
+  char*
+  IPN_strndup (const char* src, size_t len) {
+    char* out = malloc (len + 1);
+    memcpy (out, src, len);
+    out[len] = '\0';
+    return out;
+  };
+
+  /* Compiles expr_str against x, y, z, t, p1..p6, leaving out vars[skip_var] if skip_var >= 0 */
+  te_expr*
+  IPN_compile (const char* expr_str, double* vars, int skip_var) {
+    const char* names[IPN_NVARS] = { "x", "y", "z", "t", "p1", "p2", "p3", "p4", "p5", "p6" };
+    te_variable list[IPN_NVARS];
+    int n = 0, err;
+    for (int i = 0; i < IPN_NVARS; i++) {
+      if (i == skip_var)
+        continue;
+      list[n].name = names[i];
+      list[n].address = &vars[i];
+      list[n].type = TE_VARIABLE;
+      list[n].context = NULL;
+      n++;
+    }
+    return te_compile (expr_str, list, n, &err);
+  };
+
+  void
+  IPN_parse (struct IPN_template* T, const char* src, double* vars, const char* comp_name, const char* what) {
+    T->n = 0;
+    T->text = malloc (sizeof (char*));
+    T->source = NULL;
+    T->expr = NULL;
+    const char* p = src;
+    while (1) {
+      const char* open = strstr (p, "${");
+      if (!open) {
+        T->text[T->n] = IPN_strndup (p, strlen (p));
+        return;
+      }
+      const char* close = strchr (open + 2, '}');
+      if (!close)
+        exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: unterminated ${ in %s.\n", comp_name, what));
+      T->text[T->n] = IPN_strndup (p, open - p);
+      T->n++;
+      T->text = realloc (T->text, (T->n + 1) * sizeof (char*));
+      T->source = realloc (T->source, T->n * sizeof (char*));
+      T->expr = realloc (T->expr, T->n * sizeof (te_expr*));
+      T->source[T->n - 1] = IPN_strndup (open + 2, close - open - 2);
+      T->expr[T->n - 1] = IPN_compile (T->source[T->n - 1], vars, -1);
+      if (!T->expr[T->n - 1])
+        exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: failed to parse expression \"%s\" in %s.\n", comp_name, T->source[T->n - 1], what));
+      p = close + 1;
+    }
+  };
+
+  /* 1 if any expression of T needs variable var (vars[] index) to compile */
+  int
+  IPN_depends (struct IPN_template* T, double* vars, int var) {
+    for (int i = 0; i < T->n; i++) {
+      te_expr* e = IPN_compile (T->source[i], vars, var);
+      if (!e)
+        return 1;
+      te_free (e);
+    }
+    return 0;
+  };
+
+  /* Fills in the template with the current vars; the result must be freed */
+  char*
+  IPN_render (struct IPN_template* T) {
+    size_t len = 1;
+    for (int i = 0; i <= T->n; i++)
+      len += strlen (T->text[i]) + 32;
+    char* out = malloc (len);
+    char* q = out;
+    for (int i = 0; i < T->n; i++) {
+      q += sprintf (q, "%s%.12g", T->text[i], te_eval (T->expr[i]));
+    }
+    sprintf (q, "%s", T->text[T->n]);
+    return out;
+  };
+
+  void
+  IPN_free_template (struct IPN_template* T) {
+    for (int i = 0; i <= T->n; i++)
+      free (T->text[i]);
+    for (int i = 0; i < T->n; i++) {
+      free (T->source[i]);
+      te_free (T->expr[i]);
+    }
+    free (T->text);
+    free (T->source);
+    free (T->expr);
+  };
+
+  /* Removes the @SPACEGROUP section (up to the next line starting with @) from text in place */
+  void
+  IPN_strip_spacegroup (char* text) {
+    char* start = strstr (text, "@SPACEGROUP");
+    while (start && start != text && start[-1] != '\n')
+      start = strstr (start + 1, "@SPACEGROUP");
+    if (!start)
+      return;
+    char* end = strstr (start + 1, "\n@");
+    end = end ? end + 1 : start + strlen (start);
+    memmove (start, end, strlen (end) + 1);
+  };
+
+  int
+  IPN_compare_lines (const void* a, const void* b) {
+    double da = ((const double*)a)[0], db = ((const double*)b)[0];
+    return (da < db) - (da > db);
+  };
+
+  /* Builds the reflection list for the material at the point in vars[0..3] */
+  struct IPN_node*
+  IPN_build (struct Inhomogeneous_PowderN_physics_storage_struct* s) {
+    char* ncmat_text = IPN_render (&s->tmpl_ncmat);
+    IPN_strip_spacegroup (ncmat_text);
+    char* cfg_text = IPN_render (&s->tmpl_cfg);
+    char vname[512];
+    snprintf (vname, sizeof (vname), "IPN_%s_%ld.ncmat", s->comp_name, s->n_virtual++);
+    ncrystal_register_in_mem_file_data (vname, ncmat_text);
+    size_t cfg_len = strlen (vname) + strlen (cfg_text) + 2;
+    char* cfgstr = malloc (cfg_len);
+    snprintf (cfgstr, cfg_len, "%s%s%s", vname, strlen (cfg_text) ? ";" : "", cfg_text);
+
+    ncrystal_info_t info = ncrystal_create_info (cfgstr);
+    if (ncrystal_error ())
+      exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: NCrystal could not load \"%s\".\n", s->comp_name, cfgstr));
+    unsigned spacegroup, n_atoms;
+    double la, lb, lc, alpha, beta, gamma, volume;
+    if (!ncrystal_info_getstructure (info, &spacegroup, &la, &lb, &lc, &alpha, &beta, &gamma, &volume, &n_atoms))
+      exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: material \"%s\" has no crystal structure.\n", s->comp_name, cfgstr));
+    int n_hkl = ncrystal_info_nhkl (info);
+    if (n_hkl < 0)
+      exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: material \"%s\" has no reflection list.\n", s->comp_name, cfgstr));
+
+    double* lines = malloc (2 * (n_hkl > 0 ? n_hkl : 1) * sizeof (double));
+    for (int i = 0; i < n_hkl; i++) {
+      int h, k, l, mult;
+      double dsp, fsq;
+      ncrystal_info_gethkl (info, i, &h, &k, &l, &mult, &dsp, &fsq);
+      lines[2 * i] = dsp;
+      lines[2 * i + 1] = mult * dsp * fsq;
+    }
+    qsort (lines, n_hkl, 2 * sizeof (double), IPN_compare_lines);
+
+    struct IPN_node* node = malloc (sizeof (struct IPN_node));
+    node->n_lines = n_hkl;
+    node->d = malloc ((n_hkl > 0 ? n_hkl : 1) * sizeof (double));
+    node->cum = malloc ((n_hkl > 0 ? n_hkl : 1) * sizeof (double));
+    double sum = 0;
+    for (int i = 0; i < n_hkl; i++) {
+      sum += lines[2 * i + 1];
+      node->d[i] = lines[2 * i];
+      node->cum[i] = sum;
+    }
+    node->pref = 100.0 * ncrystal_info_getnumberdensity (info) / (2.0 * volume * n_atoms);
+    ncrystal_unref (&info);
+
+    s->n_built++;
+    s->bytes += sizeof (struct IPN_node) + 2.0 * n_hkl * sizeof (double);
+    if (s->bytes > s->c_max_bytes)
+      exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: reflection lists use more than max_cache_mb = %.0f MB.\n", s->comp_name, s->c_max_bytes / 1e6));
+    if (s->c_verbose)
+      printf ("Inhomogeneous_PowderN_process: %s: built node for \"%s\" with %d reflections\n", s->comp_name, cfgstr, n_hkl);
+    free (lines);
+    free (cfgstr);
+    free (ncmat_text);
+    free (cfg_text);
+    return node;
+  };
+
+  /* mu [m^-1] of a node at wavelength lambda [AA]; *n_open is the number of reflections with 2 d > lambda */
+  double
+  IPN_node_mu (struct IPN_node* node, double lambda, int* n_open) {
+    double dmin = 0.5 * lambda;
+    int lo = 0, hi = node->n_lines;
+    while (lo < hi) {
+      int mid = (lo + hi) / 2;
+      if (node->d[mid] > dmin)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+    *n_open = lo;
+    return lo ? node->pref * lambda * lambda * node->cum[lo - 1] : 0;
+  };
+
+  void
+  IPN_allocate (struct Inhomogeneous_PowderN_physics_storage_struct* s) {
+    const char* names[4] = { "x", "y", "z", "t" };
+    s->n_nodes = 1;
+    for (int a = 0; a < s->n_dims; a++) {
+      int v = s->dim_var[a];
+      if (!s->range_set[v] || !(s->lo[v] < s->hi[v]))
+        exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: no range for the cache along %s. Set %s_min < %s_max%s.\n", s->comp_name, names[v],
+                       names[v], names[v], v < 3 ? ", or use a geometry with shell points" : ""));
+      s->n_nodes *= s->n_nodes_dim[a];
+    }
+    s->nodes = calloc (s->n_nodes, sizeof (struct IPN_node*));
+  };
+
+  /* Node index -> vars[0..3] at the node */
+  void
+  IPN_set_node_point (struct Inhomogeneous_PowderN_physics_storage_struct* s, long node) {
+    long rest = node;
+    for (int a = s->n_dims - 1; a >= 0; a--) {
+      int v = s->dim_var[a];
+      int n = s->n_nodes_dim[a];
+      int i = rest % n;
+      rest /= n;
+      s->vars[v] = (n > 1) ? s->lo[v] + i * (s->hi[v] - s->lo[v]) / (n - 1) : 0.5 * (s->lo[v] + s->hi[v]);
+    }
+  };
+
+  /* Interpolation corners around the point in vars[0..3]; returns their number */
+  int
+  IPN_corners (struct Inhomogeneous_PowderN_physics_storage_struct* s, struct IPN_node** nodes, double* weights) {
+    if (!s->nodes)
+      IPN_allocate (s);
+    int i0[4];
+    double w[4];
+    int clamped = 0;
+    for (int a = 0; a < s->n_dims; a++) {
+      int v = s->dim_var[a];
+      int n = s->n_nodes_dim[a];
+      double u = (n > 1) ? (s->vars[v] - s->lo[v]) / (s->hi[v] - s->lo[v]) * (n - 1) : 0;
+      if (u < 0) {
+        u = 0;
+        clamped = 1;
+      }
+      if (u > n - 1) {
+        u = n - 1;
+        clamped = 1;
+      }
+      i0[a] = (int)floor (u);
+      if (i0[a] > n - 2)
+        i0[a] = (n > 1) ? n - 2 : 0;
+      w[a] = u - i0[a];
+    }
+    s->n_clamped += clamped;
+    double point[4] = { s->vars[0], s->vars[1], s->vars[2], s->vars[3] };
+    int count = 0;
+    for (int corner = 0; corner < (1 << s->n_dims); corner++) {
+      double weight = 1;
+      long node = 0;
+      for (int a = 0; a < s->n_dims; a++) {
+        int bit = (corner >> a) & 1;
+        weight *= bit ? w[a] : 1 - w[a];
+        node = node * s->n_nodes_dim[a] + i0[a] + bit;
+      }
+      if (weight == 0)
+        continue;
+      if (!s->nodes[node]) {
+        IPN_set_node_point (s, node);
+        s->nodes[node] = IPN_build (s);
+        for (int v = 0; v < 4; v++)
+          s->vars[v] = point[v];
+      }
+      nodes[count] = s->nodes[node];
+      weights[count] = weight;
+      count++;
+    }
+    return count;
+  };
+
+  void
+  IPN_set_point (struct Inhomogeneous_PowderN_physics_storage_struct* s, _class_particle* _particle) {
+    s->vars[0] = _particle->x;
+    s->vars[1] = _particle->y;
+    s->vars[2] = _particle->z;
+    s->vars[3] = _particle->t;
+  };
+
+  void
+  Inhomogeneous_PowderN_setup (union data_transfer_union data_transfer, Coords box_min, Coords box_max) {
+    struct Inhomogeneous_PowderN_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_PowderN_physics_storage_struct;
+    double bmin[3] = { box_min.x, box_min.y, box_min.z };
+    double bmax[3] = { box_max.x, box_max.y, box_max.z };
+    for (int v = 0; v < 3; v++) {
+      if (s->range_set[v] == 2)
+        continue;
+      double pad = 1e-3 * (bmax[v] - bmin[v]);
+      if (!s->range_set[v]) {
+        s->lo[v] = bmin[v] - pad;
+        s->hi[v] = bmax[v] + pad;
+        s->range_set[v] = 1;
+      } else {
+        s->lo[v] = fmin (s->lo[v], bmin[v] - pad);
+        s->hi[v] = fmax (s->hi[v], bmax[v] + pad);
+      }
+    }
+  };
+
+  int
+  Inhomogeneous_PowderN_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data,
+                                    _class_particle* _particle) {
+    struct Inhomogeneous_PowderN_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_PowderN_physics_storage_struct;
+    double k = sqrt (k_initial[0] * k_initial[0] + k_initial[1] * k_initial[1] + k_initial[2] * k_initial[2]);
+    double lambda = 2.0 * PI / k;
+    struct IPN_node* nodes[16];
+    double weights[16];
+    int n_open;
+    IPN_set_point (s, _particle);
+    int count = IPN_corners (s, nodes, weights);
+    *my = 0;
+    for (int c = 0; c < count; c++)
+      *my += weights[c] * IPN_node_mu (nodes[c], lambda, &n_open);
+    return 1;
+  };
+
+  int
+  Inhomogeneous_PowderN_physics_scattering (double* k_final, double* k_initial, double* weight, union data_transfer_union data_transfer,
+                                            struct focus_data_struct* focus_data, _class_particle* _particle, double selected_mu) {
+    struct Inhomogeneous_PowderN_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_PowderN_physics_storage_struct;
+    double vx = k_initial[0] * K2V;
+    double vy = k_initial[1] * K2V;
+    double vz = k_initial[2] * K2V;
+    double v = sqrt (vx * vx + vy * vy + vz * vz);
+    double lambda = 2.0 * PI / (v * V2K);
+
+    struct IPN_node* nodes[16];
+    double weights[16];
+    double corner_mu[16];
+    int corner_open[16];
+    IPN_set_point (s, _particle);
+    int count = IPN_corners (s, nodes, weights);
+    double mu = 0;
+    for (int c = 0; c < count; c++) {
+      corner_mu[c] = weights[c] * IPN_node_mu (nodes[c], lambda, &corner_open[c]);
+      mu += corner_mu[c];
+    }
+    if (mu <= 0 || selected_mu <= 0)
+      return 0;
+
+    /* Choose a corner with probability weight * mu, then a reflection with probability m d |F|^2 */
+    double u = rand01 () * mu;
+    int c = -1;
+    for (int i = 0; i < count; i++) {
+      if (corner_mu[i] <= 0)
+        continue;
+      c = i;
+      if ((u -= corner_mu[i]) <= 0)
+        break;
+    }
+    struct IPN_node* node = nodes[c];
+    double target = rand01 () * node->cum[corner_open[c] - 1];
+    int lo = 0, hi = corner_open[c] - 1;
+    while (lo < hi) {
+      int mid = (lo + hi) / 2;
+      if (node->cum[mid] < target)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+    double arg = lambda / (2.0 * node->d[lo]);
+    if (arg > 1)
+      return 0;
+    double theta = asin (arg);
+
+    /* Debye-Scherrer cone, as in Powder_process / PowderN */
+    double vertical_angular_limit = s->c_d_phi;
+    double alpha = 0, alpha0;
+    double vout_x, vout_y, vout_z;
+    double tmp_vx, tmp_vy, tmp_vz;
+    double nx, ny, nz;
+    if (vertical_angular_limit) {
+      arg = sin (vertical_angular_limit * DEG2RAD / 2) / sin (2 * theta);
+      if (arg < -1 || arg > 1)
+        vertical_angular_limit = 0;
+      else
+        alpha = 2 * asin (arg);
+    }
+    if (vertical_angular_limit) {
+      alpha = fabs (alpha);
+      alpha0 = 2 * rand01 () * alpha;
+      if (alpha0 > alpha)
+        alpha0 = PI + (alpha0 - 1.5 * alpha);
+      else
+        alpha0 = alpha0 - 0.5 * alpha;
+    } else
+      alpha0 = PI * randpm1 ();
+
+    if (fabs (scalar_prod (1, 0, 0, vx / v, vy / v, vz / v)) < fabs (scalar_prod (0, 0, 1, vx / v, vy / v, vz / v))) {
+      nx = 1;
+      ny = 0;
+      nz = 0;
+    } else {
+      nx = 0;
+      ny = 0;
+      nz = 1;
+    }
+    vec_prod (tmp_vx, tmp_vy, tmp_vz, vx, vy, vz, nx, ny, nz);
+    rotate (vout_x, vout_y, vout_z, vx, vy, vz, 2 * theta, tmp_vx, tmp_vy, tmp_vz);
+    rotate (tmp_vx, tmp_vy, tmp_vz, vout_x, vout_y, vout_z, alpha0, vx, vy, vz);
+
+    k_final[0] = V2K * tmp_vx;
+    k_final[1] = V2K * tmp_vy;
+    k_final[2] = V2K * tmp_vz;
+
+    *weight *= mu / selected_mu;
+    if (vertical_angular_limit)
+      *weight *= alpha / PI;
+    return 1;
+  };
+
+  #ifndef PROCESS_DETECTOR
+  #define PROCESS_DETECTOR dummy
+  #endif
+
+  #ifndef PROCESS_INHOMOGENEOUS_POWDERN_DETECTOR
+  #define PROCESS_INHOMOGENEOUS_POWDERN_DETECTOR dummy
+  #endif
+
+  // Register this process with the Union_master dispatch (see union-lib.h)
+  #undef UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_POWDERN
+  #define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_POWDERN(out, ...) case Inhomogeneous_PowderN: out = Inhomogeneous_PowderN_physics_my(__VA_ARGS__); break;
+  #undef UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_POWDERN
+  #define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_POWDERN(out, ...) case Inhomogeneous_PowderN: out = Inhomogeneous_PowderN_physics_scattering(__VA_ARGS__, selected_mu); break;
+%}
+
+DECLARE
+%{
+  struct Inhomogeneous_PowderN_physics_storage_struct IPN_storage;
+
+  struct global_process_element_struct global_process_element;
+  struct scattering_process_struct This_process;
+%}
+
+INITIALIZE
+%{
+  struct union_state_struct* union_state_p = union_acquire ();
+  struct Inhomogeneous_PowderN_physics_storage_struct* s = &IPN_storage;
+  memset (s, 0, sizeof (*s));
+  sprintf (s->comp_name, "%s", NAME_CURRENT_COMP);
+
+  if (!ncmat_template || !strcmp (ncmat_template, ""))
+    exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: ncmat_template is empty.\n", NAME_CURRENT_COMP));
+  if (number_of_sample_points < 1)
+    exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: number_of_sample_points must be positive.\n", NAME_CURRENT_COMP));
+
+  /* The template is read from a file, or else from the NCrystal data library */
+  char* template_text = NULL;
+  FILE* fp = fopen (ncmat_template, "r");
+  if (fp) {
+    fseek (fp, 0, SEEK_END);
+    long size = ftell (fp);
+    fseek (fp, 0, SEEK_SET);
+    template_text = malloc (size + 1);
+    size_t n_read = fread (template_text, 1, size, fp);
+    template_text[n_read] = '\0';
+    fclose (fp);
+  } else {
+    char** text_data = ncrystal_get_text_data (ncmat_template);
+    if (ncrystal_error () || !text_data)
+      exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: could not find ncmat_template \"%s\".\n", NAME_CURRENT_COMP, ncmat_template));
+    template_text = IPN_strndup (text_data[0], strlen (text_data[0]));
+    ncrystal_dealloc_stringlist (5, text_data);
+  }
+
+  double par_values[6] = { p1, p2, p3, p4, p5, p6 };
+  for (int i = 0; i < 6; i++)
+    s->vars[4 + i] = par_values[i];
+  s->c_d_phi = d_phi;
+  s->c_verbose = verbose;
+  s->c_max_bytes = max_cache_mb * 1e6;
+
+  IPN_parse (&s->tmpl_ncmat, template_text, s->vars, NAME_CURRENT_COMP, "ncmat_template");
+  IPN_parse (&s->tmpl_cfg, cfg ? cfg : "", s->vars, NAME_CURRENT_COMP, "cfg");
+  free (template_text);
+
+  const char* dim_names[4] = { "x", "y", "z", "t" };
+  int nodes_per_var[4] = { n_x, n_y, n_z, n_t };
+  double manual_lo[4] = { x_min, y_min, z_min, t_min };
+  double manual_hi[4] = { x_max, y_max, z_max, t_max };
+  for (int v = 0; v < 4; v++) {
+    if (manual_lo[v] < manual_hi[v]) {
+      s->lo[v] = manual_lo[v];
+      s->hi[v] = manual_hi[v];
+      s->range_set[v] = 2;
+    }
+    if (!(IPN_depends (&s->tmpl_ncmat, s->vars, v) || IPN_depends (&s->tmpl_cfg, s->vars, v)))
+      continue;
+    if (nodes_per_var[v] < 1)
+      exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: n_%s must be at least 1.\n", NAME_CURRENT_COMP, dim_names[v]));
+    if (v == 3 && s->range_set[v] != 2)
+      exit (fprintf (stderr, "Inhomogeneous_PowderN_process: %s: the templates use t, so t_min < t_max must be set.\n", NAME_CURRENT_COMP));
+    s->dim_var[s->n_dims] = v;
+    s->n_nodes_dim[s->n_dims] = nodes_per_var[v];
+    s->n_dims++;
+  }
+
+  printf ("Inhomogeneous_PowderN_process: %s: cache along", NAME_CURRENT_COMP);
+  if (s->n_dims == 0)
+    printf (" no dimensions");
+  for (int a = 0; a < s->n_dims; a++)
+    printf (" %s (%d nodes)", dim_names[s->dim_var[a]], s->n_nodes_dim[a]);
+  printf ("\n");
+
+  /* Build one material now, so that errors in the templates show up before the simulation */
+  if (s->n_dims == 0) {
+    IPN_allocate (s);
+    s->nodes[0] = IPN_build (s);
+  } else {
+    for (int v = 0; v < 4; v++)
+      s->vars[v] = (s->range_set[v] == 2) ? s->lo[v] : 0;
+    struct IPN_node* probe = IPN_build (s);
+    free (probe->d);
+    free (probe->cum);
+    free (probe);
+    s->n_built = 0;
+    s->bytes = 0;
+  }
+
+  scattering_process_struct_init (&This_process);
+  This_process.non_isotropic_rot_index = 1;
+  This_process.needs_cross_section_focus = -1;
+  This_process.sampling_points = number_of_sample_points;
+  This_process.eProcess = Inhomogeneous_PowderN;
+  This_process.data_transfer.pointer_to_a_Inhomogeneous_PowderN_physics_storage_struct = s;
+  This_process.probability_for_scattering_function = &Inhomogeneous_PowderN_physics_my;
+  This_process.setup_function = &Inhomogeneous_PowderN_setup;
+
+  sprintf (This_process.name, "%s", NAME_CURRENT_COMP);
+  This_process.process_p_interact = interact_fraction;
+  rot_copy (This_process.rotation_matrix, ROT_A_CURRENT_COMP);
+  sprintf (global_process_element.name, "%s", NAME_CURRENT_COMP);
+  global_process_element.component_index = INDEX_CURRENT_COMP;
+  global_process_element.p_scattering_process = &This_process;
+
+  struct pointer_to_global_process_list* global_process_list = &union_state_p->u_process_list;
+  add_element_to_process_list (global_process_list, global_process_element);
+%}
+
+TRACE
+%{
+%}
+
+FINALLY
+%{
+  struct Inhomogeneous_PowderN_physics_storage_struct* s = &IPN_storage;
+  printf ("Inhomogeneous_PowderN_process: %s: %ld of %ld nodes built (%.1f MB), %ld lookups outside the cache range\n", NAME_CURRENT_COMP, s->n_built, s->n_nodes,
+          s->bytes / 1e6, s->n_clamped);
+  for (long node = 0; node < s->n_nodes; node++) {
+    if (!s->nodes || !s->nodes[node])
+      continue;
+    free (s->nodes[node]->d);
+    free (s->nodes[node]->cum);
+    free (s->nodes[node]);
+  }
+  free (s->nodes);
+  IPN_free_template (&s->tmpl_ncmat);
+  IPN_free_template (&s->tmpl_cfg);
+  union_release (NAME_CURRENT_COMP);
+%}
+
+END

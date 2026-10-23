@@ -22,6 +22,9 @@
  * misrepresented as being the original software.
  * 3. This notice may not be removed or altered from any source distribution.
  */
+
+#ifndef TINYEXPR_C
+#define TINYEXPR_C
 // THIS VERSION OF TINYEXPR HAS BEEN MODIFIED TO BETTER SUIT THE NEEDS 
 // OF THE MCSTAS SOFTWARE PACKAGE
 
@@ -750,3 +753,5 @@ static void pn (const te_expr *n, int depth) {
 void te_print(const te_expr *n) {
     pn(n, 0);
 }
+
+#endif /*TINYEXPR_C*/

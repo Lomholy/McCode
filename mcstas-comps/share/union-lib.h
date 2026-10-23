@@ -52,6 +52,11 @@ enum process {
   NCrystal,
   Non,
   MCViNE,
+  SANS,
+  Inhomogeneous_SANS,
+  Inhomogeneous_PowderN,
+  Inhomogeneous_NCrystal,
+  Inhomogeneous_single_crystal,
   Template
 };
 
@@ -72,6 +77,9 @@ enum surface {
 // code generator emits after all component SHARE sections, so each switch sees
 // every process in the instrument without help from the code generator.
 // Adding a process means adding one empty default per dispatch here.
+// The scattering cases of the tabulated inhomogeneous processes (SANS, PowderN,
+// NCrystal, single crystal) also pass
+// selected_mu, a local variable of Union_master TRACE where the macro is used.
 #define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_INCOHERENT(out, ...)
 #define UNION_CASE_PHYSICS_MY_INCOHERENT(out, ...)
 #define UNION_CASE_PHYSICS_MY_POWDER(out, ...)
@@ -83,6 +91,11 @@ enum surface {
 #define UNION_CASE_PHYSICS_MY_NCRYSTAL(out, ...)
 #define UNION_CASE_PHYSICS_MY_NON(out, ...)
 #define UNION_CASE_PHYSICS_MY_MCVINE(out, ...)
+#define UNION_CASE_PHYSICS_MY_SANS(out, ...)
+#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SANS(out, ...)
+#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_POWDERN(out, ...)
+#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_NCRYSTAL(out, ...)
+#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SINGLE_CRYSTAL(out, ...)
 #define UNION_CASE_PHYSICS_MY_TEMPLATE(out, ...)
 
 #define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_INCOHERENT(out, ...)
@@ -96,6 +109,11 @@ enum surface {
 #define UNION_CASE_PHYSICS_SCATTERING_NCRYSTAL(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_NON(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_MCVINE(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_SANS(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SANS(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_POWDERN(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_NCRYSTAL(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SINGLE_CRYSTAL(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_TEMPLATE(out, ...)
 
 #define UNION_CASE_PHYSICS_SURFACE_MIRROR(out, ...)
@@ -113,6 +131,11 @@ enum surface {
   UNION_CASE_PHYSICS_MY_NCRYSTAL(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_NON(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_MCVINE(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_SANS(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SANS(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_POWDERN(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_NCRYSTAL(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SINGLE_CRYSTAL(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_TEMPLATE(out, __VA_ARGS__)
 
 #define UNION_CASES_PHYSICS_SCATTERING(out, ...) \
@@ -127,6 +150,11 @@ enum surface {
   UNION_CASE_PHYSICS_SCATTERING_NCRYSTAL(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_NON(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_MCVINE(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_SANS(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SANS(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_POWDERN(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_NCRYSTAL(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SINGLE_CRYSTAL(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_TEMPLATE(out, __VA_ARGS__)
 
 #define UNION_CASES_PHYSICS_SURFACE(out, ...) \
@@ -609,6 +637,14 @@ double dist;
 double *cumul_dists;
 double **mus;
 double *total_mus;
+
+// Absorption varying with position, time and speed, set by Union_make_material; NULL when my_a is used.
+// Returns the inverse penetration depth at 2200 m/s [m^-1], at a position relative to the geometry
+// center (master axes), time t and speed v; it is scaled by 2200/v like my_a.
+double (*my_a_function)(struct physics_struct *physics, double x, double y, double z, double t, double v);
+void *my_a_data;
+int my_a_sampling_points;
+double *mu_abs; // my_a_function at the sampling points of the current path
 };
 
 union data_transfer_union{
@@ -627,6 +663,11 @@ union data_transfer_union{
     struct NCrystal_physics_storage_struct *pointer_to_a_NCrystal_physics_storage_struct;
     struct Non_physics_storage_struct *pointer_to_a_Non_physics_storage_struct;
     struct MCViNE_physics_storage_struct *pointer_to_a_MCViNE_physics_storage_struct;
+    struct SANS_physics_storage_struct *pointer_to_a_SANS_physics_storage_struct;
+    struct Inhomogeneous_SANS_physics_storage_struct *pointer_to_a_Inhomogeneous_SANS_physics_storage_struct;
+    struct Inhomogeneous_PowderN_physics_storage_struct *pointer_to_a_Inhomogeneous_PowderN_physics_storage_struct;
+    struct Inhomogeneous_NCrystal_physics_storage_struct *pointer_to_a_Inhomogeneous_NCrystal_physics_storage_struct;
+    struct Inhomogeneous_single_crystal_physics_storage_struct *pointer_to_a_Inhomogeneous_single_crystal_physics_storage_struct;
     struct Template_physics_storage_struct *pointer_to_a_Template_physics_storage_struct;
     // possible to add as many structs as wanted, without increasing memory footprint.
 };
@@ -656,6 +697,10 @@ struct scattering_process_struct
   // A scattering_function takes k_i and parameters, returns k_f
   int (*scattering_function)(double *, double *, double *, union data_transfer_union, struct focus_data_struct *, _class_particle *_particle);
   //                         k_f,    k_i,    weight, parameters               , focus data / function
+
+  // Optional, called by Union_master INITIALIZE once per volume using the process, with the volume bounding box
+  //  in the frame physics_my positions are given in (relative to the geometry center, rotated into the process frame)
+  void (*setup_function)(union data_transfer_union, Coords, Coords);
 };
 
 // Utility function for initialising a scattering_process_struct with default
