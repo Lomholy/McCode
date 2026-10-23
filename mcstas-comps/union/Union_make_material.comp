@@ -30,7 +30,7 @@
 * Described elsewhere
 *
 * Absorption varying in space, time and speed:
-* absorption_expr gives the inverse penetration depth from absorption at 2200 m/s as a
+* mu_absorption_expr gives the inverse penetration depth from absorption at 2200 m/s as a
 * tinyexpr expression in x, y, z (relative to the center of the geometry, master axes, as
 * for the inhomogeneous processes), t, v and p1..p6. As for my_absorption, the value is
 * scaled by 2200/v; v allows any further dependence on the speed, e.g. p1*v/2200 is an
@@ -44,14 +44,14 @@
 * INPUT PARAMETERS:
 * process_string:       [string] Comma seperated names of physical processes
 * my_absorption:        [1/m]    Inverse penetration depth from absorption at standard energy
-* absorption_expr:      [str]    Optional tinyexpr expression for the inverse penetration depth from absorption at 2200 m/s [1/m], in x, y, z [m] (relative to the geometry center, master axes), t [s], v [m/s] and p1..p6; scaled by 2200/v like my_absorption, and overrides it
-* absorption_sampling_points: [1] Points per path where Union_master evaluates absorption_expr, if it depends on x, y, z, t or v
-* p1:                   [1]      Generic constant for absorption_expr
-* p2:                   [1]      Generic constant for absorption_expr
-* p3:                   [1]      Generic constant for absorption_expr
-* p4:                   [1]      Generic constant for absorption_expr
-* p5:                   [1]      Generic constant for absorption_expr
-* p6:                   [1]      Generic constant for absorption_expr
+* mu_absorption_expr:      [str]    Optional tinyexpr expression for the inverse penetration depth from absorption at 2200 m/s [1/m], in x, y, z [m] (relative to the geometry center, master axes), t [s], v [m/s] and p1..p6; scaled by 2200/v like my_absorption, and overrides it
+* absorption_sampling_points: [1] Points per path where Union_master evaluates mu_absorption_expr, if it depends on x, y, z, t or v
+* p1:                   [1]      Generic constant for mu_absorption_expr
+* p2:                   [1]      Generic constant for mu_absorption_expr
+* p3:                   [1]      Generic constant for mu_absorption_expr
+* p4:                   [1]      Generic constant for mu_absorption_expr
+* p5:                   [1]      Generic constant for mu_absorption_expr
+* p6:                   [1]      Generic constant for mu_absorption_expr
 * absorber:             [0/1]    Control parameter, if set to 1 the material will have no scattering processes
 * refraction_sigma_coh: [barn]   Coherent cross section of refracting material. Use negative value to indicate a negative coherent scattering length
 * refraction_density:   [g/cm^3]  Density of the refracting material. density < 0 means the material is outside/before the shape.
@@ -74,7 +74,7 @@
 DEFINE COMPONENT Union_make_material
 
 SETTING PARAMETERS(string process_string="NULL", my_absorption=0, absorber=0,
-                   string absorption_expr="", int absorption_sampling_points=20,
+                   string mu_absorption_expr="", int absorption_sampling_points=20,
                    p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
                     refraction_density=0, refraction_sigma_coh=0, refraction_weight=0,  refraction_SLD=-1500, string init=""
 			   )
@@ -205,7 +205,7 @@ SHARE
     return te_compile (expr_str, list, n, &err);
   }
 
-  /* my_a_function of materials with absorption_expr: inverse penetration depth at 2200 m/s */
+  /* my_a_function of materials with mu_absorption_expr: inverse penetration depth at 2200 m/s */
   double
   Union_material_absorption (struct physics_struct* physics, double x, double y, double z, double t, double v) {
     struct Union_material_absorption_struct* a = physics->my_a_data;
@@ -282,25 +282,25 @@ INITIALIZE
   this_material.number_of_processes = accepted_processes.num_elements; // Add number of processes
   this_material.is_vacuum = 0;                                         // This material is not vacuum
 
-  /* Absorption from absorption_expr: a constant if it uses none of x, y, z, t, v, otherwise a
+  /* Absorption from mu_absorption_expr: a constant if it uses none of x, y, z, t, v, otherwise a
    * function Union_master evaluates along each path */
   double material_my_a = my_absorption;
   this_material.my_a_function = NULL;
   this_material.my_a_data = NULL;
   this_material.mu_abs = NULL;
-  if (absorption_expr && strcmp (absorption_expr, "")) {
+  if (mu_absorption_expr && strcmp (mu_absorption_expr, "")) {
     double par_values[6] = { p1, p2, p3, p4, p5, p6 };
     memset (&absorption_storage, 0, sizeof (absorption_storage));
     for (int i = 0; i < 6; i++)
       absorption_storage.vars[5 + i] = par_values[i];
-    absorption_storage.expr = Union_material_compile (absorption_expr, absorption_storage.vars, -1);
+    absorption_storage.expr = Union_material_compile (mu_absorption_expr, absorption_storage.vars, -1);
     if (!absorption_storage.expr) {
-      printf ("ERROR, Union make material named %s could not parse absorption_expr \"%s\".\n", NAME_CURRENT_COMP, absorption_expr);
+      printf ("ERROR, Union make material named %s could not parse mu_absorption_expr \"%s\".\n", NAME_CURRENT_COMP, mu_absorption_expr);
       exit (1);
     }
     int varies = 0;
     for (int var = 0; var < 5; var++) {
-      te_expr* e = Union_material_compile (absorption_expr, absorption_storage.vars, var);
+      te_expr* e = Union_material_compile (mu_absorption_expr, absorption_storage.vars, var);
       if (e)
         te_free (e);
       else

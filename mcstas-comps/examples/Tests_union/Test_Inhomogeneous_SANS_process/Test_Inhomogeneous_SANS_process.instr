@@ -1,0 +1,274 @@
+/*******************************************************************************
+*         McStas instrument definition URL=http://www.mcstas.org
+*
+* Instrument: Test_Inhomogeneous_SANS_process
+*
+* %Identification
+* Written by: Daniel Lomholt Christensen
+* Date: 29/09/2026
+* Origin: Niels Bohr Institute @ UCPH
+* %INSTRUMENT_SITE: Test_samples
+*
+* Compares Inhomogeneous_SANS_process with SANS_process for dilute hard spheres
+*
+* %Description
+* A small SANS instrument with a 10x10x1 mm sample of dilute hard spheres (volume
+* fraction 1e-2, excess scattering length density 5 fm/AA^3). The scale of each
+* sphere radius R is Phi * Delta_rho^2 * 4 pi / 3 * R^3.
+*
+* Homogeneous references (SANS_process):
+*   sample_choice=0: R = 100 AA
+*   sample_choice=6: R = 50 AA
+*   sample_choice=7: R = 150 AA
+*   sample_choice=3: R = 50 AA at x < 0 and R = 150 AA at x > 0, as a full R = 50 AA box
+*                    with a higher priority R = 150 AA box over x > 0. The inner box
+*                    is 20 um larger in y, z and +x, so no faces coincide.
+*
+* Inhomogeneous_SANS_process in one box:
+*   sample_choice=1: constant expressions, R = 100 AA (no cache axes); should equal 0
+*   sample_choice=2: R = 100 AA, scale_expr linear in z with the same mean (no cache
+*                    axes); should equal 0 up to the small change in attenuation
+*   sample_choice=4: R steps from 50 to 150 AA at x = 0 (cache along x); should equal 3
+*   sample_choice=5: as 4, integrating at every point instead of the cache; should equal 4
+*   sample_choice=8: R steps from 50 to 150 AA at time t0, the median arrival time
+*                    (cache along t); psd_det_early should equal choice 6 and
+*                    psd_det_late choice 7
+*
+* sample_choice=5 integrates at every sampling point and takes minutes, so it has no
+* %Example line; run it by hand after changing the integral or the cache.
+*
+* The detectors count rays scattered exactly once. psd_det_early and psd_det_late
+* split them by the time the ray reached the sample.
+*
+* %Example: sample_choice=0 Detector: psd_det_single_I=9.56954e+06
+* %Example: sample_choice=1 Detector: psd_det_single_I=1.0003e+07
+* %Example: sample_choice=2 Detector: psd_det_single_I=1.0204e+07
+* %Example: sample_choice=3 Detector: psd_det_single_I=8.83871e+06
+* %Example: sample_choice=4 Detector: psd_det_single_I=8.82551e+06
+* %Example: sample_choice=6 Detector: psd_det_early_I=3.25536e+06
+* %Example: sample_choice=7 Detector: psd_det_late_I=5.21464e+06
+* %Example: sample_choice=8 Detector: psd_det_early_I=3.39399e+06
+* %Example: sample_choice=8 Detector: psd_det_late_I=5.19958e+06
+*
+* %Parameters
+* E_i: [meV] Energy of the simulated neutrons.
+* sample_choice: [1] Sample to use, see the description.
+* flux_mult: [1] Factor multiplied onto the source flux.
+*
+* %Link
+*
+* %End
+*******************************************************************************/
+DEFINE INSTRUMENT Test_Inhomogeneous_SANS_process(E_i=5, int sample_choice=0, flux_mult=0.5512)
+
+DECLARE
+%{
+  double samp_w;
+  double samp_h;
+  double samp_d;
+  double sphere_phi;
+  double sphere_drho;
+  double scale_per_R3;
+  double R_hom;
+  double scale_hom;
+  double R_small;
+  double R_large;
+  double t0;
+  int direct_flag;
+  char ff_inh[512];
+  char scale_inh[512];
+  int scattered;
+  double t_sample;
+%}
+
+INITIALIZE
+%{
+  samp_w = 0.01;
+  samp_h = 0.01;
+  samp_d = 0.001;
+  sphere_phi = 1e-2;
+  sphere_drho = 5;
+  /* Phi * Delta_rho^2 * 4 pi / 3, so that scale = scale_per_R3 * R^3 in m^-1 */
+  scale_per_R3 = sphere_phi * sphere_drho * sphere_drho * 4.0 * PI / 3.0;
+  R_small = 50;
+  R_large = 150;
+  R_hom = (sample_choice == 6) ? R_small : (sample_choice == 7) ? R_large : 100;
+  scale_hom = scale_per_R3 * pow (R_hom, 3);
+  /* Median arrival time at the sample: 10.5 m at the speed of E_i */
+  t0 = 10.5 / (SE2V * sqrt (E_i));
+  direct_flag = (sample_choice == 5);
+
+  const char* radius = "p1";
+  if (sample_choice == 4 || sample_choice == 5)
+    radius = "hvs(x,0,p2,p1)";
+  else if (sample_choice == 8)
+    radius = "hvs(t,p4,p2,p1)";
+  sprintf (ff_inh, "3*(sin(q*%s)-q*%s*cos(q*%s))/(q*%s)^3", radius, radius, radius, radius);
+  if (sample_choice == 2)
+    sprintf (scale_inh, "p3*p1^3*(1+2000*z)");
+  else
+    sprintf (scale_inh, "p3*%s^3", radius);
+%}
+
+TRACE
+
+COMPONENT Origin = Progress_bar()
+  AT (0,0,0) ABSOLUTE
+EXTEND %{
+  scattered = 0;
+%}
+
+COMPONENT init = Union_init()
+  AT (0,0,0) ABSOLUTE
+
+COMPONENT source = Source_simple(
+    radius = 0.05,
+    dist = 10.495,
+    focus_xw = samp_w,
+    focus_yh = samp_h,
+    E0 = E_i,
+    dE = 0.475,
+    flux = 1e14*flux_mult
+) AT (0, 0, 0) RELATIVE Origin
+
+COMPONENT post_source_slit = Slit(
+    radius = 0.005
+) AT (0, 0, 0.025) RELATIVE source
+
+COMPONENT pre_samp_arm = Arm(
+) AT (0, 0, 10.495) RELATIVE source
+
+COMPONENT pre_samp_slit = Slit(
+    radius = 0.005
+) AT (0, 0, 0) RELATIVE pre_samp_arm
+
+COMPONENT arm_sample = Arm(
+) AT (0, 0, 0.005) RELATIVE pre_samp_arm
+EXTEND %{
+  t_sample = t;
+%}
+
+// Homogeneous sample, sample_choice 0, 6, 7
+
+COMPONENT hom_proc = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3",
+    p1 = R_hom, scale = scale_hom
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT hom_material = Union_make_material(
+    my_absorption = 0, process_string = "hom_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT hom_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "hom_material",
+    target_x = 0, target_y = 0, target_z = 5, focus_xw = 1, focus_xh = 1
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT hom_master = Union_master(
+) WHEN (sample_choice == 0 || sample_choice == 6 || sample_choice == 7)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+// R = 50 AA at x < 0 and R = 150 AA at x > 0, sample_choice 3
+
+COMPONENT small_proc = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3",
+    p1 = R_small, scale = scale_per_R3 * R_small * R_small * R_small
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT large_proc = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3",
+    p1 = R_large, scale = scale_per_R3 * R_large * R_large * R_large
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT small_material = Union_make_material(
+    my_absorption = 0, process_string = "small_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT large_material = Union_make_material(
+    my_absorption = 0, process_string = "large_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT small_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "small_material",
+    target_x = 0, target_y = 0, target_z = 5, focus_xw = 1, focus_xh = 1
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT large_box = Union_box(
+    xwidth = samp_w / 2 + 2e-5, yheight = samp_h + 2e-5, zdepth = samp_d + 2e-5,
+    priority = 2, material_string = "large_material",
+    target_x = -(samp_w / 4 + 1e-5), target_y = 0, target_z = 5, focus_xw = 1, focus_xh = 1
+) AT (samp_w / 4 + 1e-5, 0, 0) RELATIVE arm_sample
+
+COMPONENT split_master = Union_master(
+) WHEN (sample_choice == 3)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+// Inhomogeneous sample, sample_choice 1, 2, 4, 5, 8
+
+COMPONENT inh_proc = Inhomogeneous_SANS_process(
+    form_factor = ff_inh,
+    scale_expr = scale_inh,
+    p1 = (sample_choice == 1 || sample_choice == 2) ? 100 : R_small,
+    p2 = R_large, p3 = scale_per_R3, p4 = t0,
+    n_x = 21, n_t = 41,
+    t_min = t0 * 0.9, t_max = t0 * 1.1,
+    direct = direct_flag
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_material = Union_make_material(
+    my_absorption = 0, process_string = "inh_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "inh_material",
+    target_x = 0, target_y = 0, target_z = 5, focus_xw = 1, focus_xh = 1
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_master = Union_master(
+) WHEN (sample_choice == 1 || sample_choice == 2 || sample_choice == 4 || sample_choice == 5 || sample_choice == 8)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+COMPONENT arm_det = Arm(
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT psd_det_single = PSD_monitor(
+    nx = 200, ny = 200, filename = "psd_det_single",
+    xwidth = 1, yheight = 1, restore_neutron = 1
+) WHEN (scattered == 1)
+AT (0, 0, 5) RELATIVE arm_det
+
+COMPONENT q_det = Monitor_nD(
+    xwidth = 1, yheight = 1,
+    options = "square, kxy limits=[0 0.15] bins=150",
+    filename = "q_det", restore_neutron = 1
+) WHEN (scattered == 1)
+AT (0, 0, 5) RELATIVE arm_det
+
+COMPONENT psd_det_early = PSD_monitor(
+    nx = 200, ny = 200, filename = "psd_det_early",
+    xwidth = 1, yheight = 1, restore_neutron = 1
+) WHEN (scattered == 1 && t_sample < t0)
+AT (0, 0, 5) RELATIVE arm_det
+
+COMPONENT psd_det_late = PSD_monitor(
+    nx = 200, ny = 200, filename = "psd_det_late",
+    xwidth = 1, yheight = 1, restore_neutron = 1
+) WHEN (scattered == 1 && t_sample >= t0)
+AT (0, 0, 5) RELATIVE arm_det
+
+COMPONENT stop = Union_stop()
+AT (0, 0, 0) ABSOLUTE
+
+END

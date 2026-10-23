@@ -1,0 +1,344 @@
+/*******************************************************************************
+*         McStas instrument definition URL=http://www.mcstas.org
+*
+* Instrument: Test_inhomogeneous_absorption
+*
+* %Identification
+* Written by: Daniel Lomholt Christensen
+* Date: 30/09/2026
+* Origin: Niels Bohr Institute @ UCPH
+* %INSTRUMENT_SITE: Test_samples
+*
+* Tests mu_absorption_expr in Union_make_material against constant absorption and analytic transmission
+*
+* %Description
+* A nearly monochromatic 1.798 AA (2200 m/s) beam passes a 10x20x10 mm box, so that the
+* 2200/v scaling of the absorption is 1 and the transmission can be computed
+* analytically. trans_x records the transmitted (unscattered) intensity against x behind
+* the box, trans_lambda against wavelength, sphere the scattered rays, and abs_z where
+* rays are absorbed along the beam.
+*
+* Absorber-only materials:
+*   sample_choice=0:  my_absorption = 50 /m; transmission exp(-0.5)
+*   sample_choice=1:  mu_absorption_expr = "50", a constant; should equal 0 exactly
+*   sample_choice=2:  mu = 150 ((z + 5 mm) / 10 mm)^2 along the beam, mean 50 /m, 100
+*                     sampling points; should equal 0 (up to the 2e-5 midpoint error), and
+*                     abs_z should follow mu(z) exp(-int_0^z mu)
+*   sample_choice=3:  mu = 20 /m for x < 0 and 100 /m for x > 0 (mu_absorption_expr); should equal 4
+*   sample_choice=4:  as 3, with my_absorption = 20 and a higher priority box over x > 0
+*                     with my_absorption = 100. The inner box is 20 um larger in y, z and +x,
+*                     so no faces coincide.
+*   sample_choice=5:  mu = 50 + 5000 x /m across the beam; trans_x should follow exp(-mu(x) L)
+*   sample_choice=9:  mu = 20 /m before and 100 /m after time t0, the median arrival time;
+*                     trans_early should equal choice 10 and trans_late choice 11. Rays that
+*                     cross t0 inside the box absorb with both values, so trans_early and
+*                     trans_late leave out rays that reach the box center within t_margin
+*                     (0.6 box depths at 2200 m/s) of t0
+*   sample_choice=10: my_absorption = 20 /m
+*   sample_choice=11: my_absorption = 100 /m
+*   sample_choice=12: mu_absorption_expr = "50*v/2200", independent of the speed, over
+*                     0.8-2.8 AA; trans_lambda should be flat at exp(-0.5)
+*   sample_choice=13: mu_absorption_expr = "50", the usual 1/v law, over 0.8-2.8 AA;
+*                     trans_lambda should follow exp(-0.5 lambda / 1.798)
+*
+* Materials with an incoherent process (sigma 5 barn, unit cell 50 AA^3, mu_s = 10 /m):
+*   sample_choice=6:  Incoherent_process, my_absorption 20 /m, with a higher priority box
+*                     over x > 0 with my_absorption 100 /m
+*   sample_choice=7:  Incoherent_process with mu_absorption_expr stepping from 20 to 100 /m at
+*                     x = 0; should equal 6
+*   sample_choice=8:  as 7, but with Inhomogeneous_incoherent_process, so the absorption
+*                     shares the sampling points of the process; should equal 6
+*
+* %Example: sample_choice=0 Detector: trans_x_I=6.63988e-10
+* %Example: sample_choice=1 Detector: trans_x_I=6.63988e-10
+* %Example: sample_choice=2 Detector: trans_x_I=6.63997e-10
+* %Example: sample_choice=3 Detector: trans_x_I=6.49525e-10
+* %Example: sample_choice=4 Detector: trans_x_I=6.49123e-10
+* %Example: sample_choice=5 Detector: trans_x_I=6.70664e-10
+* %Example: sample_choice=6 Detector: sphere_I=6.12594e-11
+* %Example: sample_choice=7 Detector: sphere_I=6.13233e-11
+* %Example: sample_choice=8 Detector: sphere_I=6.13233e-11
+* %Example: sample_choice=9 Detector: trans_early_I=4.02455e-10
+* %Example: sample_choice=9 Detector: trans_late_I=1.8009e-10
+* %Example: sample_choice=10 Detector: trans_early_I=4.02455e-10
+* %Example: sample_choice=11 Detector: trans_late_I=1.8009e-10
+* %Example: sample_choice=12 Detector: trans_lambda_I=6.63284e-08
+* %Example: sample_choice=13 Detector: trans_lambda_I=6.71735e-08
+*
+* %Parameters
+* sample_choice: [1] Sample to use, see the description.
+*
+* %Link
+*
+* %End
+*******************************************************************************/
+DEFINE INSTRUMENT Test_inhomogeneous_absorption(int sample_choice=0)
+
+DECLARE
+%{
+  double samp_w;
+  double samp_h;
+  double samp_d;
+  double lambda0;
+  double dlambda;
+  double t0;
+  double t_margin;
+  double hom_mu;
+  double outer_mu;
+  double inner_mu;
+  char abs_expr[256];
+  int abs_points;
+  int scattered;
+  double t_sample;
+%}
+
+INITIALIZE
+%{
+  samp_w = 0.01;
+  samp_h = 0.02;
+  samp_d = 0.01;
+  lambda0 = 1.798;
+  dlambda = (sample_choice == 12 || sample_choice == 13) ? 1.0 : 0.01;
+  /* Median arrival time at the sample, 10.5 m at the speed of lambda0 */
+  t0 = 10.5 * lambda0 / 3956.0346;
+  t_margin = 0.6 * samp_d / 2200;
+
+  hom_mu = sample_choice == 10 ? 20 : sample_choice == 11 ? 100 : 50;
+  outer_mu = 20;
+  inner_mu = 100;
+
+  abs_points = 20;
+  sprintf (abs_expr, "50");
+  if (sample_choice == 2) {
+    sprintf (abs_expr, "150*((z+0.005)/0.01)^2");
+    abs_points = 100;
+  } else if (sample_choice == 3 || sample_choice == 7 || sample_choice == 8)
+    sprintf (abs_expr, "hvs(x,0,100,20)");
+  else if (sample_choice == 5)
+    sprintf (abs_expr, "50+5000*x");
+  else if (sample_choice == 9)
+    sprintf (abs_expr, "hvs(t,p1,100,20)");
+  else if (sample_choice == 12)
+    sprintf (abs_expr, "50*v/2200");
+%}
+
+TRACE
+
+COMPONENT Origin = Progress_bar()
+  AT (0,0,0) ABSOLUTE
+EXTEND %{
+  scattered = 0;
+%}
+
+COMPONENT init = Union_init()
+  AT (0,0,0) ABSOLUTE
+
+COMPONENT source = Source_simple(
+    radius = 0.001,
+    dist = 10.5,
+    focus_xw = samp_w * 0.98,
+    focus_yh = samp_h * 0.98,
+    lambda0 = lambda0,
+    dlambda = dlambda,
+    flux = 1
+) AT (0, 0, 0) RELATIVE Origin
+
+COMPONENT arm_sample = Arm(
+) AT (0, 0, 10.5) RELATIVE source
+EXTEND %{
+  /* The Arm does not move the ray, so extrapolate to the sample plane */
+  t_sample = t - z / vz;
+%}
+
+COMPONENT incident_lambda = Monitor_nD(
+    xwidth = 0.012, yheight = 0.022,
+    options = "square, lambda limits=[0.8 2.8] bins=40",
+    filename = "incident_lambda", restore_neutron = 1
+) AT (0, 0, -0.02) RELATIVE arm_sample
+
+// Constant absorber, sample_choice 0, 10, 11
+
+COMPONENT hom_material = Union_make_material(
+    my_absorption = hom_mu, absorber = 1
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT hom_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "hom_material"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT hom_master = Union_master(
+) WHEN (sample_choice == 0 || sample_choice == 10 || sample_choice == 11)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+// Absorber with mu_absorption_expr, sample_choice 1, 2, 3, 5, 9, 12, 13
+
+COMPONENT expr_material = Union_make_material(
+    absorber = 1, mu_absorption_expr = abs_expr, absorption_sampling_points = abs_points, p1 = t0
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT expr_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "expr_material"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT abs_z = Union_abs_logger_1D_space(
+    target_geometry = "expr_box", yheight = samp_d, n = 50, filename = "abs_z"
+) AT (0, 0, 0) RELATIVE arm_sample
+ROTATED (-90, 0, 0) RELATIVE arm_sample
+
+COMPONENT expr_master = Union_master(
+) WHEN (sample_choice == 1 || sample_choice == 2 || sample_choice == 3 || sample_choice == 5 || sample_choice == 9 || sample_choice == 12
+        || sample_choice == 13)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+// Constant absorbers, 100 /m at x > 0, sample_choice 4
+
+COMPONENT outer_material = Union_make_material(
+    my_absorption = outer_mu, absorber = 1
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inner_material = Union_make_material(
+    my_absorption = inner_mu, absorber = 1
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT outer_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "outer_material"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inner_box = Union_box(
+    xwidth = samp_w / 2 + 2e-5, yheight = samp_h + 2e-5, zdepth = samp_d + 2e-5,
+    priority = 2, material_string = "inner_material"
+) AT (samp_w / 4 + 1e-5, 0, 0) RELATIVE arm_sample
+
+COMPONENT split_master = Union_master(
+) WHEN (sample_choice == 4)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+// Incoherent scattering with constant absorptions, 100 /m at x > 0, sample_choice 6
+
+COMPONENT inc_outer_proc = Incoherent_process(
+    sigma = 5, unit_cell_volume = 50
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inc_outer_material = Union_make_material(
+    my_absorption = outer_mu, process_string = "inc_outer_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inc_inner_proc = Incoherent_process(
+    sigma = 5, unit_cell_volume = 50
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inc_inner_material = Union_make_material(
+    my_absorption = inner_mu, process_string = "inc_inner_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inc_outer_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "inc_outer_material"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inc_inner_box = Union_box(
+    xwidth = samp_w / 2 + 2e-5, yheight = samp_h + 2e-5, zdepth = samp_d + 2e-5,
+    priority = 2, material_string = "inc_inner_material"
+) AT (samp_w / 4 + 1e-5, 0, 0) RELATIVE arm_sample
+
+COMPONENT inc_split_master = Union_master(
+) WHEN (sample_choice == 6)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+// Incoherent scattering with mu_absorption_expr, sample_choice 7
+
+COMPONENT inc_expr_proc = Incoherent_process(
+    sigma = 5, unit_cell_volume = 50
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inc_expr_material = Union_make_material(
+    process_string = "inc_expr_proc", mu_absorption_expr = "hvs(x,0,100,20)"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inc_expr_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "inc_expr_material"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inc_expr_master = Union_master(
+) WHEN (sample_choice == 7)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+// Inhomogeneous incoherent scattering with mu_absorption_expr, sample_choice 8
+
+COMPONENT inh_inc_proc = Inhomogeneous_incoherent_process(
+    sigma_expr = "5", unit_cell_volume = 50
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_inc_material = Union_make_material(
+    process_string = "inh_inc_proc", mu_absorption_expr = "hvs(x,0,100,20)"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_inc_box = Union_box(
+    xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
+    priority = 1, material_string = "inh_inc_material"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_inc_master = Union_master(
+) WHEN (sample_choice == 8)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+COMPONENT sphere = PSD_monitor_4PI(
+    nx = 90, ny = 45, radius = 1.5,
+    filename = "sphere", restore_neutron = 1
+) WHEN (scattered >= 1)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT trans_x = Monitor_nD(
+    xwidth = 0.012, yheight = 0.022,
+    options = "square, x limits=[-0.005 0.005] bins=50",
+    filename = "trans_x", restore_neutron = 1
+) WHEN (scattered == 0)
+AT (0, 0, 0.02) RELATIVE arm_sample
+
+COMPONENT trans_early = Monitor_nD(
+    xwidth = 0.012, yheight = 0.022,
+    options = "square, x limits=[-0.005 0.005] bins=50",
+    filename = "trans_early", restore_neutron = 1
+) WHEN (scattered == 0 && t_sample < t0 - t_margin)
+AT (0, 0, 0.02) RELATIVE arm_sample
+
+COMPONENT trans_late = Monitor_nD(
+    xwidth = 0.012, yheight = 0.022,
+    options = "square, x limits=[-0.005 0.005] bins=50",
+    filename = "trans_late", restore_neutron = 1
+) WHEN (scattered == 0 && t_sample > t0 + t_margin)
+AT (0, 0, 0.02) RELATIVE arm_sample
+
+COMPONENT trans_lambda = Monitor_nD(
+    xwidth = 0.012, yheight = 0.022,
+    options = "square, lambda limits=[0.8 2.8] bins=40",
+    filename = "trans_lambda", restore_neutron = 1
+) WHEN (scattered == 0)
+AT (0, 0, 0.02) RELATIVE arm_sample
+
+COMPONENT stop = Union_stop()
+AT (0, 0, 0) ABSOLUTE
+
+END
