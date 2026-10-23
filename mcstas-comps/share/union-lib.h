@@ -41,7 +41,7 @@ enum shape {
 };
 
 enum process {
-  Inhomogenous_incoherent,
+  Inhomogeneous_incoherent,
   Incoherent,
   Powder,
   Single_crystal,
@@ -72,7 +72,7 @@ enum surface {
 // code generator emits after all component SHARE sections, so each switch sees
 // every process in the instrument without help from the code generator.
 // Adding a process means adding one empty default per dispatch here.
-#define UNION_CASE_PHYSICS_MY_INHOMOGENOUS_INCOHERENT(out, ...)
+#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_INCOHERENT(out, ...)
 #define UNION_CASE_PHYSICS_MY_INCOHERENT(out, ...)
 #define UNION_CASE_PHYSICS_MY_POWDER(out, ...)
 #define UNION_CASE_PHYSICS_MY_SINGLE_CRYSTAL(out, ...)
@@ -85,7 +85,7 @@ enum surface {
 #define UNION_CASE_PHYSICS_MY_MCVINE(out, ...)
 #define UNION_CASE_PHYSICS_MY_TEMPLATE(out, ...)
 
-#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENOUS_INCOHERENT(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_INCOHERENT(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_INCOHERENT(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_POWDER(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_SINGLE_CRYSTAL(out, ...)
@@ -102,7 +102,7 @@ enum surface {
 #define UNION_CASE_PHYSICS_SURFACE_TEMPLATE(out, ...)
 
 #define UNION_CASES_PHYSICS_MY(out, ...) \
-  UNION_CASE_PHYSICS_MY_INHOMOGENOUS_INCOHERENT(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_INCOHERENT(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_INCOHERENT(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_POWDER(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_SINGLE_CRYSTAL(out, __VA_ARGS__) \
@@ -116,7 +116,7 @@ enum surface {
   UNION_CASE_PHYSICS_MY_TEMPLATE(out, __VA_ARGS__)
 
 #define UNION_CASES_PHYSICS_SCATTERING(out, ...) \
-  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENOUS_INCOHERENT(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_INCOHERENT(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_INCOHERENT(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_POWDER(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_SINGLE_CRYSTAL(out, __VA_ARGS__) \
@@ -613,7 +613,7 @@ double *total_mus;
 
 union data_transfer_union{
     // List of pointers to storage structs for all supported physical processes
-    struct Inhomogenous_incoherent_struct *Inhomogenous_incoherent_struct;
+    struct Inhomogeneous_incoherent_struct *Inhomogeneous_incoherent_struct;
     struct Incoherent_physics_storage_struct  *pointer_to_a_Incoherent_physics_storage_struct;
     struct Powder_physics_storage_struct *pointer_to_a_Powder_physics_storage_struct;
     struct Single_crystal_physics_storage_struct *pointer_to_a_Single_crystal_physics_storage_struct;
@@ -640,12 +640,12 @@ struct scattering_process_struct
   int non_isotropic_rot_index;             // -1 if process is isotrpic, otherwise is the index of the process rotation matrix in the volume
   int needs_cross_section_focus;           // 1 if physics_my needs to call focus functions, otherwise -1
   Rotation rotation_matrix;                // rotation matrix of process, reported by component in local frame, transformed and moved to volume struct in main
-  double *inhomogenous_cumul_prob;         // The cumulative probability of a process in case of inhomogenous processes
-  double *inhomogenous_distances;          // The distance of each step in which the cumulative probabilities will be calculated.
-  double *inhomogenous_cumul_distances;    // The cumulative distances
-  double *inhomogenous_mu;                 // The different attenuation coefficients that are sampled in the numerical integration
-  double *inhomogenous_prob;               // The probability of the process at the different sampled points.
-  double *inhomogenous_t;                  // The different times at which mu must be sampled.
+  double *inhomogeneous_cumul_prob;         // The cumulative probability of a process in case of inhomogeneous processes
+  double *inhomogeneous_distances;          // The distance of each step in which the cumulative probabilities will be calculated.
+  double *inhomogeneous_cumul_distances;    // The cumulative distances
+  double *inhomogeneous_mu;                 // The different attenuation coefficients that are sampled in the numerical integration
+  double *inhomogeneous_prob;               // The probability of the process at the different sampled points.
+  double *inhomogeneous_t;                  // The different times at which mu must be sampled.
   int sampling_points;                          // Maximum number of samplings performed. If it is -1, no sampling has been done, and the arrays must be malloc'ed.
   union data_transfer_union data_transfer; // The way to reach the storage space allocated for this process (see examples in process.comp files)
 
@@ -1426,7 +1426,7 @@ void overwrite_if_empty(char *input_string, char *overwrite);
 // -------------    Union_master scattering helpers   -------------------------------------------
 int volume_is_only_absorber (struct Volume_struct *Volume);
 
-int process_needs_inhomogenous_sampling (struct physics_struct *current_p_physics,
+int process_needs_inhomogeneous_sampling (struct physics_struct *current_p_physics,
                                          struct scattering_process_struct *process);
 
 void adjust_abs_weight_factor (struct Volume_struct *Volume, double *my_sum_plus_abs,
@@ -1455,19 +1455,19 @@ void focus_in_cross_section_set_forced_point_and_dir (double *forced_length_to_s
 void focus_in_cross_section_set_scat_length (double *length_to_scattering, double forced_length_to_scattering,
                                              double *weight, double length_to_boundary, double my_sum_plus_abs);
 
-void inhomogenous_set_cumul_dist_array (struct physics_struct *current_p_physics, int i);
+void inhomogeneous_set_cumul_dist_array (struct physics_struct *current_p_physics, int i);
 
-void inhomogenous_sample_transmission_probability (struct physics_struct *current_p_physics,
+void inhomogeneous_sample_transmission_probability (struct physics_struct *current_p_physics,
                                                    struct Volume_struct *Volume,
                                                    double *real_transmission_probability, double v_length);
 
-double inhomogenous_sample_scattering_point (struct Volume_struct *Volume,
+double inhomogeneous_sample_scattering_point (struct Volume_struct *Volume,
                                               struct physics_struct *current_p_physics,
                                               _class_particle* _particle,
                                               double *abs_weight_factor, double v_length,
                                               double safety_distance, int *selected_sampling);
 
-void inhomogenous_choose_process (struct physics_struct *current_p_physics, struct Volume_struct *Volume,
+void inhomogeneous_choose_process (struct physics_struct *current_p_physics, struct Volume_struct *Volume,
                                   double *culmative_probability, double mc_prop, double my_sum,
                                   int selected_sampling, int *selected_process);
 

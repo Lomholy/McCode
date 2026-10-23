@@ -8092,7 +8092,7 @@ void overwrite_if_empty(char *input_string, char *overwrite) {
   }
 
   int
-  process_needs_inhomogenous_sampling (struct physics_struct* physics, struct scattering_process_struct* process) {
+  process_needs_inhomogeneous_sampling (struct physics_struct* physics, struct scattering_process_struct* process) {
     if (physics->sampling_points != -1) {
       if (process->needs_cross_section_focus || process->sampling_points != -1)
         return 1;
@@ -8230,12 +8230,12 @@ void overwrite_if_empty(char *input_string, char *overwrite) {
 
 
   void
-  inhomogenous_set_cumul_dist_array (struct physics_struct* physics, int i) {
+  inhomogeneous_set_cumul_dist_array (struct physics_struct* physics, int i) {
     physics->cumul_dists[i] = (i > 0) ? physics->cumul_dists[i - 1] + physics->dist : physics->dist / 2;
   }
 
   void
-  inhomogenous_sample_transmission_probability (struct physics_struct* physics, struct Volume_struct* Volume, double* real_transmission_probability,
+  inhomogeneous_sample_transmission_probability (struct physics_struct* physics, struct Volume_struct* Volume, double* real_transmission_probability,
                                                 double v_length) {
     // Calculate the probabilities and then add them cumulatively
     memset (physics->total_mus, 0, sizeof (double) * physics->sampling_points);
@@ -8269,7 +8269,7 @@ void overwrite_if_empty(char *input_string, char *overwrite) {
   }
 
   double
-  inhomogenous_sample_scattering_point (struct Volume_struct* Volume, struct physics_struct* physics,  _class_particle* _particle, double* abs_weight_factor, double v_length,
+  inhomogeneous_sample_scattering_point (struct Volume_struct* Volume, struct physics_struct* physics,  _class_particle* _particle, double* abs_weight_factor, double v_length,
                                         double safety_distance, int* selected_sampling) {
 
     // Numerical integration happens, and therefore we must choose between the different samples
@@ -8295,7 +8295,7 @@ void overwrite_if_empty(char *input_string, char *overwrite) {
 
 
   void
-  inhomogenous_choose_process (struct physics_struct* physics, struct Volume_struct* Volume, double* culmative_probability, double mc_prop,
+  inhomogeneous_choose_process (struct physics_struct* physics, struct Volume_struct* Volume, double* culmative_probability, double mc_prop,
                                double my_sum, int selected_sampling, int* selected_process) {
     for (int i = 0; i < Volume->p_physics->number_of_processes; i++) {
       *culmative_probability += physics->mus[i][selected_sampling] / my_sum;

@@ -1592,14 +1592,14 @@ TRACE
             double mu;
             current_p_physics->dist = length_to_boundary / current_p_physics->sampling_points - safety_distance;
 
-            if (process_needs_inhomogenous_sampling (current_p_physics, process)) {
+            if (process_needs_inhomogeneous_sampling (current_p_physics, process)) {
               // If mulitple sampling is required for this process, populate the neutron distance and probability arrays:
               Coords original_position = coords_set (x, y, z);
               double mu;
               *p_my_trace = 0;
               this_focus_data = &Volumes[current_volume]->geometry.focus_data_array.elements[0];
               for (int i = 0; i < current_p_physics->sampling_points; i++) {
-                inhomogenous_set_cumul_dist_array (current_p_physics, i);
+                inhomogeneous_set_cumul_dist_array (current_p_physics, i);
                 move_and_aim_neutron (current_p_physics, i, process, _particle, Volumes[current_volume], p_index, &ray_velocity, &ray_position, this_focus_data);
                 // Calculate mu and probability
                 UNION_PHYSICS_MY (physics_output, process, &mu, k_rotated, this_focus_data, _particle);
@@ -1608,7 +1608,7 @@ TRACE
               }
               coords_get (original_position, &x, &y, &z);
             }
-            else {//  process does not need inhomogenous sampling 
+            else {//  process does not need inhomogeneous sampling 
               UNION_PHYSICS_MY (physics_output, process, p_my_trace, k_rotated, this_focus_data, _particle);
               if (current_p_physics->sampling_points != -1) {
                 current_p_physics->mus[p_index][0] = *p_my_trace;
@@ -1640,7 +1640,7 @@ TRACE
             if (current_p_physics->sampling_points == -1) {
               real_transmission_probability = exp (-length_to_boundary * my_sum_plus_abs);
             } else {
-              inhomogenous_sample_transmission_probability (current_p_physics, Volumes[current_volume], &real_transmission_probability, v_length);
+              inhomogeneous_sample_transmission_probability (current_p_physics, Volumes[current_volume], &real_transmission_probability, v_length);
             }
 
             // Then check if we scatter.
@@ -1664,7 +1664,7 @@ TRACE
               printf ("WARNING: Absorption weight factor above 1! Should not happen! \n");
             // Select distance to scattering position
             if (current_p_physics->sampling_points != -1) {
-              length_to_scattering = inhomogenous_sample_scattering_point (Volumes[current_volume], current_p_physics, _particle, &abs_weight_factor, v_length,
+              length_to_scattering = inhomogeneous_sample_scattering_point (Volumes[current_volume], current_p_physics, _particle, &abs_weight_factor, v_length,
                                                                            safety_distance, &selected_sampling);
             }
             // Select process
@@ -1685,7 +1685,7 @@ TRACE
                     }
                   }
                 } else {
-                  inhomogenous_choose_process (current_p_physics, Volumes[current_volume], &culmative_probability, mc_prop, my_sum, selected_sampling,
+                  inhomogeneous_choose_process (current_p_physics, Volumes[current_volume], &culmative_probability, mc_prop, my_sum, selected_sampling,
                                                &selected_process);
                 }
               } else {

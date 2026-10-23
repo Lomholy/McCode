@@ -1,7 +1,7 @@
 /*******************************************************************************
 *         McStas instrument definition URL=http://www.mcstas.org
 *
-* Instrument: Test_inhomogenous_process
+* Instrument: Test_inhomogeneous_process
 *
 * %Identification
 * Written by: Daniel Lomholt Christensen
@@ -9,11 +9,11 @@
 * Origin: UCPH@NBI
 * %INSTRUMENT_SITE: Tests_union
 *
-* Test of inhomogenous incoherent union component, 
+* Test of inhomogeneous incoherent union component, 
 * and comparison to incoherent process, and incoherent component.
 *
 * %Description
-* Test of different setups with the Inhomogenous_incoherent_process.
+* Test of different setups with the Inhomogeneous_incoherent_process.
 * For all setups, the idea is the same. A source shines neutrons on the box,
 * and a detector placed right up on the side of the box, measures the 
 * incoherently scattered neutrons. 
@@ -21,14 +21,14 @@
 * depths:
 * 1 is the normal incoherent component,
 * 1 is a union box with an incoherent process
-* 1 is a union box with the inhomogenous incoherent process
+* 1 is a union box with the inhomogeneous incoherent process
 * Then the next three setups showcase a linearly rising scattering cross section
 * in the first example, this linearly increasing cross section is implemented
 * by 10 boxes utilizing the original inocherent process union component.
 *
-* Then the inhomogenous incoherent component implements it with its simple syntax
+* Then the inhomogeneous incoherent component implements it with its simple syntax
 *
-* Then a union box that uses the inhomogenous process 
+* Then a union box that uses the inhomogeneous process 
 *  and the original incoherent process is implemented.
 *
 *
@@ -39,7 +39,7 @@
 * The 8th and 9th examples show an intuitive image of the transmitted beam.
 * Here again the scattering cross section scales linearly, but due to the 
 * nature of the two different processes, the one process curve becomes
-* continous (Inhomogenous_incoherent_process),
+* continous (Inhomogeneous_incoherent_process),
 * and the other discrete (Incoherent_process).
 * 
 * The 10th example plays with some more complex tiny expressions using the 
@@ -71,7 +71,7 @@
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_inhomogenous_process(thick=0.01, 
+DEFINE INSTRUMENT Test_inhomogeneous_process(thick=0.01, 
                       width = 0.03,
                       string sample="thin")
 
@@ -230,9 +230,9 @@ COMPONENT inc_box = Union_box(
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
 
-// =================== Inhomogenous_incoherent_process constant
+// =================== Inhomogeneous_incoherent_process constant
 
-COMPONENT inho_proc = Inhomogenous_incoherent_process(
+COMPONENT inho_proc = Inhomogeneous_incoherent_process(
   sigma_expr = "5.08", unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
@@ -470,8 +470,8 @@ ROTATED (0, 0, 0) RELATIVE arm_sample
 
 
 
-// =================== Inhomogenous_incoherent_process Linear
-COMPONENT inho_lin_proc = Inhomogenous_incoherent_process(
+// =================== Inhomogeneous_incoherent_process Linear
+COMPONENT inho_lin_proc = Inhomogeneous_incoherent_process(
   sigma_expr = "5.08 + 9.58/2*((z+0.0045)*1000)", unit_cell_volume = 13.827,
   // verbose=1,
   number_of_sample_points = 10
@@ -495,14 +495,14 @@ COMPONENT inho_lin_box = Union_box(
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
 
-// ============================ Inhomogenous + homogenous
+// ============================ Inhomogeneous + homogenous
 
 COMPONENT only_inc_proc = Incoherent_process(
   sigma = 5.08, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE PREVIOUS
 
-COMPONENT only_inho_proc = Inhomogenous_incoherent_process(
+COMPONENT only_inho_proc = Inhomogeneous_incoherent_process(
   sigma_expr = "9.58/2*((z+0.0045)*1000)", unit_cell_volume = 13.827,
   // verbose=1,
   number_of_sample_points = 10
@@ -525,8 +525,8 @@ COMPONENT inho_and_inc_box = Union_box(
 ) AT (0,0, 0) RELATIVE arm_sample
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
-// ============================ Inhomogenous + homogenous + phononsimple process
-COMPONENT inho_phonon_proc= Inhomogenous_incoherent_process(
+// ============================ Inhomogeneous + homogenous + phononsimple process
+COMPONENT inho_phonon_proc= Inhomogeneous_incoherent_process(
   sigma_expr = "9.58/2*((z+0.0045)*1000)", unit_cell_volume = 13.827,
   // verbose=1,
   number_of_sample_points = 2
@@ -558,9 +558,9 @@ COMPONENT phonon_box = Union_box(
 ) AT (0,0, 0) RELATIVE arm_sample
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
-// ============================ Inhomogenous as a gaussian and heavy side
+// ============================ Inhomogeneous as a gaussian and heavy side
 
-COMPONENT gauss = Inhomogenous_incoherent_process(
+COMPONENT gauss = Inhomogeneous_incoherent_process(
   sigma_expr = "5.08 - gauss(0.01,0.001,z+0.0025) + hvs(z,0,5,0)", unit_cell_volume = 13.827,
   // verbose=1,
   number_of_sample_points = 10
