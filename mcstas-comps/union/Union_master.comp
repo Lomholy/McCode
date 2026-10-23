@@ -81,20 +81,6 @@ SHARE
   struct logger_with_data_struct loggers_with_data_array;
   struct abs_logger_with_data_struct abs_loggers_with_data_array;
 
-  /* Fills physics->cumul_dists and physics->mu_abs at the midpoints of physics->sampling_points
-   * segments of length dist along the path from position (master frame) along velocity. The
-   * absorption function gets the point relative to center, the time t0 + distance / v and the speed v. */
-  void
-  Union_sample_absorption (struct physics_struct* physics, Coords position, Coords velocity, Coords center, double dist, double t0, double v) {
-    Coords direction = coords_scalar_mult (velocity, 1.0 / v);
-    for (int i = 0; i < physics->sampling_points; i++) {
-      physics->cumul_dists[i] = (i > 0) ? physics->cumul_dists[i - 1] + dist : dist / 2;
-      Coords point = coords_sub (coords_add (position, coords_scalar_mult (direction, physics->cumul_dists[i])), center);
-      double mu = physics->my_a_function (physics, point.x, point.y, point.z, t0 + physics->cumul_dists[i] / v, v);
-      physics->mu_abs[i] = mu > 0 ? mu : 0;
-    }
-  };
-
   #ifndef MASTER_DETECTOR
   #define MASTER_DETECTOR dummy
   #endif
@@ -1595,23 +1581,8 @@ TRACE
       // Check if a scattering event should occur
       if (current_volume != 0) {                                 // Volume 0 is always vacuum, and if this is the current volume, an event will not occur
         if (volume_is_only_absorber (Volumes[current_volume])) { // If there are no processes, check if the volume is a pure absorber and not a vacuum
-          struct physics_struct* abs_physics = Volumes[current_volume]->p_physics;
-          if (abs_physics->my_a_function) {
-            // Absorption varying along the path: product of the transmissions of the segments
-            length_to_boundary = time_to_boundery * v_length;
-            abs_physics->dist = length_to_boundary / abs_physics->sampling_points;
-            Union_sample_absorption (abs_physics, ray_position, coords_set (vx, vy, vz), Volumes[current_volume]->geometry.center, abs_physics->dist, t,
-                                     v_length);
-            double mu_path = 0;
-            for (int j = 0; j < abs_physics->sampling_points; j++)
-              mu_path += abs_physics->mu_abs[j];
-            mu_path /= abs_physics->sampling_points;
-            my_sum_plus_abs = mu_path * (2200 / v_length);
-            abs_weight_factor = exp (-my_sum_plus_abs * length_to_boundary);
-            abs_weight_factor_set = 1;
-          } else
-            adjust_abs_weight_factor (Volumes[current_volume], &my_sum_plus_abs, &length_to_boundary, v_length, time_to_boundery, &abs_weight_factor,
-                                      &abs_weight_factor_set);
+          adjust_abs_weight_factor (Volumes[current_volume], &my_sum_plus_abs, &length_to_boundary, v_length, time_to_boundery, &abs_weight_factor,
+                                    &abs_weight_factor_set, ray_position, coords_set (vx, vy, vz), t);
         } else {
           // Since there is a non-zero number of processes in this material, all the scattering cross section for these are calculated
           struct physics_struct* current_p_physics = Volumes[current_volume]->p_physics;
@@ -1829,22 +1800,8 @@ TRACE
             abs_distance = length_to_scattering;
           } else {
             // When the ray exits a volume, the absorption position should be exponentially distributed using the total cross section
-            struct physics_struct* log_physics = Volumes[current_volume]->p_physics;
-            if (log_physics->my_a_function && log_physics->number_of_processes == 0) {
-              // Choose the segment by its absorption probability, then the position within it
-              double seg_mu, transmitted = 1, total = 1 - abs_weight_factor, target = rand0max (total);
-              int j;
-              for (j = 0; j < log_physics->sampling_points - 1; j++) {
-                seg_mu = log_physics->mu_abs[j] * (2200 / v_length) * log_physics->dist;
-                double absorbed = transmitted * (1 - exp (-seg_mu));
-                if (target < absorbed)
-                  break;
-                target -= absorbed;
-                transmitted *= exp (-seg_mu);
-              }
-              seg_mu = log_physics->mu_abs[j] * (2200 / v_length) * log_physics->dist;
-              double within = seg_mu > 0 ? -log (1.0 - rand01 () * (1.0 - exp (-seg_mu))) / seg_mu : rand01 ();
-              abs_distance = log_physics->cumul_dists[j] - log_physics->dist / 2 + within * log_physics->dist;
+            if (volume_is_only_absorber (Volumes[current_volume]) && Volumes[current_volume]->p_physics->my_a_function) {
+              abs_distance = inhomogeneous_absorption_distance (Volumes[current_volume]->p_physics, abs_weight_factor, v_length);
             } else {
               my_abs = Volumes[current_volume]->p_physics->my_a * (2200 / v_length);
               abs_distance = -log (1.0 - rand0max (1.0 - exp (-my_sum_plus_abs * length_to_boundary))) / my_sum_plus_abs;

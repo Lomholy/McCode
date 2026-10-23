@@ -8100,15 +8100,44 @@ void overwrite_if_empty(char *input_string, char *overwrite) {
     return 0;
   }
 
+  // Fills physics->cumul_dists and physics->mu_abs at the midpoints of physics->sampling_points
+  // segments of length dist along the path from position (master frame) along velocity. The
+  // absorption function gets the point relative to center, the time t0 + distance / v and the speed v.
   void
-  adjust_abs_weight_factor (struct Volume_struct* Volume, double* my_sum_plus_abs, 
-                            double* length_to_boundary, double v_length, double time_to_boundary,
-                            double* abs_weight_factor, int* abs_weight_factor_set) {
-    *my_sum_plus_abs = Volume->p_physics->my_a * (2200 / v_length);
-    *length_to_boundary = time_to_boundary * v_length;
+  Union_sample_absorption (struct physics_struct* physics, Coords position, Coords velocity, Coords center, double dist, double t0, double v) {
+    Coords direction = coords_scalar_mult (velocity, 1.0 / v);
+    for (int i = 0; i < physics->sampling_points; i++) {
+      physics->cumul_dists[i] = (i > 0) ? physics->cumul_dists[i - 1] + dist : dist / 2;
+      Coords point = coords_sub (coords_add (position, coords_scalar_mult (direction, physics->cumul_dists[i])), center);
+      double mu = physics->my_a_function (physics, point.x, point.y, point.z, t0 + physics->cumul_dists[i] / v, v);
+      physics->mu_abs[i] = mu > 0 ? mu : 0;
+    }
+  }
 
-    *abs_weight_factor = exp (-Volume->p_physics->my_a * 2200 * time_to_boundary);
+  // Weight factor for a ray crossing an absorber-only volume. With my_a_function the
+  // transmission is the product of the transmissions of the path segments.
+  void
+  adjust_abs_weight_factor (struct Volume_struct* Volume, double* my_sum_plus_abs,
+                            double* length_to_boundary, double v_length, double time_to_boundary,
+                            double* abs_weight_factor, int* abs_weight_factor_set,
+                            Coords position, Coords velocity, double t) {
+    struct physics_struct* physics = Volume->p_physics;
+    *length_to_boundary = time_to_boundary * v_length;
     *abs_weight_factor_set = 1;
+    if (physics->my_a_function) {
+      physics->dist = *length_to_boundary / physics->sampling_points;
+      Union_sample_absorption (physics, position, velocity, Volume->geometry.center, physics->dist, t, v_length);
+      double mu_path = 0;
+      for (int j = 0; j < physics->sampling_points; j++)
+        mu_path += physics->mu_abs[j];
+      mu_path /= physics->sampling_points;
+      *my_sum_plus_abs = mu_path * (2200 / v_length);
+      *abs_weight_factor = exp (-*my_sum_plus_abs * *length_to_boundary);
+      return;
+    }
+
+    *my_sum_plus_abs = Volume->p_physics->my_a * (2200 / v_length);
+    *abs_weight_factor = exp (-Volume->p_physics->my_a * 2200 * time_to_boundary);
 
     #ifdef Union_trace_verbal_setting
     printf ("name of material: %s \n", Volume->name);
@@ -8228,6 +8257,29 @@ void overwrite_if_empty(char *input_string, char *overwrite) {
     #endif
   }
 
+
+  // Distance along the path to the absorption event given to the absorption loggers, for a ray that
+  // crossed an absorber-only volume with my_a_function: the segment is chosen by its share of the
+  // absorbed weight 1 - abs_weight_factor, the position within it from exp(-mu x).
+  double
+  inhomogeneous_absorption_distance (struct physics_struct* physics, double abs_weight_factor, double v_length) {
+    double transmitted = 1;
+    double target = rand0max (1 - abs_weight_factor);
+    int j;
+    for (j = 0; j < physics->sampling_points - 1; j++) {
+      double seg_mu = physics->mu_abs[j] * (2200 / v_length) * physics->dist;
+      double absorbed = transmitted * (1 - exp (-seg_mu));
+      if (target < absorbed)
+        break;
+      target -= absorbed;
+      transmitted *= exp (-seg_mu);
+    }
+    // mu_abs is clamped to >= 0, so seg_mu is 0 only in a segment without absorption, which is
+    // reached only as the last segment by rounding; any position in it is then equally likely.
+    double seg_mu = physics->mu_abs[j] * (2200 / v_length) * physics->dist;
+    double within = seg_mu > 0 ? -log (1.0 - rand01 () * (1.0 - exp (-seg_mu))) / seg_mu : rand01 ();
+    return physics->cumul_dists[j] - physics->dist / 2 + within * physics->dist;
+  }
 
   void
   inhomogeneous_set_cumul_dist_array (struct physics_struct* physics, int i) {

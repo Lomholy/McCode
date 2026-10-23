@@ -1474,9 +1474,15 @@ int volume_is_only_absorber (struct Volume_struct *Volume);
 int process_needs_inhomogeneous_sampling (struct physics_struct *current_p_physics,
                                          struct scattering_process_struct *process);
 
+void Union_sample_absorption (struct physics_struct *physics, Coords position, Coords velocity, Coords center,
+                              double dist, double t0, double v);
+
 void adjust_abs_weight_factor (struct Volume_struct *Volume, double *my_sum_plus_abs,
                                double *length_to_boundary, double v_length, double time_to_boundary,
-                               double *abs_weight_factor, int *abs_weight_factor_set);
+                               double *abs_weight_factor, int *abs_weight_factor_set,
+                               Coords position, Coords velocity, double t);
+
+double inhomogeneous_absorption_distance (struct physics_struct *physics, double abs_weight_factor, double v_length);
 
 void transform_wavevector_into_local_coord_system (struct Volume_struct *Volume, Coords *wavevector_rotated,
                                                    double *k_rotated, int p_index, Coords *wavevector,
