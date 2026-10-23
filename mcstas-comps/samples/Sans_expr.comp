@@ -1,0 +1,401 @@
+/*******************************************************************************
+*
+* McStas, neutron ray-tracing package
+*         Copyright 1997-2003, All rights reserved
+*         Risoe National Laboratory, Roskilde, Denmark
+*         Institut Laue Langevin, Grenoble, France
+*
+* Component: Sans_expr
+*
+* %I
+* Written by: Daniel Lomholt Christensen
+* Date: 18.09.2026
+* Origin: University of Copenhagen
+* Based on: Sans_spheres.comp (P. Willendrup, K. Lefmann, L. Arleth)
+*
+* Sample for Small Angle Neutron Scattering with user-supplied form and
+* structure factor expressions of the scattering vector, evaluated at run time
+* with tinyexpr.
+*
+* %D
+* Sample for use in a SANS instrument. Unlike Sans_spheres.comp, which
+* hard-codes the monodisperse hard-sphere form factor and assumes no
+* structure factor, this component lets the instrument user supply the
+* form factor F and structure factor S as math expression strings, parsed
+* and evaluated with the tinyexpr library (https://github.com/codeplea/tinyexpr).
+* The component exposes 6 generic constants (p1, p2 ... p6) that are
+* available inside the expressions.
+*
+* The differential cross-section uses the SasView-style convention:
+*
+*   dSigma/dOmega(q) = scale * F(q)^2 * S(q) + background
+*
+* The variables available inside the expressions are
+*   q          |q| in AA^-1
+*   qx, qy, qz the components of q = k_i - k_f in AA^-1, in the local frame
+*              of the component (z along the nominal beam direction)
+*   p1 ... p6  the generic constants
+* Rotating the component therefore rotates an anisotropic sample.
+*
+* Total scattering cross-section:
+* The attenuation of the beam requires the total scattering cross-section
+*
+*   Sigma_s(k) = 1/k^2 int_0^2k q dq int_0^2pi dphi dSigma/dOmega(q(q,phi))
+*
+* which is tabulated in INITIALIZE for wavelengths 1..30 AA, assuming the
+* incident wave vector is along the local z axis. For a divergent beam and an
+* anisotropic model this is an approximation (a 3 deg tilt changes Sigma_s by
+* ~0.1% for a strongly anisotropic Gaussian). If the expressions only use q,
+* the phi integral is done analytically and the tabulation is exact.
+*
+* tinyexpr supports +, -, *, /, ^, %, unary -, parentheses, and the
+* functions abs, acos, asin, atan, atan2, ceil, cos, cosh, exp, fac, floor,
+* gauss, ln, log, log10, ncr, npr, pow, sin, sinh, sqrt, tan, tanh, plus the
+* constants pi and e. It has no if/else. For piecewise behaviour use the
+* step function hvs(x, t, a, b), which returns a if x > t and b otherwise.
+*
+* Example (reproduces Sans_spheres.comp with R=100 AA, Phi=1e-3,
+* Delta_rho=0.6 fm/AA^3):
+*   Sans_expr(form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3",
+*             structure_factor = "1", p1 = 100,
+*             scale = 1e-3*0.6*0.6*4*PI/3*100*100*100,
+*             sigma_abs = 0.05,
+*             xwidth=0.01, yheight=0.01, zdepth=0.005)
+*
+* Example (Guinier form factor, radius of gyration p1):
+*   form_factor = "exp(-(q*p1)^2/6)"
+*
+* Example (anisotropic Gaussian, correlation lengths p1 along x and p2 along y):
+*   form_factor = "exp(-((qx*p1)^2+(qy*p2)^2)/2)"
+*
+* LIMITATIONS:
+* - tinyexpr expressions use function pointers internally and cannot be
+*   compiled for GPU (-openacc). This component is CPU-only.
+*
+* %P
+*
+* INPUT PARAMETERS
+*
+* form_factor: [str]      tinyexpr expression for F, in q, qx, qy, qz and p1..p6
+* structure_factor: [str] tinyexpr expression for S, in q, qx, qy, qz and p1..p6
+* p1: [1]            Generic numeric constant, meaning defined by the user's expressions
+* p2: [1]            Generic numeric constant, meaning defined by the user's expressions
+* p3: [1]            Generic numeric constant, meaning defined by the user's expressions
+* p4: [1]            Generic numeric constant, meaning defined by the user's expressions
+* p5: [1]            Generic numeric constant, meaning defined by the user's expressions
+* p6: [1]            Generic numeric constant, meaning defined by the user's expressions
+* scale: [m^-1 sr^-1] Prefactor multiplying F^2*S
+* background: [m^-1 sr^-1] Flat background added to the cross-section
+* n_phi: [1]         Number of azimuthal points used to tabulate Sigma_s for anisotropic expressions
+* sigma_abs: [m^-1]  Absorption cross section density at 2200 m/s
+* radius: [m]        Outer radius of sample in (x,z) plane for cylinder/sphere
+* xwidth: [m]        horiz. dimension of sample, as a width
+* yheight: [m]       vert . dimension of sample, as a height for cylinder/box
+* zdepth: [m]        depth of sample
+* target_index: [1]  Relative index of component to focus at, e.g. next is +1
+* focus_xw: [m]      horiz. dimension of a rectangular area
+* focus_yh: [m]      vert.  dimension of a rectangular area
+* focus_aw: [deg]    horiz. angular dimension of a rectangular area
+* focus_ah: [deg]    vert.  angular dimension of a rectangular area
+* focus_r: [m]       Detector (disk-shaped) radius
+*
+* Optional parameters:
+* target_x: [m]
+* target_y: [m]      position of target to focus at
+* target_z: [m]
+*
+* Variables calculated in the component
+*
+* mu_a_v: Attenuation factor due to absorption [m^-1], not yet divided by v
+*
+* %Link
+* The reference component <a href="Sans_spheres.html">Sans_spheres.comp</a>.
+* The tinyexpr library: https://github.com/codeplea/tinyexpr
+* %E
+*******************************************************************************/
+
+DEFINE COMPONENT Sans_expr
+
+SETTING PARAMETERS (string form_factor="1", string structure_factor="1",
+p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
+scale=1, background=0, int n_phi=64, sigma_abs=0,
+xwidth=0, yheight=0, zdepth=0, radius=0,
+target_x = 0, target_y = 0, target_z = 6, int target_index=0,
+focus_xw=0, focus_yh=0, focus_aw=0, focus_ah=0,  focus_r=0)
+
+/* Neutron parameters: (x,y,z,vx,vy,vz,t,sx,sy,sz,p) */
+SHARE %{
+  %include "tinyexpr.h"
+  %include "tinyexpr.c"
+
+  /* Compiles expr_str with q, qx, qy, qz bound to qv[0..3] and p1..p6 bound to pars[0..5] */
+  te_expr *
+  Sans_expr_compile (const char *expr_str, double *qv, double *pars,
+                     const char *comp_name, const char *which) {
+    int err;
+    te_variable vars[10] = { { "q", &qv[0] },    { "qx", &qv[1] },   { "qy", &qv[2] },   { "qz", &qv[3] },
+                             { "p1", &pars[0] }, { "p2", &pars[1] }, { "p3", &pars[2] },
+                             { "p4", &pars[3] }, { "p5", &pars[4] }, { "p6", &pars[5] } };
+    te_expr *out = te_compile (expr_str, vars, 10, &err);
+    if (!out)
+      exit (fprintf (stderr,
+                     "Sans_expr: %s: failed to parse %s expression \"%s\" "
+                     "(tinyexpr error near character %d)\n",
+                     comp_name, which, expr_str, err));
+    return out;
+  };
+
+  /* Returns 1 if expr_str compiles without qx, qy, qz, i.e. depends on |q| only */
+  int
+  Sans_expr_is_isotropic (const char *expr_str, double *pars) {
+    double q_dummy = 1.0;
+    int err;
+    te_variable vars[7] = { { "q", &q_dummy },   { "p1", &pars[0] }, { "p2", &pars[1] }, { "p3", &pars[2] },
+                            { "p4", &pars[3] }, { "p5", &pars[4] }, { "p6", &pars[5] } };
+    te_expr *e = te_compile (expr_str, vars, 7, &err);
+    if (!e)
+      return 0;
+    te_free (e);
+    return 1;
+  };
+
+  double
+  Sans_expr_dSigdOmega (te_expr *Fexpr, te_expr *Sexpr, double *qv,
+                        double scale, double background,
+                        double q, double qx, double qy, double qz) {
+    double F, S;
+    qv[0] = q;
+    qv[1] = qx;
+    qv[2] = qy;
+    qv[3] = qz;
+    F = te_eval (Fexpr);
+    S = te_eval (Sexpr);
+    return scale * F * F * S + background;
+  };
+%}
+DECLARE
+%{
+  double mu_a_v;
+  double shape;
+  DArray1d Idsdw;
+  double Qminl;
+  double Qmaxl;
+
+  int isotropic;
+  double pars[6];
+  double q_vars[4];
+  te_expr *F_expr;
+  te_expr *S_expr;
+%}
+INITIALIZE
+%{
+  shape = -1; /* -1:no shape, 0:cyl, 1:box, 2:sphere  */
+  if (xwidth && yheight && zdepth)
+    shape = 1; /* box */
+  else if (radius > 0 && yheight)
+    shape = 0; /* cylinder */
+  else if (radius > 0 && !yheight)
+    shape = 2; /* sphere */
+
+  if (shape < 0)
+    exit (fprintf (stderr,
+                   "Sans_expr: %s: sample has invalid dimensions.\n"
+                   "ERROR     Please check parameter values.\n",
+                   NAME_CURRENT_COMP));
+
+  if (!form_factor || !strcmp (form_factor, ""))
+    exit (fprintf (stderr, "Sans_expr: %s: form_factor expression is empty.\n", NAME_CURRENT_COMP));
+  if (!structure_factor || !strcmp (structure_factor, ""))
+    exit (fprintf (stderr, "Sans_expr: %s: structure_factor expression is empty.\n", NAME_CURRENT_COMP));
+  if (n_phi < 1)
+    exit (fprintf (stderr, "Sans_expr: %s: n_phi must be at least 1.\n", NAME_CURRENT_COMP));
+
+  /* now compute target coords if a component index is supplied */
+  if (!target_index && !target_x && !target_y && !target_z)
+    target_index = 1;
+  if (target_index) {
+    Coords ToTarget;
+    ToTarget = coords_sub (POS_A_COMP_INDEX (INDEX_CURRENT_COMP + target_index), POS_A_CURRENT_COMP);
+    ToTarget = rot_apply (ROT_A_CURRENT_COMP, ToTarget);
+    coords_get (ToTarget, &target_x, &target_y, &target_z);
+  }
+
+  if (!(target_x || target_y || target_z)) {
+    printf ("Sans_expr: %s: The target is not defined. Using direct beam (Z-axis).\n", NAME_CURRENT_COMP);
+    target_z = 1;
+  }
+  if (focus_ah || focus_aw) { // Convert focus from degrees to radians
+    focus_aw *= PI / 180;
+    focus_ah *= PI / 180;
+  }
+
+  mu_a_v = sigma_abs * 2200; /* Is not yet divided by v.*/
+
+  pars[0] = p1;
+  pars[1] = p2;
+  pars[2] = p3;
+  pars[3] = p4;
+  pars[4] = p5;
+  pars[5] = p6;
+
+  F_expr = Sans_expr_compile (form_factor, q_vars, pars, NAME_CURRENT_COMP, "form_factor");
+  S_expr = Sans_expr_compile (structure_factor, q_vars, pars, NAME_CURRENT_COMP, "structure_factor");
+  isotropic = Sans_expr_is_isotropic (form_factor, pars) && Sans_expr_is_isotropic (structure_factor, pars);
+  int Nphi = isotropic ? 1 : n_phi;
+
+  // Perform integral of dsigdomega over all of omega for use in adjusting the weight of the neutron.
+  int iii, kkk, jjj;
+  double Qmind = 0.0000001;
+  double Qmaxd = 100;
+
+  Qminl = log10 (Qmind);
+  Qmaxl = log10 (Qmaxd);
+
+  double q, Isq, k, qpar, qperp, phi, phi_sum;
+  double qmin, qmax, step;
+  int istp;
+
+  istp = floor ((Qmaxl - Qminl) * 300.0 + 0.5);
+
+  Idsdw = create_darr1d (31);
+
+  /* Idsdw[lambda] = int q dq <dSigma/dOmega>_phi for lambda = 1..30 AA, with k_i along local z.
+   * q(q,phi) = (-qperp cos(phi), -qperp sin(phi), q^2/2k), qperp = q sqrt(1 - q^2/4k^2). */
+  for (iii = 1; iii <= 30; iii++) {
+    k = 2.0 * PI / iii;
+    Isq = 0.0;
+    qmin = 0.0;
+    step = (log10 (fmin (Qmaxd, 4.0 * PI / iii)) - Qminl) / istp;
+    for (kkk = 0; kkk <= istp; kkk++) {
+      qmax = pow (10.0, Qminl + kkk * step);
+      q = 0.5 * (qmin + qmax);
+      qpar = q * q / (2.0 * k);
+      qperp = q * sqrt (fmax (0.0, 1.0 - q * q / (4.0 * k * k)));
+      phi_sum = 0.0;
+      for (jjj = 0; jjj < Nphi; jjj++) {
+        phi = 2.0 * PI * (jjj + 0.5) / Nphi;
+        phi_sum += Sans_expr_dSigdOmega (F_expr, S_expr, q_vars, scale, background,
+                                         q, -qperp * cos (phi), -qperp * sin (phi), qpar);
+      }
+      Isq += phi_sum / Nphi * q * (qmax - qmin);
+      qmin = qmax;
+    };
+    Idsdw[iii] = Isq;
+  };
+%}
+TRACE
+%{
+  double t0, t1, v, l_full, l_in, l_out, dt, mu_s, Scoh;
+  double k0, lambda;
+  int Ilam, Ilam2;
+  double aim_x = 0, aim_y = 0, aim_z = 1;
+  double solid_angle, vx_i, vy_i, vz_i, qx, qy, qz, q;
+  char intersect = 0;
+
+  /* Intersection neutron trajectory / sample (sample surface) */
+  if (shape == 0)
+    intersect = cylinder_intersect (&t0, &t1, x, y, z, vx, vy, vz, radius, yheight);
+  else if (shape == 1)
+    intersect = box_intersect (&t0, &t1, x, y, z, vx, vy, vz, xwidth, yheight, zdepth);
+  else if (shape == 2)
+    intersect = sphere_intersect (&t0, &t1, x, y, z, vx, vy, vz, radius);
+  if (intersect) {
+    if (t0 < 0)
+      ABSORB;
+    /* Neutron enters at t=t0. */
+    v = sqrt (vx * vx + vy * vy + vz * vz);
+    l_full = v * (t1 - t0);          /* Length of full path through sample */
+    dt = rand01 () * (t1 - t0) + t0; /* Time of scattering */
+    PROP_DT (dt);                    /* Point of scattering */
+    l_in = v * (dt - t0);            /* Penetration in sample */
+    k0 = V2K * v;
+    lambda = 2.0 * PI / k0;
+    Ilam = floor (lambda) > 1 ? (int)floor (lambda) : 1;
+    Ilam2 = Ilam + 1 < 30 ? Ilam + 1 : 30;
+    /* Coherent "SANS" scattering  - in 3 intervals, asymptotic values at the low and high WL end */
+    if (lambda <= 1.0)
+      Scoh = 2 * PI * Idsdw[1] / (k0 * k0);
+    else {
+      if (lambda >= 30.0)
+        Scoh = 2 * PI * Idsdw[30] / (k0 * k0);
+      else
+        Scoh = 2 * PI * ((Ilam2 - lambda) * Idsdw[Ilam] + (lambda - Ilam) * Idsdw[Ilam2]) / (k0 * k0);
+    };
+
+    vx_i = vx;
+    vy_i = vy;
+    vz_i = vz;
+    if ((target_x || target_y || target_z)) {
+      aim_x = target_x - x; /* Vector pointing at target (anal./det.) */
+      aim_y = target_y - y;
+      aim_z = target_z - z;
+    }
+    if (focus_aw && focus_ah) {
+      randvec_target_rect_angular (&vx, &vy, &vz, &solid_angle, aim_x, aim_y, aim_z, focus_aw, focus_ah, ROT_A_CURRENT_COMP);
+    } else if (focus_xw && focus_yh) {
+      randvec_target_rect (&vx, &vy, &vz, &solid_angle, aim_x, aim_y, aim_z, focus_xw, focus_yh, ROT_A_CURRENT_COMP);
+    } else {
+      randvec_target_circle (&vx, &vy, &vz, &solid_angle, aim_x, aim_y, aim_z, focus_r);
+    }
+    NORM (vx, vy, vz);
+    vx *= v;
+    vy *= v;
+    vz *= v;
+    qx = V2K * (vx_i - vx);
+    qy = V2K * (vy_i - vy);
+    qz = V2K * (vz_i - vz);
+    q = sqrt (qx * qx + qy * qy + qz * qz);
+    if (shape == 0)
+      intersect = cylinder_intersect (&t0, &t1, x, y, z, vx, vy, vz, radius, yheight);
+    else if (shape == 1)
+      intersect = box_intersect (&t0, &t1, x, y, z, vx, vy, vz, xwidth, yheight, zdepth);
+    else if (shape == 2)
+      intersect = sphere_intersect (&t0, &t1, x, y, z, vx, vy, vz, radius);
+    l_out = v * t1;
+    PROP_DT (t1);
+
+    mu_s = Sans_expr_dSigdOmega (F_expr, S_expr, q_vars, scale, background, q, qx, qy, qz);
+
+    p *= l_full * solid_angle * mu_s * exp (-(mu_a_v / v + Scoh) * (l_in + l_out));
+    SCATTER;
+  }
+%}
+
+FINALLY
+%{
+  te_free (F_expr);
+  te_free (S_expr);
+  destroy_darr1d (Idsdw);
+%}
+
+MCDISPLAY
+%{
+
+  if (shape == 0) { /* cylinder */
+    circle ("xz", 0, yheight / 2.0, 0, radius);
+    circle ("xz", 0, -yheight / 2.0, 0, radius);
+    line (-radius, -yheight / 2.0, 0, -radius, +yheight / 2.0, 0);
+    line (+radius, -yheight / 2.0, 0, +radius, +yheight / 2.0, 0);
+    line (0, -yheight / 2.0, -radius, 0, +yheight / 2.0, -radius);
+    line (0, -yheight / 2.0, +radius, 0, +yheight / 2.0, +radius);
+  } else if (shape == 1) { /* box */
+    double xmin = -0.5 * xwidth;
+    double xmax = 0.5 * xwidth;
+    double ymin = -0.5 * yheight;
+    double ymax = 0.5 * yheight;
+    double zmin = -0.5 * zdepth;
+    double zmax = 0.5 * zdepth;
+    multiline (5, xmin, ymin, zmin, xmax, ymin, zmin, xmax, ymax, zmin, xmin, ymax, zmin, xmin, ymin, zmin);
+    multiline (5, xmin, ymin, zmax, xmax, ymin, zmax, xmax, ymax, zmax, xmin, ymax, zmax, xmin, ymin, zmax);
+    line (xmin, ymin, zmin, xmin, ymin, zmax);
+    line (xmax, ymin, zmin, xmax, ymin, zmax);
+    line (xmin, ymax, zmin, xmin, ymax, zmax);
+    line (xmax, ymax, zmin, xmax, ymax, zmax);
+  } else if (shape == 2) { /* sphere */
+    circle ("xy", 0, 0.0, 0, radius);
+    circle ("xz", 0, 0.0, 0, radius);
+    circle ("yz", 0, 0.0, 0, radius);
+  }
+%}
+
+END

@@ -1,0 +1,891 @@
+/*******************************************************************************
+*
+*  McStas, neutron ray-tracing package
+*  Copyright(C) 2007 Risoe National Laboratory.
+*
+* %I
+* Written by: Daniel Lomholt Christensen
+* Date: 29.09.2026
+* Version: $Revision: 0.1 $
+* Origin: University of Copenhagen
+*
+* Union process for all NCrystal physics in a material that varies with position
+* and time.
+*
+* %D
+* Inhomogeneous version of NCrystal_process. The material is an NCrystal .ncmat file
+* and an NCrystal cfg-string, both of which are templates: any ${expression} in them
+* is replaced by the value of the tinyexpr expression, which may use
+*   x, y, z    the position in m, relative to the center of the geometry, in the frame
+*              of this process
+*   t          the neutron time in s
+*   p1 ... p6  generic constants
+* For example a temperature gradient along x in cfg: temp=${300+p1*x}K
+*
+* All physics NCrystal provides for the material is simulated: coherent elastic
+* (powder or single crystal), incoherent elastic and inelastic scattering, with
+* energy transfer. Absorption is handled by Union, as for NCrystal_process.
+*
+* Any @SPACEGROUP section is removed from the filled-in .ncmat before NCrystal reads it,
+* so a template may change the cell freely, including its symmetry. Single crystal
+* orientations given in cfg (dir1, dir2) do not need the space group.
+*
+* Part of the Union components.
+*
+* Algorithm:
+* Materials are cached on a grid with axes only along the variables among x, y, z, t
+* used in the templates, and interpolated multilinearly between grid nodes. A node is
+* built the first time it is needed, which takes tens of ms.
+*
+* Cross-section: for non-oriented materials (powders, polycrystals, liquids,
+* amorphous) each node stores the coherent elastic (Bragg) part as its reflection list,
+* which gives it exactly at every wavelength, and the rest (incoherent elastic,
+* inelastic, ...) as a table at n_lambda log-spaced wavelengths between lambda_min
+* and lambda_max, interpolated in log(lambda). The Bragg part is only used if the
+* NCrystal material contains it (e.g. not with cfg "comp=inelas"). Outside the table
+* the cross-section is taken from the node's NCrystal object. For oriented materials
+* (single crystals) the cross-section depends on the direction, so it is always taken
+* from the NCrystal objects of the interpolation corners, which is much slower.
+*
+* Scattering: a node among the interpolation corners is chosen with probability
+* proportional to its interpolation weight times its cross-section, and NCrystal
+* samples the outgoing direction and energy from that node's material. This samples
+* the interpolated scattering exactly. The weight is multiplied by mu(r, t) /
+* mu_selected, where mu_selected is the value Union_master used when choosing the
+* scattering point. There is no focusing, as NCrystal samples the full sphere.
+*
+* NCrystal objects are up to tens of MB each and NCrystal keeps them in its own caches.
+* At most max_pool_mb of them are kept; when the pool is full the least recently used
+* one is released and NCrystal's caches are cleared, and a node rebuilds its object
+* when needed again. The memory of one object is measured from the growth of the
+* process memory over the first builds (NCrystal shares data between objects of the
+* same physics, which is then counted once), unless object_mb is set. Build and
+* eviction counts are printed at the end.
+*
+* The spatial range of the grid is the bounding box of the geometries using the process,
+* given by Union_master, unless x_min/x_max etc. are set. The time range must be given
+* with t_min/t_max if the templates use t. Points outside the grid use the nearest edge,
+* which is exact for a step function, so a narrow range around a step resolves it
+* with few nodes.
+*
+* %P
+* INPUT PARAMETERS:
+* ncmat_template: [str]      .ncmat file (path, or name in the NCrystal data library), may contain ${expressions}
+* cfg: [str]                 NCrystal cfg-string parameters added after the file, e.g. "temp=300K", may contain ${expressions}
+* p1: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p2: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p3: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p4: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p5: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p6: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* number_of_sample_points: [1] Points per path where Union_master evaluates mu
+* n_x: [1]                   Cache nodes along x, used if the templates use x
+* n_y: [1]                   Cache nodes along y, used if the templates use y
+* n_z: [1]                   Cache nodes along z, used if the templates use z
+* n_t: [1]                   Cache nodes along t, used if the templates use t
+* x_min: [m]                 Lower x of the cache; the geometry bounding box is used unless x_min < x_max
+* x_max: [m]                 Upper x of the cache
+* y_min: [m]                 Lower y of the cache; the geometry bounding box is used unless y_min < y_max
+* y_max: [m]                 Upper y of the cache
+* z_min: [m]                 Lower z of the cache; the geometry bounding box is used unless z_min < z_max
+* z_max: [m]                 Upper z of the cache
+* t_min: [s]                 Lower t of the cache, required if the templates use t
+* t_max: [s]                 Upper t of the cache
+* n_lambda: [1]              Wavelengths in the cross-section table of non-oriented materials
+* lambda_min: [AA]           Shortest wavelength in the table
+* lambda_max: [AA]           Longest wavelength in the table
+* max_pool_mb: [MB]          Largest memory for NCrystal objects kept at the same time
+* object_mb: [MB]            Memory of one NCrystal object; measured over the first builds when 0
+* max_cache_mb: [MB]         Largest memory for the tables and reflection lists of all nodes
+* verbose: [0/1]             Print the cfg-string of each node built
+* interact_fraction: [1]     How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
+* init: [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
+*
+* CALCULATED PARAMETERS:
+* INC_storage:               Storage used to communicate with the probability and scattering functions
+*
+* %L
+* The homogeneous reference <a href="NCrystal_process.html">NCrystal_process.comp</a>.
+* NCrystal: https://github.com/mctools/ncrystal
+* The tinyexpr library: https://github.com/codeplea/tinyexpr
+*
+* %E
+******************************************************************************/
+
+DEFINE COMPONENT Inhomogeneous_NCrystal_process
+
+SETTING PARAMETERS(string ncmat_template="", string cfg="",
+p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
+int number_of_sample_points=20,
+int n_x=20, int n_y=20, int n_z=20, int n_t=20,
+x_min=0, x_max=0, y_min=0, y_max=0, z_min=0, z_max=0, t_min=0, t_max=0,
+int n_lambda=300, lambda_min=0.1, lambda_max=30,
+max_pool_mb=2000, object_mb=0, max_cache_mb=2000, int verbose=0,
+interact_fraction=-1, string init="")
+DEPENDENCY "@NCRYSTALFLAGS@"
+
+SHARE
+%{
+  %include "union-lib"
+
+  %include "tinyexpr.h"
+  %include "tinyexpr.c"
+
+  #if defined(WIN32) || defined(_WIN32)
+  #include "NCrystal\\ncrystal.h"
+  #else
+  #include "NCrystal/ncrystal.h"
+  #endif
+
+  #if defined(__APPLE__)
+  #include <mach/mach.h>
+  #elif defined(__linux__)
+  #include <unistd.h>
+  #endif
+
+  /* vars[]: x, y, z, t, p1..p6; cache dimension d (0..3) is vars[d] */
+  #define INC_NVARS 10
+
+  /* Text with ${expression} placeholders: text[0] expr[0] text[1] ... expr[n-1] text[n] */
+  struct INC_template {
+    int n;
+    char** text;
+    char** source;
+    te_expr** expr;
+  };
+
+  struct INC_node {
+    char* cfgstr;            // cfg-string of the node's material, for rebuilding its object
+    double number_density;   // [AA^-3]
+    int n_lines;             // reflections, sorted by decreasing d-spacing
+    double* d;
+    double* cum;             // cumulative multiplicity * d * |F|^2 [AA barn]
+    double bragg_pref;       // Bragg cross-section per atom = bragg_pref * lambda^2 * cum [barn]
+    double* smooth;          // non-Bragg cross-section per atom at the table wavelengths [barn]
+    ncrystal_scatter_t scat; // NCrystal object, valid if in_pool
+    ncrystal_process_t proc;
+    int in_pool;
+    long last_used;
+  };
+
+  struct Inhomogeneous_NCrystal_physics_storage_struct {
+    char comp_name[256];
+    double vars[INC_NVARS];
+    struct INC_template tmpl_ncmat;
+    struct INC_template tmpl_cfg;
+    int c_verbose;
+    long n_virtual;
+    double vsq2ekin;
+    double ekin2vsq;
+
+    int oriented;
+    int c_n_lambda;
+    double log_lambda_min, log_lambda_step;
+
+    int n_dims;
+    int dim_var[4];
+    int n_nodes_dim[4];
+    double lo[4], hi[4];
+    int range_set[4];
+    long n_nodes;
+    struct INC_node** nodes;
+    long n_built;
+    long n_clamped;
+    long n_outside_table;
+    double bytes;
+    double c_max_bytes;
+
+    int pool_max;
+    int pool_min;
+    int pool_count;
+    double c_max_pool_mb;
+    double object_mb_estimate;
+    int object_mb_fixed;
+    double rss_start;
+    long use_counter;
+    long n_object_builds;
+    long n_evictions;
+  };
+
+  char*
+  INC_strndup (const char* src, size_t len) {
+    char* out = malloc (len + 1);
+    memcpy (out, src, len);
+    out[len] = '\0';
+    return out;
+  };
+
+  /* Resident memory of this process [MB], or -1 if unknown */
+  double
+  INC_rss_mb (void) {
+  #if defined(__APPLE__)
+    struct mach_task_basic_info info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info (mach_task_self (), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) != KERN_SUCCESS)
+      return -1;
+    return info.resident_size / 1e6;
+  #elif defined(__linux__)
+    long pages_total, pages_resident;
+    FILE* fp = fopen ("/proc/self/statm", "r");
+    if (!fp)
+      return -1;
+    int ok = fscanf (fp, "%ld %ld", &pages_total, &pages_resident) == 2;
+    fclose (fp);
+    return ok ? pages_resident * (double)sysconf (_SC_PAGESIZE) / 1e6 : -1;
+  #else
+    return -1;
+  #endif
+  };
+
+  /* Compiles expr_str against x, y, z, t, p1..p6, leaving out vars[skip_var] if skip_var >= 0 */
+  te_expr*
+  INC_compile (const char* expr_str, double* vars, int skip_var) {
+    const char* names[INC_NVARS] = { "x", "y", "z", "t", "p1", "p2", "p3", "p4", "p5", "p6" };
+    te_variable list[INC_NVARS];
+    int n = 0, err;
+    for (int i = 0; i < INC_NVARS; i++) {
+      if (i == skip_var)
+        continue;
+      list[n].name = names[i];
+      list[n].address = &vars[i];
+      list[n].type = TE_VARIABLE;
+      list[n].context = NULL;
+      n++;
+    }
+    return te_compile (expr_str, list, n, &err);
+  };
+
+  void
+  INC_parse (struct INC_template* T, const char* src, double* vars, const char* comp_name, const char* what) {
+    T->n = 0;
+    T->text = malloc (sizeof (char*));
+    T->source = NULL;
+    T->expr = NULL;
+    const char* p = src;
+    while (1) {
+      const char* open = strstr (p, "${");
+      if (!open) {
+        T->text[T->n] = INC_strndup (p, strlen (p));
+        return;
+      }
+      const char* close = strchr (open + 2, '}');
+      if (!close)
+        exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: unterminated ${ in %s.\n", comp_name, what));
+      T->text[T->n] = INC_strndup (p, open - p);
+      T->n++;
+      T->text = realloc (T->text, (T->n + 1) * sizeof (char*));
+      T->source = realloc (T->source, T->n * sizeof (char*));
+      T->expr = realloc (T->expr, T->n * sizeof (te_expr*));
+      T->source[T->n - 1] = INC_strndup (open + 2, close - open - 2);
+      T->expr[T->n - 1] = INC_compile (T->source[T->n - 1], vars, -1);
+      if (!T->expr[T->n - 1])
+        exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: failed to parse expression \"%s\" in %s.\n", comp_name, T->source[T->n - 1], what));
+      p = close + 1;
+    }
+  };
+
+  /* 1 if any expression of T needs variable var (vars[] index) to compile */
+  int
+  INC_depends (struct INC_template* T, double* vars, int var) {
+    for (int i = 0; i < T->n; i++) {
+      te_expr* e = INC_compile (T->source[i], vars, var);
+      if (!e)
+        return 1;
+      te_free (e);
+    }
+    return 0;
+  };
+
+  /* Fills in the template with the current vars; the result must be freed */
+  char*
+  INC_render (struct INC_template* T) {
+    size_t len = 1;
+    for (int i = 0; i <= T->n; i++)
+      len += strlen (T->text[i]) + 32;
+    char* out = malloc (len);
+    char* q = out;
+    for (int i = 0; i < T->n; i++)
+      q += sprintf (q, "%s%.12g", T->text[i], te_eval (T->expr[i]));
+    sprintf (q, "%s", T->text[T->n]);
+    return out;
+  };
+
+  void
+  INC_free_template (struct INC_template* T) {
+    for (int i = 0; i <= T->n; i++)
+      free (T->text[i]);
+    for (int i = 0; i < T->n; i++) {
+      free (T->source[i]);
+      te_free (T->expr[i]);
+    }
+    free (T->text);
+    free (T->source);
+    free (T->expr);
+  };
+
+  /* Removes the @SPACEGROUP section (up to the next line starting with @) from text in place */
+  void
+  INC_strip_spacegroup (char* text) {
+    char* start = strstr (text, "@SPACEGROUP");
+    while (start && start != text && start[-1] != '\n')
+      start = strstr (start + 1, "@SPACEGROUP");
+    if (!start)
+      return;
+    char* end = strstr (start + 1, "\n@");
+    end = end ? end + 1 : start + strlen (start);
+    memmove (start, end, strlen (end) + 1);
+  };
+
+  int
+  INC_compare_lines (const void* a, const void* b) {
+    double da = ((const double*)a)[0], db = ((const double*)b)[0];
+    return (da < db) - (da > db);
+  };
+
+  /* Bragg cross-section per atom [barn] of a node at wavelength lambda [AA] */
+  double
+  INC_bragg (struct INC_node* node, double lambda) {
+    double dmin = 0.5 * lambda;
+    int lo = 0, hi = node->n_lines;
+    while (lo < hi) {
+      int mid = (lo + hi) / 2;
+      if (node->d[mid] > dmin)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+    return lo ? node->bragg_pref * lambda * lambda * node->cum[lo - 1] : 0;
+  };
+
+  /* Releases the least recently used NCrystal object; returns 0 if there is none */
+  int
+  INC_evict_one (struct Inhomogeneous_NCrystal_physics_storage_struct* s) {
+    long oldest = -1;
+    for (long i = 0; s->nodes && i < s->n_nodes; i++)
+      if (s->nodes[i] && s->nodes[i]->in_pool && (oldest < 0 || s->nodes[i]->last_used < s->nodes[oldest]->last_used))
+        oldest = i;
+    if (oldest < 0)
+      return 0;
+    ncrystal_unref (&s->nodes[oldest]->scat);
+    s->nodes[oldest]->in_pool = 0;
+    s->pool_count--;
+    s->n_evictions++;
+    /* NCrystal keeps its own reference in its caches, which this releases */
+    ncrystal_clear_caches ();
+    return 1;
+  };
+
+  /* Makes sure the node has its NCrystal object, building it (and evicting another) if needed */
+  void
+  INC_use_object (struct Inhomogeneous_NCrystal_physics_storage_struct* s, struct INC_node* node) {
+    node->last_used = ++s->use_counter;
+    if (node->in_pool)
+      return;
+    while (s->pool_count >= s->pool_max && INC_evict_one (s))
+      ;
+    node->scat = ncrystal_create_scatter (node->cfgstr);
+    if (ncrystal_error ())
+      exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: NCrystal could not load \"%s\".\n", s->comp_name, node->cfgstr));
+    node->proc = ncrystal_cast_scat2proc (node->scat);
+    node->in_pool = 1;
+    s->pool_count++;
+    s->n_object_builds++;
+
+    /* Over the first builds, the memory per object is measured as the growth of the
+     * resident memory; NCrystal shares data between objects of the same physics, so
+     * this counts shared data once */
+    if (!s->object_mb_fixed && s->rss_start >= 0 && s->n_object_builds <= 16) {
+      double estimate = (INC_rss_mb () - s->rss_start) / s->n_object_builds;
+      if (estimate > s->object_mb_estimate) {
+        s->object_mb_estimate = estimate;
+        s->pool_max = (int)(s->c_max_pool_mb / estimate);
+        if (s->pool_max < s->pool_min)
+          s->pool_max = s->pool_min;
+        while (s->pool_count > s->pool_max && INC_evict_one (s))
+          ;
+      }
+    }
+  };
+
+  /* Cross-section per atom [barn] from the node's NCrystal object; dir is only used for oriented materials */
+  double
+  INC_object_xs (struct Inhomogeneous_NCrystal_physics_storage_struct* s, struct INC_node* node, double ekin, double* dir) {
+    double xs = 0;
+    INC_use_object (s, node);
+    if (s->oriented)
+      ncrystal_crosssection (node->proc, ekin, (const double (*)[3])dir, &xs);
+    else
+      ncrystal_crosssection_nonoriented (node->proc, ekin, &xs);
+    return xs;
+  };
+
+  /* Builds the material at the point in vars[0..3] */
+  struct INC_node*
+  INC_build (struct Inhomogeneous_NCrystal_physics_storage_struct* s) {
+    char* ncmat_text = INC_render (&s->tmpl_ncmat);
+    INC_strip_spacegroup (ncmat_text);
+    char* cfg_text = INC_render (&s->tmpl_cfg);
+    char vname[512];
+    snprintf (vname, sizeof (vname), "INC_%s_%ld.ncmat", s->comp_name, s->n_virtual++);
+    ncrystal_register_in_mem_file_data (vname, ncmat_text);
+
+    struct INC_node* node = calloc (1, sizeof (struct INC_node));
+    size_t cfg_len = strlen (vname) + strlen (cfg_text) + 2;
+    node->cfgstr = malloc (cfg_len);
+    snprintf (node->cfgstr, cfg_len, "%s%s%s", vname, strlen (cfg_text) ? ";" : "", cfg_text);
+    free (ncmat_text);
+    free (cfg_text);
+
+    ncrystal_info_t info = ncrystal_create_info (node->cfgstr);
+    if (ncrystal_error ())
+      exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: NCrystal could not load \"%s\".\n", s->comp_name, node->cfgstr));
+    node->number_density = ncrystal_info_getnumberdensity (info);
+    unsigned spacegroup, n_atoms;
+    double la, lb, lc, alpha, beta, gamma, volume;
+    int n_hkl = ncrystal_info_nhkl (info);
+    if (n_hkl > 0 && ncrystal_info_getstructure (info, &spacegroup, &la, &lb, &lc, &alpha, &beta, &gamma, &volume, &n_atoms)) {
+      double* lines = malloc (2 * n_hkl * sizeof (double));
+      for (int i = 0; i < n_hkl; i++) {
+        int h, k, l, mult;
+        double dsp, fsq;
+        ncrystal_info_gethkl (info, i, &h, &k, &l, &mult, &dsp, &fsq);
+        lines[2 * i] = dsp;
+        lines[2 * i + 1] = mult * dsp * fsq;
+      }
+      qsort (lines, n_hkl, 2 * sizeof (double), INC_compare_lines);
+      node->n_lines = n_hkl;
+      node->d = malloc (n_hkl * sizeof (double));
+      node->cum = malloc (n_hkl * sizeof (double));
+      double sum = 0;
+      for (int i = 0; i < n_hkl; i++) {
+        sum += lines[2 * i + 1];
+        node->d[i] = lines[2 * i];
+        node->cum[i] = sum;
+      }
+      node->bragg_pref = 1.0 / (2.0 * volume * n_atoms);
+      free (lines);
+    }
+    ncrystal_unref (&info);
+
+    INC_use_object (s, node);
+    int oriented = !ncrystal_isnonoriented (node->proc);
+    if (s->n_built == 0)
+      s->oriented = oriented;
+    else if (oriented != s->oriented)
+      exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: \"%s\" is %soriented, unlike the other nodes.\n", s->comp_name, node->cfgstr,
+                     oriented ? "" : "not "));
+
+    if (!oriented) {
+      /* The Bragg part is used only if the material contains it, seen as the jump in the
+       * cross-section at the longest Bragg edge */
+      if (node->n_lines > 0) {
+        double edge = 2.0 * node->d[0];
+        double below = 0, above = 0;
+        ncrystal_crosssection_nonoriented (node->proc, ncrystal_wl2ekin (edge * (1 - 1e-7)), &below);
+        ncrystal_crosssection_nonoriented (node->proc, ncrystal_wl2ekin (edge * (1 + 1e-7)), &above);
+        double jump = INC_bragg (node, edge * (1 - 1e-7)) - INC_bragg (node, edge * (1 + 1e-7));
+        if (fabs ((below - above) - jump) > 1e-3 * jump)
+          node->n_lines = 0;
+      }
+      node->smooth = malloc (s->c_n_lambda * sizeof (double));
+      for (int i = 0; i < s->c_n_lambda; i++) {
+        double lambda = exp (s->log_lambda_min + i * s->log_lambda_step);
+        double xs = 0;
+        ncrystal_crosssection_nonoriented (node->proc, ncrystal_wl2ekin (lambda), &xs);
+        node->smooth[i] = xs - INC_bragg (node, lambda);
+      }
+    }
+
+    s->n_built++;
+    s->bytes += sizeof (struct INC_node) + 2.0 * node->n_lines * sizeof (double) + (oriented ? 0 : s->c_n_lambda * sizeof (double));
+    if (s->bytes > s->c_max_bytes)
+      exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: tables use more than max_cache_mb = %.0f MB.\n", s->comp_name, s->c_max_bytes / 1e6));
+    if (s->c_verbose)
+      printf ("Inhomogeneous_NCrystal_process: %s: built node for \"%s\"\n", s->comp_name, node->cfgstr);
+    return node;
+  };
+
+  /* mu [m^-1] of a node for wavevector length k [AA^-1] in direction dir (unit vector) */
+  double
+  INC_node_mu (struct Inhomogeneous_NCrystal_physics_storage_struct* s, struct INC_node* node, double k, double* dir) {
+    double lambda = 2.0 * PI / k;
+    double ekin = s->vsq2ekin * K2V * k * K2V * k;
+    double u = (log (lambda) - s->log_lambda_min) / s->log_lambda_step;
+    double xs;
+    if (s->oriented)
+      xs = INC_object_xs (s, node, ekin, dir);
+    else if (u < 0 || u > s->c_n_lambda - 1) {
+      s->n_outside_table++;
+      xs = INC_object_xs (s, node, ekin, dir);
+    } else {
+      int i = (int)floor (u);
+      if (i > s->c_n_lambda - 2)
+        i = s->c_n_lambda - 2;
+      double w = u - i;
+      xs = (1 - w) * node->smooth[i] + w * node->smooth[i + 1] + INC_bragg (node, lambda);
+    }
+    return 100.0 * node->number_density * xs;
+  };
+
+  void
+  INC_allocate (struct Inhomogeneous_NCrystal_physics_storage_struct* s) {
+    const char* names[4] = { "x", "y", "z", "t" };
+    s->n_nodes = 1;
+    for (int a = 0; a < s->n_dims; a++) {
+      int v = s->dim_var[a];
+      if (!s->range_set[v] || !(s->lo[v] < s->hi[v]))
+        exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: no range for the cache along %s. Set %s_min < %s_max%s.\n", s->comp_name, names[v],
+                       names[v], names[v], v < 3 ? ", or use a geometry with shell points" : ""));
+      s->n_nodes *= s->n_nodes_dim[a];
+    }
+    s->nodes = calloc (s->n_nodes, sizeof (struct INC_node*));
+    s->rss_start = INC_rss_mb ();
+  };
+
+  /* Node index -> vars[0..3] at the node */
+  void
+  INC_set_node_point (struct Inhomogeneous_NCrystal_physics_storage_struct* s, long node) {
+    long rest = node;
+    for (int a = s->n_dims - 1; a >= 0; a--) {
+      int v = s->dim_var[a];
+      int n = s->n_nodes_dim[a];
+      int i = rest % n;
+      rest /= n;
+      s->vars[v] = (n > 1) ? s->lo[v] + i * (s->hi[v] - s->lo[v]) / (n - 1) : 0.5 * (s->lo[v] + s->hi[v]);
+    }
+  };
+
+  /* Interpolation corners around the point in vars[0..3]; returns their number */
+  int
+  INC_corners (struct Inhomogeneous_NCrystal_physics_storage_struct* s, struct INC_node** nodes, double* weights) {
+    if (!s->nodes)
+      INC_allocate (s);
+    int i0[4];
+    double w[4];
+    int clamped = 0;
+    for (int a = 0; a < s->n_dims; a++) {
+      int v = s->dim_var[a];
+      int n = s->n_nodes_dim[a];
+      double u = (n > 1) ? (s->vars[v] - s->lo[v]) / (s->hi[v] - s->lo[v]) * (n - 1) : 0;
+      if (u < 0) {
+        u = 0;
+        clamped = 1;
+      }
+      if (u > n - 1) {
+        u = n - 1;
+        clamped = 1;
+      }
+      i0[a] = (int)floor (u);
+      if (i0[a] > n - 2)
+        i0[a] = (n > 1) ? n - 2 : 0;
+      w[a] = u - i0[a];
+    }
+    s->n_clamped += clamped;
+    double point[4] = { s->vars[0], s->vars[1], s->vars[2], s->vars[3] };
+    int count = 0;
+    for (int corner = 0; corner < (1 << s->n_dims); corner++) {
+      double weight = 1;
+      long node = 0;
+      for (int a = 0; a < s->n_dims; a++) {
+        int bit = (corner >> a) & 1;
+        weight *= bit ? w[a] : 1 - w[a];
+        node = node * s->n_nodes_dim[a] + i0[a] + bit;
+      }
+      if (weight == 0)
+        continue;
+      if (!s->nodes[node]) {
+        INC_set_node_point (s, node);
+        s->nodes[node] = INC_build (s);
+        for (int v = 0; v < 4; v++)
+          s->vars[v] = point[v];
+      }
+      nodes[count] = s->nodes[node];
+      weights[count] = weight;
+      count++;
+    }
+    return count;
+  };
+
+  void
+  INC_set_point (struct Inhomogeneous_NCrystal_physics_storage_struct* s, _class_particle* _particle) {
+    s->vars[0] = _particle->x;
+    s->vars[1] = _particle->y;
+    s->vars[2] = _particle->z;
+    s->vars[3] = _particle->t;
+  };
+
+  void
+  Inhomogeneous_NCrystal_setup (union data_transfer_union data_transfer, Coords box_min, Coords box_max) {
+    struct Inhomogeneous_NCrystal_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_NCrystal_physics_storage_struct;
+    double bmin[3] = { box_min.x, box_min.y, box_min.z };
+    double bmax[3] = { box_max.x, box_max.y, box_max.z };
+    for (int v = 0; v < 3; v++) {
+      if (s->range_set[v] == 2)
+        continue;
+      double pad = 1e-3 * (bmax[v] - bmin[v]);
+      if (!s->range_set[v]) {
+        s->lo[v] = bmin[v] - pad;
+        s->hi[v] = bmax[v] + pad;
+        s->range_set[v] = 1;
+      } else {
+        s->lo[v] = fmin (s->lo[v], bmin[v] - pad);
+        s->hi[v] = fmax (s->hi[v], bmax[v] + pad);
+      }
+    }
+  };
+
+  int
+  Inhomogeneous_NCrystal_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data,
+                                     _class_particle* _particle) {
+    struct Inhomogeneous_NCrystal_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_NCrystal_physics_storage_struct;
+    double k = sqrt (k_initial[0] * k_initial[0] + k_initial[1] * k_initial[1] + k_initial[2] * k_initial[2]);
+    double dir[3] = { k_initial[0] / k, k_initial[1] / k, k_initial[2] / k };
+    struct INC_node* nodes[16];
+    double weights[16];
+    INC_set_point (s, _particle);
+    int count = INC_corners (s, nodes, weights);
+    *my = 0;
+    for (int c = 0; c < count; c++)
+      *my += weights[c] * INC_node_mu (s, nodes[c], k, dir);
+    return 1;
+  };
+
+  int
+  Inhomogeneous_NCrystal_physics_scattering (double* k_final, double* k_initial, double* weight, union data_transfer_union data_transfer,
+                                             struct focus_data_struct* focus_data, _class_particle* _particle, double selected_mu) {
+    struct Inhomogeneous_NCrystal_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_NCrystal_physics_storage_struct;
+    double k = sqrt (k_initial[0] * k_initial[0] + k_initial[1] * k_initial[1] + k_initial[2] * k_initial[2]);
+    double dir[3] = { k_initial[0] / k, k_initial[1] / k, k_initial[2] / k };
+    struct INC_node* nodes[16];
+    double weights[16];
+    double corner_mu[16];
+    INC_set_point (s, _particle);
+    int count = INC_corners (s, nodes, weights);
+    double mu = 0;
+    for (int c = 0; c < count; c++) {
+      corner_mu[c] = weights[c] * INC_node_mu (s, nodes[c], k, dir);
+      mu += corner_mu[c];
+    }
+    if (mu <= 0 || selected_mu <= 0)
+      return 0;
+
+    /* Choose a corner with probability weight * mu, and let NCrystal scatter with its material */
+    double u = rand01 () * mu;
+    int c = -1;
+    for (int i = 0; i < count; i++) {
+      if (corner_mu[i] <= 0)
+        continue;
+      c = i;
+      if ((u -= corner_mu[i]) <= 0)
+        break;
+    }
+    INC_use_object (s, nodes[c]);
+    double ekin = s->vsq2ekin * K2V * k * K2V * k;
+    double ekin_final = 0;
+    double dir_out[3];
+    ncrystal_samplescatter (nodes[c]->scat, ekin, (const double (*)[3])dir, &ekin_final, &dir_out);
+    if (ekin_final <= 0)
+      return 0;
+    double k_out = sqrt (s->ekin2vsq * ekin_final) * V2K;
+    k_final[0] = dir_out[0] * k_out;
+    k_final[1] = dir_out[1] * k_out;
+    k_final[2] = dir_out[2] * k_out;
+
+    *weight *= mu / selected_mu;
+    return 1;
+  };
+
+  #ifndef PROCESS_DETECTOR
+  #define PROCESS_DETECTOR dummy
+  #endif
+
+  #ifndef PROCESS_INHOMOGENEOUS_NCRYSTAL_DETECTOR
+  #define PROCESS_INHOMOGENEOUS_NCRYSTAL_DETECTOR dummy
+  #endif
+
+  // Register this process with the Union_master dispatch (see union-lib.h)
+  #undef UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_NCRYSTAL
+  #define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_NCRYSTAL(out, ...) case Inhomogeneous_NCrystal: out = Inhomogeneous_NCrystal_physics_my(__VA_ARGS__); break;
+  #undef UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_NCRYSTAL
+  #define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_NCRYSTAL(out, ...) case Inhomogeneous_NCrystal: out = Inhomogeneous_NCrystal_physics_scattering(__VA_ARGS__, selected_mu); break;
+%}
+
+DECLARE
+%{
+  struct Inhomogeneous_NCrystal_physics_storage_struct INC_storage;
+
+  struct global_process_element_struct global_process_element;
+  struct scattering_process_struct This_process;
+%}
+
+INITIALIZE
+%{
+  struct union_state_struct* union_state_p = union_acquire ();
+  struct Inhomogeneous_NCrystal_physics_storage_struct* s = &INC_storage;
+  memset (s, 0, sizeof (*s));
+  sprintf (s->comp_name, "%s", NAME_CURRENT_COMP);
+
+  if (!ncmat_template || !strcmp (ncmat_template, ""))
+    exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: ncmat_template is empty.\n", NAME_CURRENT_COMP));
+  if (number_of_sample_points < 1 || n_lambda < 2 || !(0 < lambda_min && lambda_min < lambda_max))
+    exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: needs number_of_sample_points >= 1, n_lambda >= 2 and 0 < lambda_min < lambda_max.\n",
+                   NAME_CURRENT_COMP));
+
+  /* Same conversion factors and random numbers as NCrystal_process */
+  s->vsq2ekin = ncrystal_wl2ekin (1.0) * 0.0253302959105844428609698658024319097260896937 / (K2V * K2V);
+  s->ekin2vsq = 1.0 / s->vsq2ekin;
+  #ifndef rand01
+  ncrystal_setrandgen (rand01);
+  #else
+  ncrystal_setbuiltinrandgen_withseed (mcseed);
+  #endif
+
+  /* The template is read from a file, or else from the NCrystal data library */
+  char* template_text = NULL;
+  FILE* fp = fopen (ncmat_template, "r");
+  if (fp) {
+    fseek (fp, 0, SEEK_END);
+    long size = ftell (fp);
+    fseek (fp, 0, SEEK_SET);
+    template_text = malloc (size + 1);
+    size_t n_read = fread (template_text, 1, size, fp);
+    template_text[n_read] = '\0';
+    fclose (fp);
+  } else {
+    char** text_data = ncrystal_get_text_data (ncmat_template);
+    if (ncrystal_error () || !text_data)
+      exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: could not find ncmat_template \"%s\".\n", NAME_CURRENT_COMP, ncmat_template));
+    template_text = INC_strndup (text_data[0], strlen (text_data[0]));
+    ncrystal_dealloc_stringlist (5, text_data);
+  }
+
+  double par_values[6] = { p1, p2, p3, p4, p5, p6 };
+  for (int i = 0; i < 6; i++)
+    s->vars[4 + i] = par_values[i];
+  s->c_verbose = verbose;
+  s->c_max_bytes = max_cache_mb * 1e6;
+  s->c_n_lambda = n_lambda;
+  s->log_lambda_min = log (lambda_min);
+  s->log_lambda_step = (log (lambda_max) - log (lambda_min)) / (n_lambda - 1);
+
+  INC_parse (&s->tmpl_ncmat, template_text, s->vars, NAME_CURRENT_COMP, "ncmat_template");
+  INC_parse (&s->tmpl_cfg, cfg ? cfg : "", s->vars, NAME_CURRENT_COMP, "cfg");
+  free (template_text);
+
+  const char* dim_names[4] = { "x", "y", "z", "t" };
+  int nodes_per_var[4] = { n_x, n_y, n_z, n_t };
+  double manual_lo[4] = { x_min, y_min, z_min, t_min };
+  double manual_hi[4] = { x_max, y_max, z_max, t_max };
+  for (int v = 0; v < 4; v++) {
+    if (manual_lo[v] < manual_hi[v]) {
+      s->lo[v] = manual_lo[v];
+      s->hi[v] = manual_hi[v];
+      s->range_set[v] = 2;
+    }
+    if (!(INC_depends (&s->tmpl_ncmat, s->vars, v) || INC_depends (&s->tmpl_cfg, s->vars, v)))
+      continue;
+    if (nodes_per_var[v] < 1)
+      exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: n_%s must be at least 1.\n", NAME_CURRENT_COMP, dim_names[v]));
+    if (v == 3 && s->range_set[v] != 2)
+      exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: the templates use t, so t_min < t_max must be set.\n", NAME_CURRENT_COMP));
+    s->dim_var[s->n_dims] = v;
+    s->n_nodes_dim[s->n_dims] = nodes_per_var[v];
+    s->n_dims++;
+  }
+
+  /* Build one material now, so that errors show up before the simulation, and measure
+   * the memory of one NCrystal object to size the pool */
+  s->pool_max = 1 << 30;
+  s->pool_min = 1 << s->n_dims;
+  s->c_max_pool_mb = max_pool_mb;
+  s->object_mb_fixed = 1;
+  s->rss_start = -1;
+  for (int v = 0; v < 4; v++)
+    s->vars[v] = (s->range_set[v] == 2) ? s->lo[v] : 0;
+  double rss_before = INC_rss_mb ();
+  struct INC_node* probe = INC_build (s);
+  double rss_after = INC_rss_mb ();
+  double one_object_mb = object_mb > 0 ? object_mb : (rss_before >= 0 && rss_after > rss_before ? rss_after - rss_before : 25);
+  s->c_max_pool_mb = max_pool_mb;
+  s->object_mb_estimate = one_object_mb;
+  s->object_mb_fixed = object_mb > 0;
+  s->rss_start = -1;
+  s->pool_min = 1 << s->n_dims;
+  s->pool_max = (int)(max_pool_mb / one_object_mb);
+  if (s->pool_max < s->pool_min)
+    s->pool_max = s->pool_min;
+
+  printf ("Inhomogeneous_NCrystal_process: %s: %s material, cache along", NAME_CURRENT_COMP, s->oriented ? "oriented" : "non-oriented");
+  if (s->n_dims == 0)
+    printf (" no dimensions");
+  for (int a = 0; a < s->n_dims; a++)
+    printf (" %s (%d nodes)", dim_names[s->dim_var[a]], s->n_nodes_dim[a]);
+  printf (", NCrystal objects about %.1f MB, pool of %d\n", one_object_mb, s->pool_max);
+
+  if (s->n_dims == 0) {
+    INC_allocate (s);
+    s->nodes[0] = probe;
+  } else {
+    ncrystal_unref (&probe->scat);
+    ncrystal_clear_caches ();
+    free (probe->cfgstr);
+    free (probe->d);
+    free (probe->cum);
+    free (probe->smooth);
+    free (probe);
+    s->pool_count = 0;
+    s->n_built = 0;
+    s->bytes = 0;
+    s->n_object_builds = 0;
+  }
+
+  scattering_process_struct_init (&This_process);
+  This_process.non_isotropic_rot_index = 1;
+  This_process.needs_cross_section_focus = -1;
+  This_process.sampling_points = number_of_sample_points;
+  This_process.eProcess = Inhomogeneous_NCrystal;
+  This_process.data_transfer.pointer_to_a_Inhomogeneous_NCrystal_physics_storage_struct = s;
+  This_process.probability_for_scattering_function = &Inhomogeneous_NCrystal_physics_my;
+  This_process.setup_function = &Inhomogeneous_NCrystal_setup;
+
+  sprintf (This_process.name, "%s", NAME_CURRENT_COMP);
+  This_process.process_p_interact = interact_fraction;
+  rot_copy (This_process.rotation_matrix, ROT_A_CURRENT_COMP);
+  sprintf (global_process_element.name, "%s", NAME_CURRENT_COMP);
+  global_process_element.component_index = INDEX_CURRENT_COMP;
+  global_process_element.p_scattering_process = &This_process;
+
+  struct pointer_to_global_process_list* global_process_list = &union_state_p->u_process_list;
+  add_element_to_process_list (global_process_list, global_process_element);
+%}
+
+TRACE
+%{
+%}
+
+FINALLY
+%{
+  struct Inhomogeneous_NCrystal_physics_storage_struct* s = &INC_storage;
+  printf ("Inhomogeneous_NCrystal_process: %s: %ld of %ld nodes built (%.1f MB of tables), %ld NCrystal objects built (about %.1f MB each, pool of %d), "
+          "%ld evicted, %ld lookups outside the cache range, %ld cross-sections outside the wavelength table\n",
+          NAME_CURRENT_COMP, s->n_built, s->n_nodes, s->bytes / 1e6, s->n_object_builds, s->object_mb_estimate, s->pool_max, s->n_evictions, s->n_clamped,
+          s->n_outside_table);
+  for (long node = 0; node < s->n_nodes; node++) {
+    if (!s->nodes || !s->nodes[node])
+      continue;
+    struct INC_node* n = s->nodes[node];
+    if (n->in_pool)
+      ncrystal_unref (&n->scat);
+    free (n->cfgstr);
+    free (n->d);
+    free (n->cum);
+    free (n->smooth);
+    free (n);
+  }
+  free (s->nodes);
+  INC_free_template (&s->tmpl_ncmat);
+  INC_free_template (&s->tmpl_cfg);
+  union_release (NAME_CURRENT_COMP);
+%}
+
+END

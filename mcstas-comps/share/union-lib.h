@@ -19,6 +19,8 @@
 // which each McCode code generator emits once per instrument: this header
 // ahead of all component SHARE sections, and union-lib.c either straight
 // after it or after the SHARE sections.
+%include "geometry-mesh-lib"
+
 #ifndef UNION_LIB_H
 #define UNION_LIB_H
 
@@ -39,7 +41,7 @@ enum shape {
 };
 
 enum process {
-  Inhomogenous_incoherent,
+  Inhomogeneous_incoherent,
   Incoherent,
   Powder,
   Single_crystal,
@@ -50,6 +52,11 @@ enum process {
   NCrystal,
   Non,
   MCViNE,
+  SANS,
+  Inhomogeneous_SANS,
+  Inhomogeneous_PowderN,
+  Inhomogeneous_NCrystal,
+  Inhomogeneous_single_crystal,
   Template
 };
 
@@ -70,7 +77,10 @@ enum surface {
 // code generator emits after all component SHARE sections, so each switch sees
 // every process in the instrument without help from the code generator.
 // Adding a process means adding one empty default per dispatch here.
-#define UNION_CASE_PHYSICS_MY_INHOMOGENOUS_INCOHERENT(out, ...)
+// The scattering cases of the tabulated inhomogeneous processes (SANS, PowderN,
+// NCrystal, single crystal) also pass
+// selected_mu, a local variable of Union_master TRACE where the macro is used.
+#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_INCOHERENT(out, ...)
 #define UNION_CASE_PHYSICS_MY_INCOHERENT(out, ...)
 #define UNION_CASE_PHYSICS_MY_POWDER(out, ...)
 #define UNION_CASE_PHYSICS_MY_SINGLE_CRYSTAL(out, ...)
@@ -81,9 +91,14 @@ enum surface {
 #define UNION_CASE_PHYSICS_MY_NCRYSTAL(out, ...)
 #define UNION_CASE_PHYSICS_MY_NON(out, ...)
 #define UNION_CASE_PHYSICS_MY_MCVINE(out, ...)
+#define UNION_CASE_PHYSICS_MY_SANS(out, ...)
+#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SANS(out, ...)
+#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_POWDERN(out, ...)
+#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_NCRYSTAL(out, ...)
+#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SINGLE_CRYSTAL(out, ...)
 #define UNION_CASE_PHYSICS_MY_TEMPLATE(out, ...)
 
-#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENOUS_INCOHERENT(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_INCOHERENT(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_INCOHERENT(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_POWDER(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_SINGLE_CRYSTAL(out, ...)
@@ -94,13 +109,18 @@ enum surface {
 #define UNION_CASE_PHYSICS_SCATTERING_NCRYSTAL(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_NON(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_MCVINE(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_SANS(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SANS(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_POWDERN(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_NCRYSTAL(out, ...)
+#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SINGLE_CRYSTAL(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_TEMPLATE(out, ...)
 
 #define UNION_CASE_PHYSICS_SURFACE_MIRROR(out, ...)
 #define UNION_CASE_PHYSICS_SURFACE_TEMPLATE(out, ...)
 
 #define UNION_CASES_PHYSICS_MY(out, ...) \
-  UNION_CASE_PHYSICS_MY_INHOMOGENOUS_INCOHERENT(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_INCOHERENT(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_INCOHERENT(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_POWDER(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_SINGLE_CRYSTAL(out, __VA_ARGS__) \
@@ -111,10 +131,15 @@ enum surface {
   UNION_CASE_PHYSICS_MY_NCRYSTAL(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_NON(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_MCVINE(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_SANS(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SANS(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_POWDERN(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_NCRYSTAL(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SINGLE_CRYSTAL(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_TEMPLATE(out, __VA_ARGS__)
 
 #define UNION_CASES_PHYSICS_SCATTERING(out, ...) \
-  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENOUS_INCOHERENT(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_INCOHERENT(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_INCOHERENT(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_POWDER(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_SINGLE_CRYSTAL(out, __VA_ARGS__) \
@@ -125,6 +150,11 @@ enum surface {
   UNION_CASE_PHYSICS_SCATTERING_NCRYSTAL(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_NON(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_MCVINE(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_SANS(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SANS(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_POWDERN(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_NCRYSTAL(out, __VA_ARGS__) \
+  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SINGLE_CRYSTAL(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_TEMPLATE(out, __VA_ARGS__)
 
 #define UNION_CASES_PHYSICS_SURFACE(out, ...) \
@@ -223,7 +253,7 @@ union geometry_parameter_union{
     struct cylinder_storage *p_cylinder_storage;
     struct box_storage      *p_box_storage;
     struct cone_storage     *p_cone_storage;
-    struct mesh_storage     *p_mesh_storage;
+    gmesh_struct            *p_mesh;
     // add as many pointers to structs as wanted, without increasing memory footprint.
 };
 
@@ -607,11 +637,19 @@ double dist;
 double *cumul_dists;
 double **mus;
 double *total_mus;
+
+// Absorption varying with position, time and speed, set by Union_make_material; NULL when my_a is used.
+// Returns the inverse penetration depth at 2200 m/s [m^-1], at a position relative to the geometry
+// center (master axes), time t and speed v; it is scaled by 2200/v like my_a.
+double (*my_a_function)(struct physics_struct *physics, double x, double y, double z, double t, double v);
+void *my_a_data;
+int my_a_sampling_points;
+double *mu_abs; // my_a_function at the sampling points of the current path
 };
 
 union data_transfer_union{
     // List of pointers to storage structs for all supported physical processes
-    struct Inhomogenous_incoherent_struct *Inhomogenous_incoherent_struct;
+    struct Inhomogeneous_incoherent_struct *Inhomogeneous_incoherent_struct;
     struct Incoherent_physics_storage_struct  *pointer_to_a_Incoherent_physics_storage_struct;
     struct Powder_physics_storage_struct *pointer_to_a_Powder_physics_storage_struct;
     struct Single_crystal_physics_storage_struct *pointer_to_a_Single_crystal_physics_storage_struct;
@@ -625,6 +663,11 @@ union data_transfer_union{
     struct NCrystal_physics_storage_struct *pointer_to_a_NCrystal_physics_storage_struct;
     struct Non_physics_storage_struct *pointer_to_a_Non_physics_storage_struct;
     struct MCViNE_physics_storage_struct *pointer_to_a_MCViNE_physics_storage_struct;
+    struct SANS_physics_storage_struct *pointer_to_a_SANS_physics_storage_struct;
+    struct Inhomogeneous_SANS_physics_storage_struct *pointer_to_a_Inhomogeneous_SANS_physics_storage_struct;
+    struct Inhomogeneous_PowderN_physics_storage_struct *pointer_to_a_Inhomogeneous_PowderN_physics_storage_struct;
+    struct Inhomogeneous_NCrystal_physics_storage_struct *pointer_to_a_Inhomogeneous_NCrystal_physics_storage_struct;
+    struct Inhomogeneous_single_crystal_physics_storage_struct *pointer_to_a_Inhomogeneous_single_crystal_physics_storage_struct;
     struct Template_physics_storage_struct *pointer_to_a_Template_physics_storage_struct;
     // possible to add as many structs as wanted, without increasing memory footprint.
 };
@@ -638,12 +681,12 @@ struct scattering_process_struct
   int non_isotropic_rot_index;             // -1 if process is isotrpic, otherwise is the index of the process rotation matrix in the volume
   int needs_cross_section_focus;           // 1 if physics_my needs to call focus functions, otherwise -1
   Rotation rotation_matrix;                // rotation matrix of process, reported by component in local frame, transformed and moved to volume struct in main
-  double *inhomogenous_cumul_prob;         // The cumulative probability of a process in case of inhomogenous processes
-  double *inhomogenous_distances;          // The distance of each step in which the cumulative probabilities will be calculated.
-  double *inhomogenous_cumul_distances;    // The cumulative distances
-  double *inhomogenous_mu;                 // The different attenuation coefficients that are sampled in the numerical integration
-  double *inhomogenous_prob;               // The probability of the process at the different sampled points.
-  double *inhomogenous_t;                  // The different times at which mu must be sampled.
+  double *inhomogeneous_cumul_prob;         // The cumulative probability of a process in case of inhomogeneous processes
+  double *inhomogeneous_distances;          // The distance of each step in which the cumulative probabilities will be calculated.
+  double *inhomogeneous_cumul_distances;    // The cumulative distances
+  double *inhomogeneous_mu;                 // The different attenuation coefficients that are sampled in the numerical integration
+  double *inhomogeneous_prob;               // The probability of the process at the different sampled points.
+  double *inhomogeneous_t;                  // The different times at which mu must be sampled.
   int sampling_points;                          // Maximum number of samplings performed. If it is -1, no sampling has been done, and the arrays must be malloc'ed.
   union data_transfer_union data_transfer; // The way to reach the storage space allocated for this process (see examples in process.comp files)
 
@@ -654,6 +697,10 @@ struct scattering_process_struct
   // A scattering_function takes k_i and parameters, returns k_f
   int (*scattering_function)(double *, double *, double *, union data_transfer_union, struct focus_data_struct *, _class_particle *_particle);
   //                         k_f,    k_i,    weight, parameters               , focus data / function
+
+  // Optional, called by Union_master INITIALIZE once per volume using the process, with the volume bounding box
+  //  in the frame physics_my positions are given in (relative to the geometry center, rotated into the process frame)
+  void (*setup_function)(union data_transfer_union, Coords, Coords);
 };
 
 // Utility function for initialising a scattering_process_struct with default
@@ -1072,19 +1119,6 @@ double height;
 Coords direction_vector;
 };
 
-struct mesh_storage{
-int n_facets;
-int n_verts;
-double *normal_x;
-double *normal_y;
-double *normal_z;
-Coords direction_vector;
-Coords Bounding_Box_Center;
-Coords *vertices;
-int **facets;
-double Bounding_Box_Extremes[6];
-double Bounding_Box_Radius;
-};
 
 // A number of functions below use Dot() as scalar product, replace by coords_sp define
 #define Dot(a, b) coords_sp(a, b)
@@ -1102,7 +1136,7 @@ union geometry_parameter_union allocate_sphere_storage_copy(union geometry_param
 
 union geometry_parameter_union allocate_cone_storage_copy(union geometry_parameter_union *union_input);
 
-union geometry_parameter_union allocate_mesh_storage_copy(union geometry_parameter_union *union_input);
+union geometry_parameter_union allocate_mesh_copy(union geometry_parameter_union *union_input);
 
 // -------------    Surroundings  ---------------------------------------------------------------
 int r_within_surroundings(Coords pos,struct geometry_struct *geometry);
@@ -1173,39 +1207,7 @@ int sample_cone_intersect(double *t, double *nx, double *ny, double *nz, int *su
 int cone_intersect(double *t,int *num_solutions,double *r,double *v,struct geometry_struct *geometry);
 
 
-struct Moeller_Trumbore{
-  Coords v1;
-  Coords v2;
-  Coords v3;
-  Coords edge1;
-  Coords edge2;
-  Coords h;
-  Coords s;
-  Coords q;
-  Coords rotated_coordinates;
-  Coords rotated_velocity;
-  double a;
-  double f;
-  double V;
-  double u;
-};
-
-
-double Moeller_Trumbore_intersection(struct Moeller_Trumbore* intersect);
-
-
 int r_within_mesh(Coords pos,struct geometry_struct *geometry);
-
-
-// Type for holding intersection and normal	
-typedef struct {
-    double t;
-    double nx, ny, nz;
-    int surface_index;
-} Intersection;
-
-// Function to sort intersection structs according to time
-int compare_intersections(const void *a, const void *b);
 
 
 int sample_mesh_intersect(double *t,
@@ -1469,7 +1471,7 @@ void overwrite_if_empty(char *input_string, char *overwrite);
 // -------------    Union_master scattering helpers   -------------------------------------------
 int volume_is_only_absorber (struct Volume_struct *Volume);
 
-int process_needs_inhomogenous_sampling (struct physics_struct *current_p_physics,
+int process_needs_inhomogeneous_sampling (struct physics_struct *current_p_physics,
                                          struct scattering_process_struct *process);
 
 void adjust_abs_weight_factor (struct Volume_struct *Volume, double *my_sum_plus_abs,
@@ -1498,19 +1500,19 @@ void focus_in_cross_section_set_forced_point_and_dir (double *forced_length_to_s
 void focus_in_cross_section_set_scat_length (double *length_to_scattering, double forced_length_to_scattering,
                                              double *weight, double length_to_boundary, double my_sum_plus_abs);
 
-void inhomogenous_set_cumul_dist_array (struct physics_struct *current_p_physics, int i);
+void inhomogeneous_set_cumul_dist_array (struct physics_struct *current_p_physics, int i);
 
-void inhomogenous_sample_transmission_probability (struct physics_struct *current_p_physics,
+void inhomogeneous_sample_transmission_probability (struct physics_struct *current_p_physics,
                                                    struct Volume_struct *Volume,
                                                    double *real_transmission_probability, double v_length);
 
-double inhomogenous_sample_scattering_point (struct Volume_struct *Volume,
+double inhomogeneous_sample_scattering_point (struct Volume_struct *Volume,
                                               struct physics_struct *current_p_physics,
                                               _class_particle* _particle,
                                               double *abs_weight_factor, double v_length,
                                               double safety_distance, int *selected_sampling);
 
-void inhomogenous_choose_process (struct physics_struct *current_p_physics, struct Volume_struct *Volume,
+void inhomogeneous_choose_process (struct physics_struct *current_p_physics, struct Volume_struct *Volume,
                                   double *culmative_probability, double mc_prop, double my_sum,
                                   int selected_sampling, int *selected_process);
 

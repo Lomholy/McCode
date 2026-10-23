@@ -1,0 +1,1005 @@
+/*******************************************************************************
+*
+*  McStas, neutron ray-tracing package
+*  Copyright(C) 2007 Risoe National Laboratory.
+*
+* %I
+* Written by: Daniel Lomholt Christensen
+* Date: 29.09.2026
+* Version: $Revision: 0.1 $
+* Origin: University of Copenhagen
+* Based on: Single_crystal_process.comp (Mads Bertelsen, from Single_crystal.comp)
+*
+* Union process for coherent elastic (Bragg) scattering from a single crystal whose
+* NCrystal material, mosaicity, d-spread and orientation vary with position and time.
+*
+* %D
+* Inhomogeneous single crystal process. The material is an NCrystal .ncmat file and an
+* NCrystal cfg-string, both of which are templates: any ${expression} in them is
+* replaced by the value of the tinyexpr expression. The mosaicity, d-spread and
+* orientation are tinyexpr expressions. All expressions may use
+*   x, y, z    the position in m, relative to the center of the geometry, in the frame
+*              of this process
+*   t          the neutron time in s
+*   p1 ... p6  generic constants
+*
+* NCrystal provides the cell, every reflection (h,k,l) and |F|^2 including the
+* Debye-Waller factor, and the number density. Any @SPACEGROUP section is removed from
+* the filled-in .ncmat first, so the cell may change freely. The scattering itself is
+* the Gaussian model of Single_crystal_process: each reflection is a 3D Gaussian in
+* reciprocal space, with a radial width from delta_d_d and a transverse width from the
+* mosaicity, either isotropic (mosaic) or around the lattice vectors (mosaic_a,
+* mosaic_b, mosaic_c, experimental in Single_crystal_process as well). mosaic and
+* delta_d_d are FWHM, as in Single_crystal_process.
+*
+* Orientation: the direct lattice is set up with a along x and b in the xy plane, and
+* rotated by rot_x, rot_y, rot_z [deg], in the same way as ROTATED (rot_x, rot_y, rot_z)
+* rotates a component. Rotating the process component rotates the crystal as well.
+*
+* Part of the Union components.
+*
+* Algorithm:
+* Crystals are cached on a grid with axes only along the variables among x, y, z, t
+* used in any template or expression (found by compiling the expressions without each
+* variable), and built the first time they are needed. Each grid node keeps its
+* reflections with |tau| <= 4 pi / lambda_min, sorted by |tau|. The cross-section of a
+* node for a wavevector k is found as in Single_crystal_process, by searching its
+* reflections with |tau| < 2k for those near the Ewald sphere. A node remembers the
+* result for its last k, and all sampling points of a path have the same k, so a path
+* costs one search per node it touches. mu is interpolated multilinearly between nodes.
+*
+* In a scattering event, a node among the interpolation corners is chosen with
+* probability proportional to its interpolation weight times its mu, and the scattering
+* is sampled from its reflections as in Single_crystal_process. The weight is also
+* multiplied by mu(r, t) / mu_selected, where mu_selected is the value Union_master used
+* when choosing the scattering point.
+*
+* The spatial range of the grid is the bounding box of the geometries using the process,
+* given by Union_master, unless x_min/x_max etc. are set. The time range must be given
+* with t_min/t_max if anything depends on t. Points outside the grid use the nearest
+* edge, which is exact for a step function.
+*
+* %P
+* INPUT PARAMETERS:
+* ncmat_template: [str]      .ncmat file (path, or name in the NCrystal data library), may contain ${expressions}
+* cfg: [str]                 NCrystal cfg-string parameters added after the file, e.g. "temp=300K", may contain ${expressions}
+* mosaic: [str]              Isotropic mosaicity [arc minutes, FWHM], tinyexpr expression; "" to use mosaic_a/b/c
+* mosaic_a: [str]            Mosaicity around lattice vector a [arc minutes], tinyexpr expression
+* mosaic_b: [str]            Mosaicity around lattice vector b [arc minutes], tinyexpr expression
+* mosaic_c: [str]            Mosaicity around lattice vector c [arc minutes], tinyexpr expression
+* delta_d_d: [str]           Lattice spacing spread [1, FWHM], tinyexpr expression
+* rot_x: [str]               Rotation of the crystal around x [deg], tinyexpr expression
+* rot_y: [str]               Rotation of the crystal around y [deg], tinyexpr expression
+* rot_z: [str]               Rotation of the crystal around z [deg], tinyexpr expression
+* p1: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p2: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p3: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p4: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p5: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p6: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* lambda_min: [AA]           Shortest wavelength that can reach the crystal; reflections with |tau| > 4 pi / lambda_min are left out
+* number_of_sample_points: [1] Points per path where Union_master evaluates mu
+* n_x: [1]                   Cache nodes along x, used if anything depends on x
+* n_y: [1]                   Cache nodes along y, used if anything depends on y
+* n_z: [1]                   Cache nodes along z, used if anything depends on z
+* n_t: [1]                   Cache nodes along t, used if anything depends on t
+* x_min: [m]                 Lower x of the cache; the geometry bounding box is used unless x_min < x_max
+* x_max: [m]                 Upper x of the cache
+* y_min: [m]                 Lower y of the cache; the geometry bounding box is used unless y_min < y_max
+* y_max: [m]                 Upper y of the cache
+* z_min: [m]                 Lower z of the cache; the geometry bounding box is used unless z_min < z_max
+* z_max: [m]                 Upper z of the cache
+* t_min: [s]                 Lower t of the cache, required if anything depends on t
+* t_max: [s]                 Upper t of the cache
+* max_cache_mb: [MB]         Largest memory for the reflections of all nodes
+* verbose: [0/1]             Print the cfg-string and number of reflections of each node built
+* interact_fraction: [1]     How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
+* init: [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
+*
+* CALCULATED PARAMETERS:
+* ISC_storage:               Storage used to communicate with the probability and scattering functions
+*
+* %L
+* The homogeneous reference <a href="Single_crystal_process.html">Single_crystal_process.comp</a>.
+* NCrystal: https://github.com/mctools/ncrystal
+* The tinyexpr library: https://github.com/codeplea/tinyexpr
+*
+* %E
+******************************************************************************/
+
+DEFINE COMPONENT Inhomogeneous_single_crystal_process
+
+SETTING PARAMETERS(string ncmat_template="", string cfg="",
+string mosaic="", string mosaic_a="", string mosaic_b="", string mosaic_c="", string delta_d_d="1e-4",
+string rot_x="0", string rot_y="0", string rot_z="0",
+p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
+lambda_min=0.5, int number_of_sample_points=20,
+int n_x=20, int n_y=20, int n_z=20, int n_t=20,
+x_min=0, x_max=0, y_min=0, y_max=0, z_min=0, z_max=0, t_min=0, t_max=0,
+max_cache_mb=2000, int verbose=0,
+interact_fraction=-1, string init="")
+DEPENDENCY "@NCRYSTALFLAGS@"
+
+SHARE
+%{
+  %include "union-lib"
+
+  %include "tinyexpr.h"
+  %include "tinyexpr.c"
+
+  #if defined(WIN32) || defined(_WIN32)
+  #include "NCrystal\\ncrystal.h"
+  #else
+  #include "NCrystal/ncrystal.h"
+  #endif
+
+  /* vars[]: x, y, z, t, p1..p6; cache dimension d (0..3) is vars[d] */
+  #define ISC_NVARS 10
+  /* Scalar expressions: mosaic, mosaic_a, mosaic_b, mosaic_c, delta_d_d, rot_x, rot_y, rot_z */
+  #define ISC_NEXPR 8
+
+  /* Text with ${expression} placeholders: text[0] expr[0] text[1] ... expr[n-1] text[n] */
+  struct ISC_template {
+    int n;
+    char** text;
+    char** source;
+    te_expr** expr;
+  };
+
+  /* One reflection, as hkl_data_union in Single_crystal_process */
+  struct ISC_hkl {
+    int h, k, l;
+    double F2;
+    double tau_x, tau_y, tau_z;
+    double tau;
+    double u1x, u1y, u1z;
+    double u2x, u2y, u2z;
+    double u3x, u3y, u3z;
+    double sig123;
+    double m1, m2, m3;
+    double cutoff;
+  };
+
+  /* A reflection close to the Ewald sphere, as tau_data_union in Single_crystal_process */
+  struct ISC_tau {
+    int index;
+    double refl;
+    double xsect;
+    double rho_x, rho_y, rho_z;
+    double rho;
+    double ox, oy, oz;
+    double b1x, b1y, b1z;
+    double b2x, b2y, b2z;
+    double l11, l12, l22;
+    double y0x, y0y;
+  };
+
+  struct ISC_node {
+    int count;
+    struct ISC_hkl* list;
+    struct ISC_tau* tau_list;
+    double V0;          // cell volume [AA^3]
+    double delta_d_d;
+    double mu_factor;   // mu = mu_factor * coh_xsect [m^-1]
+    double kix, kiy, kiz; // k of the last search
+    int searched;
+    int tau_count;
+    double coh_refl, coh_xsect;
+  };
+
+  struct Inhomogeneous_single_crystal_physics_storage_struct {
+    char comp_name[256];
+    double vars[ISC_NVARS];
+    struct ISC_template tmpl_ncmat;
+    struct ISC_template tmpl_cfg;
+    te_expr* expr[ISC_NEXPR]; // NULL if not given
+    char* expr_source[ISC_NEXPR];
+    int isotropic_mosaic;
+    double tau_limit;
+    int c_verbose;
+    long n_virtual;
+    int anisotropic_warned;
+
+    int n_dims;
+    int dim_var[4];
+    int n_nodes_dim[4];
+    double lo[4], hi[4];
+    int range_set[4];
+    long n_nodes;
+    struct ISC_node** nodes;
+    long n_built;
+    long n_clamped;
+    long n_searches;
+    double bytes;
+    double c_max_bytes;
+  };
+
+  char*
+  ISC_strndup (const char* src, size_t len) {
+    char* out = malloc (len + 1);
+    memcpy (out, src, len);
+    out[len] = '\0';
+    return out;
+  };
+
+  /* Compiles expr_str against x, y, z, t, p1..p6, leaving out vars[skip_var] if skip_var >= 0 */
+  te_expr*
+  ISC_compile (const char* expr_str, double* vars, int skip_var) {
+    const char* names[ISC_NVARS] = { "x", "y", "z", "t", "p1", "p2", "p3", "p4", "p5", "p6" };
+    te_variable list[ISC_NVARS];
+    int n = 0, err;
+    for (int i = 0; i < ISC_NVARS; i++) {
+      if (i == skip_var)
+        continue;
+      list[n].name = names[i];
+      list[n].address = &vars[i];
+      list[n].type = TE_VARIABLE;
+      list[n].context = NULL;
+      n++;
+    }
+    return te_compile (expr_str, list, n, &err);
+  };
+
+  /* 1 if expr_str needs variable var (vars[] index) to compile */
+  int
+  ISC_expr_depends (const char* expr_str, double* vars, int var) {
+    te_expr* e = ISC_compile (expr_str, vars, var);
+    if (!e)
+      return 1;
+    te_free (e);
+    return 0;
+  };
+
+  void
+  ISC_parse (struct ISC_template* T, const char* src, double* vars, const char* comp_name, const char* what) {
+    T->n = 0;
+    T->text = malloc (sizeof (char*));
+    T->source = NULL;
+    T->expr = NULL;
+    const char* p = src;
+    while (1) {
+      const char* open = strstr (p, "${");
+      if (!open) {
+        T->text[T->n] = ISC_strndup (p, strlen (p));
+        return;
+      }
+      const char* close = strchr (open + 2, '}');
+      if (!close)
+        exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: unterminated ${ in %s.\n", comp_name, what));
+      T->text[T->n] = ISC_strndup (p, open - p);
+      T->n++;
+      T->text = realloc (T->text, (T->n + 1) * sizeof (char*));
+      T->source = realloc (T->source, T->n * sizeof (char*));
+      T->expr = realloc (T->expr, T->n * sizeof (te_expr*));
+      T->source[T->n - 1] = ISC_strndup (open + 2, close - open - 2);
+      T->expr[T->n - 1] = ISC_compile (T->source[T->n - 1], vars, -1);
+      if (!T->expr[T->n - 1])
+        exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: failed to parse expression \"%s\" in %s.\n", comp_name, T->source[T->n - 1], what));
+      p = close + 1;
+    }
+  };
+
+  /* 1 if any expression of T needs variable var (vars[] index) to compile */
+  int
+  ISC_depends (struct ISC_template* T, double* vars, int var) {
+    for (int i = 0; i < T->n; i++)
+      if (ISC_expr_depends (T->source[i], vars, var))
+        return 1;
+    return 0;
+  };
+
+  /* Fills in the template with the current vars; the result must be freed */
+  char*
+  ISC_render (struct ISC_template* T) {
+    size_t len = 1;
+    for (int i = 0; i <= T->n; i++)
+      len += strlen (T->text[i]) + 32;
+    char* out = malloc (len);
+    char* q = out;
+    for (int i = 0; i < T->n; i++)
+      q += sprintf (q, "%s%.12g", T->text[i], te_eval (T->expr[i]));
+    sprintf (q, "%s", T->text[T->n]);
+    return out;
+  };
+
+  void
+  ISC_free_template (struct ISC_template* T) {
+    for (int i = 0; i <= T->n; i++)
+      free (T->text[i]);
+    for (int i = 0; i < T->n; i++) {
+      free (T->source[i]);
+      te_free (T->expr[i]);
+    }
+    free (T->text);
+    free (T->source);
+    free (T->expr);
+  };
+
+  /* Removes the @SPACEGROUP section (up to the next line starting with @) from text in place */
+  void
+  ISC_strip_spacegroup (char* text) {
+    char* start = strstr (text, "@SPACEGROUP");
+    while (start && start != text && start[-1] != '\n')
+      start = strstr (start + 1, "@SPACEGROUP");
+    if (!start)
+      return;
+    char* end = strstr (start + 1, "\n@");
+    end = end ? end + 1 : start + strlen (start);
+    memmove (start, end, strlen (end) + 1);
+  };
+
+  /* Sort by tau, then tau_x, tau_y, tau_z and F2, as SX_list_compare_union */
+  int
+  ISC_list_compare (void const* a, void const* b) {
+    struct ISC_hkl const* pa = a;
+    struct ISC_hkl const* pb = b;
+    if (pa->tau < pb->tau)
+      return -1;
+    if (pa->tau > pb->tau)
+      return 1;
+    if (pa->tau_x < pb->tau_x)
+      return -1;
+    if (pa->tau_x > pb->tau_x)
+      return 1;
+    if (pa->tau_y < pb->tau_y)
+      return -1;
+    if (pa->tau_y > pb->tau_y)
+      return 1;
+    if (pa->tau_z < pb->tau_z)
+      return -1;
+    if (pa->tau_z > pb->tau_z)
+      return 1;
+    if (pa->F2 < pb->F2)
+      return -1;
+    if (pa->F2 > pb->F2)
+      return 1;
+    return 0;
+  };
+
+  /* cos and sin of an angle in degrees, exact at 90 deg, so a right-angled cell has exact
+   * zeros; the mosaic axes of reflections like (1,1,1) depend on the last bits of tau */
+  double
+  ISC_cos_deg (double angle) {
+    return fabs (angle - 90) < 1e-12 ? 0 : cos (angle * DEG2RAD);
+  };
+
+  double
+  ISC_sin_deg (double angle) {
+    return fabs (angle - 90) < 1e-12 ? 1 : sin (angle * DEG2RAD);
+  };
+
+  double
+  ISC_eval (struct Inhomogeneous_single_crystal_physics_storage_struct* s, int i, double fallback) {
+    return s->expr[i] ? te_eval (s->expr[i]) : fallback;
+  };
+
+  /* Builds the crystal at the point in vars[0..3] */
+  struct ISC_node*
+  ISC_build (struct Inhomogeneous_single_crystal_physics_storage_struct* s) {
+    char* ncmat_text = ISC_render (&s->tmpl_ncmat);
+    ISC_strip_spacegroup (ncmat_text);
+    char* cfg_text = ISC_render (&s->tmpl_cfg);
+    char vname[512];
+    snprintf (vname, sizeof (vname), "ISC_%s_%ld.ncmat", s->comp_name, s->n_virtual++);
+    ncrystal_register_in_mem_file_data (vname, ncmat_text);
+    size_t cfg_len = strlen (vname) + strlen (cfg_text) + 2;
+    char* cfgstr = malloc (cfg_len);
+    snprintf (cfgstr, cfg_len, "%s%s%s", vname, strlen (cfg_text) ? ";" : "", cfg_text);
+    free (ncmat_text);
+    free (cfg_text);
+
+    ncrystal_info_t info = ncrystal_create_info (cfgstr);
+    if (ncrystal_error ())
+      exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: NCrystal could not load \"%s\".\n", s->comp_name, cfgstr));
+    unsigned spacegroup, n_atoms;
+    double la, lb, lc, alpha, beta, gamma, volume;
+    int n_families = ncrystal_info_nhkl (info);
+    if (n_families <= 0 || !ncrystal_info_getstructure (info, &spacegroup, &la, &lb, &lc, &alpha, &beta, &gamma, &volume, &n_atoms))
+      exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: material \"%s\" has no crystal structure or reflections.\n", s->comp_name, cfgstr));
+    double number_density = ncrystal_info_getnumberdensity (info);
+
+    /* Direct lattice with a along x and b in the xy plane. The reflections are set up and
+     * sorted in this frame, as Single_crystal_process does in its own frame, and rotated
+     * afterwards: the mosaic axes perpendicular to each tau depend on the frame. */
+    double ca = ISC_cos_deg (alpha), cb = ISC_cos_deg (beta), cg = ISC_cos_deg (gamma), sg = ISC_sin_deg (gamma);
+    double cy = (ca - cb * cg) / sg;
+    Coords a_vec = coords_set (la, 0, 0);
+    Coords b_vec = coords_set (lb * cg, lb * sg, 0);
+    Coords c_vec = coords_set (lc * cb, lc * cy, lc * sqrt (1 - cb * cb - cy * cy));
+    double m_ax = a_vec.x, m_ay = a_vec.y, m_az = a_vec.z;
+    double m_bx = b_vec.x, m_by = b_vec.y, m_bz = b_vec.z;
+    double m_cx = c_vec.x, m_cy = c_vec.y, m_cz = c_vec.z;
+    double m_a = la, m_b = lb, m_c = lc;
+
+    /* Reciprocal lattice, as in Single_crystal_process */
+    double tmp_x, tmp_y, tmp_z;
+    vec_prod (tmp_x, tmp_y, tmp_z, m_bx, m_by, m_bz, m_cx, m_cy, m_cz);
+    double V0 = fabs (scalar_prod (m_ax, m_ay, m_az, tmp_x, tmp_y, tmp_z));
+    double asx = 2 * PI / V0 * tmp_x, asy = 2 * PI / V0 * tmp_y, asz = 2 * PI / V0 * tmp_z;
+    vec_prod (tmp_x, tmp_y, tmp_z, m_cx, m_cy, m_cz, m_ax, m_ay, m_az);
+    double bsx = 2 * PI / V0 * tmp_x, bsy = 2 * PI / V0 * tmp_y, bsz = 2 * PI / V0 * tmp_z;
+    vec_prod (tmp_x, tmp_y, tmp_z, m_ax, m_ay, m_az, m_bx, m_by, m_bz);
+    double csx = 2 * PI / V0 * tmp_x, csy = 2 * PI / V0 * tmp_y, csz = 2 * PI / V0 * tmp_z;
+
+    double mosaic_iso = ISC_eval (s, 0, -1);
+    double mos_a = ISC_eval (s, 1, -1), mos_b = ISC_eval (s, 2, -1), mos_c = ISC_eval (s, 3, -1);
+    double m_delta_d_d = ISC_eval (s, 4, 1e-4);
+    if (!(mosaic_iso > 0) && !(mos_a > 0 && mos_b > 0 && mos_c > 0))
+      exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: mosaic, or mosaic_a, mosaic_b and mosaic_c, must be > 0.\n", s->comp_name));
+    if (!(mosaic_iso > 0) && !s->anisotropic_warned) {
+      fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: Warning: anisotropic mosaicity is experimental in Single_crystal_process, whose model is "
+                       "used here. Please examine your data carefully.\n",
+               s->comp_name);
+      s->anisotropic_warned = 1;
+    }
+
+    /* Every reflection: NCrystal lists half of each family, the other half is -(h,k,l) with the same |F|^2 */
+    int max_count = 0;
+    for (int f = 0; f < n_families; f++) {
+      int h, k, l, mult;
+      double dsp, fsq;
+      ncrystal_info_gethkl (info, f, &h, &k, &l, &mult, &dsp, &fsq);
+      max_count += mult;
+    }
+    struct ISC_hkl* list = malloc ((max_count > 0 ? max_count : 1) * sizeof (struct ISC_hkl));
+    int count = 0;
+    for (int f = 0; f < n_families; f++) {
+      int h0, k0, l0, mult;
+      double dsp, fsq;
+      ncrystal_info_gethkl (info, f, &h0, &k0, &l0, &mult, &dsp, &fsq);
+      int n_half = mult / 2;
+      int* hs = malloc (n_half * sizeof (int));
+      int* ks = malloc (n_half * sizeof (int));
+      int* ls = malloc (n_half * sizeof (int));
+      ncrystal_info_gethkl_allindices (info, f, hs, ks, ls);
+      if (n_half > 0 && hs[0] == 0 && ks[0] == 0 && ls[0] == 0)
+        exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: NCrystal gives no individual reflections for \"%s\".\n", s->comp_name, cfgstr));
+      for (int m = 0; m < 2 * n_half; m++) {
+        int sign = (m < n_half) ? 1 : -1;
+        int h = sign * hs[m % n_half], k = sign * ks[m % n_half], l = sign * ls[m % n_half];
+        struct ISC_hkl* L = &list[count];
+        L->h = h;
+        L->k = k;
+        L->l = l;
+        L->F2 = fsq;
+        L->tau_x = h * asx + k * bsx + l * csx;
+        L->tau_y = h * asy + k * bsy + l * csy;
+        L->tau_z = h * asz + k * bsz + l * csz;
+        L->tau = sqrt (L->tau_x * L->tau_x + L->tau_y * L->tau_y + L->tau_z * L->tau_z);
+        if (L->tau > s->tau_limit || L->tau == 0)
+          continue;
+        L->u1x = L->tau_x / L->tau;
+        L->u1y = L->tau_y / L->tau;
+        L->u1z = L->tau_z / L->tau;
+        double sig1 = FWHM2RMS * m_delta_d_d * L->tau, sig2, sig3;
+        double b1[3], b2[3];
+        normal_vec (&b1[0], &b1[1], &b1[2], L->u1x, L->u1y, L->u1z);
+        vec_prod (b2[0], b2[1], b2[2], L->u1x, L->u1y, L->u1z, b1[0], b1[1], b1[2]);
+        L->u2x = b1[0];
+        L->u2y = b1[1];
+        L->u2z = b1[2];
+        L->u3x = b2[0];
+        L->u3y = b2[1];
+        L->u3z = b2[2];
+        if (mosaic_iso > 0) {
+          sig2 = FWHM2RMS * L->tau * MIN2RAD * mosaic_iso;
+          sig3 = FWHM2RMS * L->tau * MIN2RAD * mosaic_iso;
+        } else {
+          /* Anisotropic mosaicity, as in Single_crystal_process */
+          double sig_fi_a = mos_a * MIN2RAD, sig_fi_b = mos_b * MIN2RAD, sig_fi_c = mos_c * MIN2RAD;
+          double xia_x = L->tau_x - (M_2_PI * h / m_a) * asx, xia_y = L->tau_y - (M_2_PI * h / m_a) * asy, xia_z = L->tau_z - (M_2_PI * h / m_a) * asz;
+          double xib_x = L->tau_x - (M_2_PI * h / m_b) * bsx, xib_y = L->tau_y - (M_2_PI * h / m_b) * bsy, xib_z = L->tau_z - (M_2_PI * h / m_b) * bsz;
+          double xic_x = L->tau_x - (M_2_PI * h / m_c) * csx, xic_y = L->tau_y - (M_2_PI * h / m_c) * csy, xic_z = L->tau_z - (M_2_PI * h / m_c) * csz;
+          double xia = sqrt (xia_x * xia_x + xia_y * xia_y + xia_z * xia_z);
+          double xib = sqrt (xib_x * xib_x + xib_y * xib_y + xib_z * xib_z);
+          double xic = sqrt (xic_x * xic_x + xic_y * xic_y + xic_z * xic_z);
+          vec_prod (tmp_x, tmp_y, tmp_z, L->tau_x, L->tau_y, L->tau_z, L->u2x, L->u2y, L->u2z);
+          double J_n_fia = xia / m_a / L->tau * scalar_prod (asx, asy, asz, tmp_x, tmp_y, tmp_z);
+          double J_n_fib = xib / m_b / L->tau * scalar_prod (bsx, bsy, bsz, tmp_x, tmp_y, tmp_z);
+          double J_n_fic = xic / m_c / L->tau * scalar_prod (csx, csy, csz, tmp_x, tmp_y, tmp_z);
+          vec_prod (tmp_x, tmp_y, tmp_z, L->tau_x, L->tau_y, L->tau_z, L->u3x, L->u3y, L->u3z);
+          double J_v_fia = xia / m_a / L->tau * scalar_prod (asx, asy, asz, tmp_x, tmp_y, tmp_z);
+          double J_v_fib = xib / m_b / L->tau * scalar_prod (bsx, bsy, bsz, tmp_x, tmp_y, tmp_z);
+          double J_v_fic = xic / m_c / L->tau * scalar_prod (csx, csy, csz, tmp_x, tmp_y, tmp_z);
+          sig2 = sig_fi_a * fabs (J_v_fia) + sig_fi_b * fabs (J_v_fib) + sig_fi_c * fabs (J_v_fic);
+          sig3 = sig_fi_a * fabs (J_n_fia) + sig_fi_b * fabs (J_n_fib) + sig_fi_c * fabs (J_n_fic);
+        }
+        L->sig123 = sig1 * sig2 * sig3;
+        L->m1 = 1 / (2 * sig1 * sig1);
+        L->m2 = 1 / (2 * sig2 * sig2);
+        L->m3 = 1 / (2 * sig3 * sig3);
+        double sig_max = sig1 > sig2 ? (sig1 > sig3 ? sig1 : sig3) : (sig2 > sig3 ? sig2 : sig3);
+        L->cutoff = 5 * sig_max;
+        count++;
+      }
+      free (hs);
+      free (ks);
+      free (ls);
+    }
+    ncrystal_unref (&info);
+    qsort (list, count, sizeof (struct ISC_hkl), ISC_list_compare);
+
+    /* Rotate the reflections like ROTATED (rot_x, rot_y, rot_z) rotates a component */
+    Rotation rot, rot_t;
+    rot_set_rotation (rot, ISC_eval (s, 5, 0) * DEG2RAD, ISC_eval (s, 6, 0) * DEG2RAD, ISC_eval (s, 7, 0) * DEG2RAD);
+    rot_transpose (rot, rot_t);
+    for (int i = 0; i < count; i++) {
+      struct ISC_hkl* L = &list[i];
+      Coords v;
+      v = rot_apply (rot_t, coords_set (L->tau_x, L->tau_y, L->tau_z));
+      coords_get (v, &L->tau_x, &L->tau_y, &L->tau_z);
+      v = rot_apply (rot_t, coords_set (L->u1x, L->u1y, L->u1z));
+      coords_get (v, &L->u1x, &L->u1y, &L->u1z);
+      v = rot_apply (rot_t, coords_set (L->u2x, L->u2y, L->u2z));
+      coords_get (v, &L->u2x, &L->u2y, &L->u2z);
+      v = rot_apply (rot_t, coords_set (L->u3x, L->u3y, L->u3z));
+      coords_get (v, &L->u3x, &L->u3y, &L->u3z);
+    }
+
+    struct ISC_node* node = calloc (1, sizeof (struct ISC_node));
+    node->count = count;
+    node->list = realloc (list, (count > 0 ? count : 1) * sizeof (struct ISC_hkl));
+    node->tau_list = malloc ((count > 0 ? count : 1) * sizeof (struct ISC_tau));
+    node->V0 = V0;
+    node->delta_d_d = m_delta_d_d;
+    /* barn / AA^3 -> m^-1, times the density relative to one cell per V0 (e.g. NCrystal's density=0.9x) */
+    node->mu_factor = 100.0 / V0 * number_density * V0 / n_atoms;
+
+    s->n_built++;
+    s->bytes += sizeof (struct ISC_node) + count * (sizeof (struct ISC_hkl) + sizeof (struct ISC_tau));
+    if (s->bytes > s->c_max_bytes)
+      exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: reflections use more than max_cache_mb = %.0f MB.\n", s->comp_name,
+                     s->c_max_bytes / 1e6));
+    if (s->c_verbose)
+      printf ("Inhomogeneous_single_crystal_process: %s: built node for \"%s\" with %d reflections\n", s->comp_name, cfgstr, count);
+    free (cfgstr);
+    return node;
+  };
+
+  /* Searches the node's reflections near the Ewald sphere of k, as hkl_search_union, unless k is its last k */
+  void
+  ISC_search (struct Inhomogeneous_single_crystal_physics_storage_struct* s, struct ISC_node* node, double kix, double kiy, double kiz) {
+    if (node->searched && kix == node->kix && kiy == node->kiy && kiz == node->kiz)
+      return;
+    s->n_searches++;
+    struct ISC_hkl* L = node->list;
+    struct ISC_tau* T = node->tau_list;
+    double ki = sqrt (kix * kix + kiy * kiy + kiz * kiz);
+    /* Max possible tau for this ki with 5*sigma delta-d/d cutoff */
+    double tau_max = 2 * ki / (1 - 5 * node->delta_d_d);
+    double xsect_factor = pow (2 * PI, 5.0 / 2.0) / (node->V0 * ki * ki);
+    double coh_refl = 0, coh_xsect = 0;
+    int i, j;
+    for (i = j = 0; i < node->count; i++) {
+      if (L[i].tau > tau_max)
+        break;
+      double rho_x = kix - L[i].tau_x, rho_y = kiy - L[i].tau_y, rho_z = kiz - L[i].tau_z;
+      double rho = sqrt (rho_x * rho_x + rho_y * rho_y + rho_z * rho_z);
+      double diff = fabs (rho - ki);
+      if (diff <= L[i].cutoff) {
+        double b1x, b1y, b1z, b2x, b2y, b2z, kx, ky, kz, nx, ny, nz, ox, oy, oz;
+        T[j].index = i;
+        kx = kix * L[i].u1x + kiy * L[i].u1y + kiz * L[i].u1z;
+        ky = kix * L[i].u2x + kiy * L[i].u2y + kiz * L[i].u2z;
+        kz = kix * L[i].u3x + kiy * L[i].u3y + kiz * L[i].u3z;
+        T[j].rho_x = kx - L[i].tau;
+        T[j].rho_y = ky;
+        T[j].rho_z = kz;
+        T[j].rho = rho;
+        nx = T[j].rho_x / T[j].rho;
+        ny = T[j].rho_y / T[j].rho;
+        nz = T[j].rho_z / T[j].rho;
+        ox = (ki - T[j].rho) * nx;
+        oy = (ki - T[j].rho) * ny;
+        oz = (ki - T[j].rho) * nz;
+        T[j].ox = ox;
+        T[j].oy = oy;
+        T[j].oz = oz;
+        normal_vec (&b1x, &b1y, &b1z, nx, ny, nz);
+        vec_prod (b2x, b2y, b2z, nx, ny, nz, b1x, b1y, b1z);
+        T[j].b1x = b1x;
+        T[j].b1y = b1y;
+        T[j].b1z = b1z;
+        T[j].b2x = b2x;
+        T[j].b2y = b2y;
+        T[j].b2z = b2z;
+        double n11 = L[i].m1 * b1x * b1x + L[i].m2 * b1y * b1y + L[i].m3 * b1z * b1z;
+        double n12 = L[i].m1 * b1x * b2x + L[i].m2 * b1y * b2y + L[i].m3 * b1z * b2z;
+        double n22 = L[i].m1 * b2x * b2x + L[i].m2 * b2y * b2y + L[i].m3 * b2z * b2z;
+        double det_N = n11 * n22 - n12 * n12;
+        double inv_n11 = n22 / det_N, inv_n12 = -n12 / det_N, inv_n22 = n11 / det_N;
+        double l11 = sqrt (inv_n11 / 2);
+        double l12 = inv_n12 / (2 * l11);
+        double l22 = sqrt (inv_n22 / 2 - l12 * l12);
+        T[j].l11 = l11;
+        T[j].l12 = l12;
+        T[j].l22 = l22;
+        double det_L = l11 * l22;
+        double Bt_D_O_x = b1x * L[i].m1 * ox + b1y * L[i].m2 * oy + b1z * L[i].m3 * oz;
+        double Bt_D_O_y = b2x * L[i].m1 * ox + b2y * L[i].m2 * oy + b2z * L[i].m3 * oz;
+        double y0x = -(Bt_D_O_x * inv_n11 + Bt_D_O_y * inv_n12);
+        double y0y = -(Bt_D_O_x * inv_n12 + Bt_D_O_y * inv_n22);
+        T[j].y0x = y0x;
+        T[j].y0y = y0y;
+        double alpha = L[i].m1 * ox * ox + L[i].m2 * oy * oy + L[i].m3 * oz * oz - (y0x * y0x * n11 + y0y * y0y * n22 + 2 * y0x * y0y * n12);
+        T[j].refl = xsect_factor * det_L * exp (-alpha) / L[i].sig123;
+        coh_refl += T[j].refl;
+        T[j].xsect = T[j].refl * L[i].F2;
+        coh_xsect += T[j].xsect;
+        j++;
+      }
+    }
+    node->tau_count = j;
+    node->coh_refl = coh_refl;
+    node->coh_xsect = coh_xsect;
+    node->kix = kix;
+    node->kiy = kiy;
+    node->kiz = kiz;
+    node->searched = 1;
+  };
+
+  void
+  ISC_allocate (struct Inhomogeneous_single_crystal_physics_storage_struct* s) {
+    const char* names[4] = { "x", "y", "z", "t" };
+    s->n_nodes = 1;
+    for (int a = 0; a < s->n_dims; a++) {
+      int v = s->dim_var[a];
+      if (!s->range_set[v] || !(s->lo[v] < s->hi[v]))
+        exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: no range for the cache along %s. Set %s_min < %s_max%s.\n", s->comp_name,
+                       names[v], names[v], names[v], v < 3 ? ", or use a geometry with shell points" : ""));
+      s->n_nodes *= s->n_nodes_dim[a];
+    }
+    s->nodes = calloc (s->n_nodes, sizeof (struct ISC_node*));
+  };
+
+  /* Node index -> vars[0..3] at the node */
+  void
+  ISC_set_node_point (struct Inhomogeneous_single_crystal_physics_storage_struct* s, long node) {
+    long rest = node;
+    for (int a = s->n_dims - 1; a >= 0; a--) {
+      int v = s->dim_var[a];
+      int n = s->n_nodes_dim[a];
+      int i = rest % n;
+      rest /= n;
+      s->vars[v] = (n > 1) ? s->lo[v] + i * (s->hi[v] - s->lo[v]) / (n - 1) : 0.5 * (s->lo[v] + s->hi[v]);
+    }
+  };
+
+  /* Interpolation corners around the point in vars[0..3]; returns their number */
+  int
+  ISC_corners (struct Inhomogeneous_single_crystal_physics_storage_struct* s, struct ISC_node** nodes, double* weights) {
+    if (!s->nodes)
+      ISC_allocate (s);
+    int i0[4];
+    double w[4];
+    int clamped = 0;
+    for (int a = 0; a < s->n_dims; a++) {
+      int v = s->dim_var[a];
+      int n = s->n_nodes_dim[a];
+      double u = (n > 1) ? (s->vars[v] - s->lo[v]) / (s->hi[v] - s->lo[v]) * (n - 1) : 0;
+      if (u < 0) {
+        u = 0;
+        clamped = 1;
+      }
+      if (u > n - 1) {
+        u = n - 1;
+        clamped = 1;
+      }
+      i0[a] = (int)floor (u);
+      if (i0[a] > n - 2)
+        i0[a] = (n > 1) ? n - 2 : 0;
+      w[a] = u - i0[a];
+    }
+    s->n_clamped += clamped;
+    double point[4] = { s->vars[0], s->vars[1], s->vars[2], s->vars[3] };
+    int count = 0;
+    for (int corner = 0; corner < (1 << s->n_dims); corner++) {
+      double weight = 1;
+      long node = 0;
+      for (int a = 0; a < s->n_dims; a++) {
+        int bit = (corner >> a) & 1;
+        weight *= bit ? w[a] : 1 - w[a];
+        node = node * s->n_nodes_dim[a] + i0[a] + bit;
+      }
+      if (weight == 0)
+        continue;
+      if (!s->nodes[node]) {
+        ISC_set_node_point (s, node);
+        s->nodes[node] = ISC_build (s);
+        for (int v = 0; v < 4; v++)
+          s->vars[v] = point[v];
+      }
+      nodes[count] = s->nodes[node];
+      weights[count] = weight;
+      count++;
+    }
+    return count;
+  };
+
+  void
+  ISC_set_point (struct Inhomogeneous_single_crystal_physics_storage_struct* s, _class_particle* _particle) {
+    s->vars[0] = _particle->x;
+    s->vars[1] = _particle->y;
+    s->vars[2] = _particle->z;
+    s->vars[3] = _particle->t;
+  };
+
+  void
+  Inhomogeneous_single_crystal_setup (union data_transfer_union data_transfer, Coords box_min, Coords box_max) {
+    struct Inhomogeneous_single_crystal_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_single_crystal_physics_storage_struct;
+    double bmin[3] = { box_min.x, box_min.y, box_min.z };
+    double bmax[3] = { box_max.x, box_max.y, box_max.z };
+    for (int v = 0; v < 3; v++) {
+      if (s->range_set[v] == 2)
+        continue;
+      double pad = 1e-3 * (bmax[v] - bmin[v]);
+      if (!s->range_set[v]) {
+        s->lo[v] = bmin[v] - pad;
+        s->hi[v] = bmax[v] + pad;
+        s->range_set[v] = 1;
+      } else {
+        s->lo[v] = fmin (s->lo[v], bmin[v] - pad);
+        s->hi[v] = fmax (s->hi[v], bmax[v] + pad);
+      }
+    }
+  };
+
+  int
+  Inhomogeneous_single_crystal_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data,
+                                           _class_particle* _particle) {
+    struct Inhomogeneous_single_crystal_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_single_crystal_physics_storage_struct;
+    struct ISC_node* nodes[16];
+    double weights[16];
+    ISC_set_point (s, _particle);
+    int count = ISC_corners (s, nodes, weights);
+    *my = 0;
+    for (int c = 0; c < count; c++) {
+      ISC_search (s, nodes[c], k_initial[0], k_initial[1], k_initial[2]);
+      *my += weights[c] * nodes[c]->mu_factor * nodes[c]->coh_xsect;
+    }
+    return 1;
+  };
+
+  int
+  Inhomogeneous_single_crystal_physics_scattering (double* k_final, double* k_initial, double* weight, union data_transfer_union data_transfer,
+                                                   struct focus_data_struct* focus_data, _class_particle* _particle, double selected_mu) {
+    struct Inhomogeneous_single_crystal_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_single_crystal_physics_storage_struct;
+    double kix = k_initial[0], kiy = k_initial[1], kiz = k_initial[2];
+    double ki = sqrt (kix * kix + kiy * kiy + kiz * kiz);
+    struct ISC_node* nodes[16];
+    double weights[16];
+    double corner_mu[16];
+    ISC_set_point (s, _particle);
+    int count = ISC_corners (s, nodes, weights);
+    double mu = 0;
+    for (int c = 0; c < count; c++) {
+      ISC_search (s, nodes[c], kix, kiy, kiz);
+      corner_mu[c] = weights[c] * nodes[c]->mu_factor * nodes[c]->coh_xsect;
+      mu += corner_mu[c];
+    }
+    if (mu <= 0 || selected_mu <= 0)
+      return 0;
+
+    /* Choose a corner with probability weight * mu; no random number is used with a single corner */
+    int c = -1;
+    if (count == 1)
+      c = 0;
+    else {
+      double u = rand01 () * mu;
+      for (int i = 0; i < count; i++) {
+        if (corner_mu[i] <= 0)
+          continue;
+        c = i;
+        if ((u -= corner_mu[i]) <= 0)
+          break;
+      }
+    }
+    struct ISC_node* node = nodes[c];
+    if (node->coh_refl <= 0)
+      return 0;
+
+    /* Choose a reflection and the outgoing wavevector, as in Single_crystal_process */
+    struct ISC_tau* T = node->tau_list;
+    struct ISC_hkl* L = node->list;
+    double r = rand0max (node->coh_refl);
+    double sum = 0;
+    int j;
+    for (j = 0; j < node->tau_count; j++) {
+      sum += T[j].refl;
+      if (sum > r)
+        break;
+    }
+    if (j >= node->tau_count)
+      j = node->tau_count - 1;
+    int i = T[j].index;
+    double z1 = randnorm ();
+    double z2 = randnorm ();
+    double y1 = T[j].l11 * z1 + T[j].y0x;
+    double y2 = T[j].l12 * z1 + T[j].l22 * z2 + T[j].y0y;
+    double kfx = T[j].rho_x + T[j].ox + T[j].b1x * y1 + T[j].b2x * y2;
+    double kfy = T[j].rho_y + T[j].oy + T[j].b1y * y1 + T[j].b2y * y2;
+    double kfz = T[j].rho_z + T[j].oz + T[j].b1z * y1 + T[j].b2z * y2;
+    double adjust = ki / sqrt (kfx * kfx + kfy * kfy + kfz * kfz);
+    kfx *= adjust;
+    kfy *= adjust;
+    kfz *= adjust;
+    *weight *= T[j].xsect * node->coh_refl / (node->coh_xsect * T[j].refl);
+    k_final[0] = L[i].u1x * kfx + L[i].u2x * kfy + L[i].u3x * kfz;
+    k_final[1] = L[i].u1y * kfx + L[i].u2y * kfy + L[i].u3y * kfz;
+    k_final[2] = L[i].u1z * kfx + L[i].u2z * kfy + L[i].u3z * kfz;
+
+    *weight *= mu / selected_mu;
+    return 1;
+  };
+
+  #ifndef PROCESS_DETECTOR
+  #define PROCESS_DETECTOR dummy
+  #endif
+
+  #ifndef PROCESS_INHOMOGENEOUS_SINGLE_CRYSTAL_DETECTOR
+  #define PROCESS_INHOMOGENEOUS_SINGLE_CRYSTAL_DETECTOR dummy
+  #endif
+
+  // Register this process with the Union_master dispatch (see union-lib.h)
+  #undef UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SINGLE_CRYSTAL
+  #define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SINGLE_CRYSTAL(out, ...) case Inhomogeneous_single_crystal: out = Inhomogeneous_single_crystal_physics_my(__VA_ARGS__); break;
+  #undef UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SINGLE_CRYSTAL
+  #define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SINGLE_CRYSTAL(out, ...) case Inhomogeneous_single_crystal: out = Inhomogeneous_single_crystal_physics_scattering(__VA_ARGS__, selected_mu); break;
+%}
+
+DECLARE
+%{
+  struct Inhomogeneous_single_crystal_physics_storage_struct ISC_storage;
+
+  struct global_process_element_struct global_process_element;
+  struct scattering_process_struct This_process;
+%}
+
+INITIALIZE
+%{
+  struct union_state_struct* union_state_p = union_acquire ();
+  struct Inhomogeneous_single_crystal_physics_storage_struct* s = &ISC_storage;
+  memset (s, 0, sizeof (*s));
+  sprintf (s->comp_name, "%s", NAME_CURRENT_COMP);
+
+  if (!ncmat_template || !strcmp (ncmat_template, ""))
+    exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: ncmat_template is empty.\n", NAME_CURRENT_COMP));
+  if (number_of_sample_points < 1 || !(lambda_min > 0))
+    exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: needs number_of_sample_points >= 1 and lambda_min > 0.\n", NAME_CURRENT_COMP));
+
+  /* The template is read from a file, or else from the NCrystal data library */
+  char* template_text = NULL;
+  FILE* fp = fopen (ncmat_template, "r");
+  if (fp) {
+    fseek (fp, 0, SEEK_END);
+    long size = ftell (fp);
+    fseek (fp, 0, SEEK_SET);
+    template_text = malloc (size + 1);
+    size_t n_read = fread (template_text, 1, size, fp);
+    template_text[n_read] = '\0';
+    fclose (fp);
+  } else {
+    char** text_data = ncrystal_get_text_data (ncmat_template);
+    if (ncrystal_error () || !text_data)
+      exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: could not find ncmat_template \"%s\".\n", NAME_CURRENT_COMP, ncmat_template));
+    template_text = ISC_strndup (text_data[0], strlen (text_data[0]));
+    ncrystal_dealloc_stringlist (5, text_data);
+  }
+
+  double par_values[6] = { p1, p2, p3, p4, p5, p6 };
+  for (int i = 0; i < 6; i++)
+    s->vars[4 + i] = par_values[i];
+  s->c_verbose = verbose;
+  s->c_max_bytes = max_cache_mb * 1e6;
+  s->tau_limit = 4.0 * PI / lambda_min;
+
+  ISC_parse (&s->tmpl_ncmat, template_text, s->vars, NAME_CURRENT_COMP, "ncmat_template");
+  ISC_parse (&s->tmpl_cfg, cfg ? cfg : "", s->vars, NAME_CURRENT_COMP, "cfg");
+  free (template_text);
+
+  const char* expr_names[ISC_NEXPR] = { "mosaic", "mosaic_a", "mosaic_b", "mosaic_c", "delta_d_d", "rot_x", "rot_y", "rot_z" };
+  const char* expr_values[ISC_NEXPR] = { mosaic, mosaic_a, mosaic_b, mosaic_c, delta_d_d, rot_x, rot_y, rot_z };
+  for (int e = 0; e < ISC_NEXPR; e++) {
+    if (!expr_values[e] || !strcmp (expr_values[e], ""))
+      continue;
+    s->expr_source[e] = ISC_strndup (expr_values[e], strlen (expr_values[e]));
+    s->expr[e] = ISC_compile (s->expr_source[e], s->vars, -1);
+    if (!s->expr[e])
+      exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: failed to parse %s expression \"%s\".\n", NAME_CURRENT_COMP, expr_names[e],
+                     expr_values[e]));
+  }
+
+  const char* dim_names[4] = { "x", "y", "z", "t" };
+  int nodes_per_var[4] = { n_x, n_y, n_z, n_t };
+  double manual_lo[4] = { x_min, y_min, z_min, t_min };
+  double manual_hi[4] = { x_max, y_max, z_max, t_max };
+  for (int v = 0; v < 4; v++) {
+    if (manual_lo[v] < manual_hi[v]) {
+      s->lo[v] = manual_lo[v];
+      s->hi[v] = manual_hi[v];
+      s->range_set[v] = 2;
+    }
+    int depends = ISC_depends (&s->tmpl_ncmat, s->vars, v) || ISC_depends (&s->tmpl_cfg, s->vars, v);
+    for (int e = 0; e < ISC_NEXPR; e++)
+      depends |= s->expr[e] && ISC_expr_depends (s->expr_source[e], s->vars, v);
+    if (!depends)
+      continue;
+    if (nodes_per_var[v] < 1)
+      exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: n_%s must be at least 1.\n", NAME_CURRENT_COMP, dim_names[v]));
+    if (v == 3 && s->range_set[v] != 2)
+      exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: something depends on t, so t_min < t_max must be set.\n", NAME_CURRENT_COMP));
+    s->dim_var[s->n_dims] = v;
+    s->n_nodes_dim[s->n_dims] = nodes_per_var[v];
+    s->n_dims++;
+  }
+
+  printf ("Inhomogeneous_single_crystal_process: %s: cache along", NAME_CURRENT_COMP);
+  if (s->n_dims == 0)
+    printf (" no dimensions");
+  for (int a = 0; a < s->n_dims; a++)
+    printf (" %s (%d nodes)", dim_names[s->dim_var[a]], s->n_nodes_dim[a]);
+  printf ("\n");
+
+  /* Build one crystal now, so that errors show up before the simulation */
+  for (int v = 0; v < 4; v++)
+    s->vars[v] = (s->range_set[v] == 2) ? s->lo[v] : 0;
+  struct ISC_node* probe = ISC_build (s);
+  if (s->n_dims == 0) {
+    ISC_allocate (s);
+    s->nodes[0] = probe;
+  } else {
+    free (probe->list);
+    free (probe->tau_list);
+    free (probe);
+    s->n_built = 0;
+    s->bytes = 0;
+  }
+
+  scattering_process_struct_init (&This_process);
+  This_process.non_isotropic_rot_index = 1;
+  This_process.needs_cross_section_focus = -1;
+  This_process.sampling_points = number_of_sample_points;
+  This_process.eProcess = Inhomogeneous_single_crystal;
+  This_process.data_transfer.pointer_to_a_Inhomogeneous_single_crystal_physics_storage_struct = s;
+  This_process.probability_for_scattering_function = &Inhomogeneous_single_crystal_physics_my;
+  This_process.setup_function = &Inhomogeneous_single_crystal_setup;
+
+  sprintf (This_process.name, "%s", NAME_CURRENT_COMP);
+  This_process.process_p_interact = interact_fraction;
+  rot_copy (This_process.rotation_matrix, ROT_A_CURRENT_COMP);
+  sprintf (global_process_element.name, "%s", NAME_CURRENT_COMP);
+  global_process_element.component_index = INDEX_CURRENT_COMP;
+  global_process_element.p_scattering_process = &This_process;
+
+  struct pointer_to_global_process_list* global_process_list = &union_state_p->u_process_list;
+  add_element_to_process_list (global_process_list, global_process_element);
+%}
+
+TRACE
+%{
+%}
+
+FINALLY
+%{
+  struct Inhomogeneous_single_crystal_physics_storage_struct* s = &ISC_storage;
+  printf ("Inhomogeneous_single_crystal_process: %s: %ld of %ld nodes built (%.1f MB), %ld reflection searches, %ld lookups outside the cache range\n",
+          NAME_CURRENT_COMP, s->n_built, s->n_nodes, s->bytes / 1e6, s->n_searches, s->n_clamped);
+  for (long node = 0; node < s->n_nodes; node++) {
+    if (!s->nodes || !s->nodes[node])
+      continue;
+    free (s->nodes[node]->list);
+    free (s->nodes[node]->tau_list);
+    free (s->nodes[node]);
+  }
+  free (s->nodes);
+  for (int e = 0; e < ISC_NEXPR; e++) {
+    if (s->expr[e])
+      te_free (s->expr[e]);
+    free (s->expr_source[e]);
+  }
+  ISC_free_template (&s->tmpl_ncmat);
+  ISC_free_template (&s->tmpl_cfg);
+  union_release (NAME_CURRENT_COMP);
+%}
+
+END

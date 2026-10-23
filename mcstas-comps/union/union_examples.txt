@@ -26,7 +26,7 @@ Incoherent_process is used in 44 example(s):
 - Test_box.instr
 - Test_conditional_PSD.instr
 - Test_conditional_standard.instr
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 - Test_logger_1D.instr
 - Test_logger_2DQ.instr
 - Test_logger_2D_kf.instr
@@ -53,8 +53,8 @@ Incoherent_process is used in 44 example(s):
 - Radiography_Lithium_Battery.instr
 - Radiography_Sword.instr
 ---------------------------------------
-Inhomogenous_incoherent_process is used in 1 example(s):
-- Test_inhomogenous_process.instr
+Inhomogeneous_incoherent_process is used in 1 example(s):
+- Test_inhomogeneous_process.instr
 ---------------------------------------
 Mirror_surface is used in 2 example(s):
 - Bispectral.instr
@@ -71,7 +71,7 @@ NCrystal_process is used in 6 example(s):
 Non_process is used in 0 example(s):
 ---------------------------------------
 PhononSimple_process is used in 1 example(s):
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 ---------------------------------------
 Powder_process is used in 37 example(s):
 - ILL_SALSA.instr
@@ -179,7 +179,7 @@ Union_box is used in 42 example(s):
 - Test_box.instr
 - Test_conditional_PSD.instr
 - Test_conditional_standard.instr
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 - Test_logger_1D.instr
 - Test_logger_2DQ.instr
 - Test_logger_2D_kf.instr
@@ -326,7 +326,7 @@ Union_init is used in 53 example(s):
 - Test_box.instr
 - Test_conditional_PSD.instr
 - Test_conditional_standard.instr
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 - Test_logger_1D.instr
 - Test_logger_2DQ.instr
 - Test_logger_2D_kf.instr
@@ -387,7 +387,7 @@ Union_logger_2D_space is used in 11 example(s):
 - Many_meshes.instr
 - Test_conditional_PSD.instr
 - Test_conditional_standard.instr
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 - Test_logger_2D_space.instr
 - Test_mesh_boxes.instr
 ---------------------------------------
@@ -440,7 +440,7 @@ Union_make_material is used in 68 example(s):
 - Test_box.instr
 - Test_conditional_PSD.instr
 - Test_conditional_standard.instr
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 - Test_logger_1D.instr
 - Test_logger_2DQ.instr
 - Test_logger_2D_kf.instr
@@ -511,7 +511,7 @@ Union_master is used in 69 example(s):
 - Test_box.instr
 - Test_conditional_PSD.instr
 - Test_conditional_standard.instr
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 - Test_logger_1D.instr
 - Test_logger_2DQ.instr
 - Test_logger_2D_kf.instr
@@ -595,7 +595,7 @@ Union_stop is used in 53 example(s):
 - Test_box.instr
 - Test_conditional_PSD.instr
 - Test_conditional_standard.instr
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 - Test_logger_1D.instr
 - Test_logger_2DQ.instr
 - Test_logger_2D_kf.instr

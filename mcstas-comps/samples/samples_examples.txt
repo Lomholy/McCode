@@ -30,7 +30,7 @@ Incoherent is used in 31 example(s):
 - Test_Incoherent.instr
 - Test_Incoherent_MS.instr
 - Test_TasReso.instr
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 - Incoherent_validation.instr
 - Radiography_Lithium_Battery.instr
 - Radiography_absorbing_edge.instr

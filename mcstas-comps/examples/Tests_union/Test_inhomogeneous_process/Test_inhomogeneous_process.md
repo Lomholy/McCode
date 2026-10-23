@@ -1,14 +1,14 @@
-# Test instrument for the Inhomogenous_incoherent component
+# Test instrument for the Inhomogeneous_incoherent component
 
 ### Author: Daniel Lomholt Christensen @NBI
 
-This instrument is a test for the Inhomogenous incoherent process component, that works with the McStas Union system.
+This instrument is a test for the Inhomogeneous incoherent process component, that works with the McStas Union system.
 
 
 Below I have tested the implementation in three important setups. For each setup, I use three different approaches.
 First I build the union materials with the Incoherent_process component (and here 10 Union_boxes are used).
-Secondly I build the union materials with the Inhomogenous_incoherent_process (here using only 1 component, but setting the number of sampling points to 10).
-Thirdly I build a material that uses both the Inhomogenous_incoherent and incoherent processes, to perform the same action.
+Secondly I build the union materials with the Inhomogeneous_incoherent_process (here using only 1 component, but setting the number of sampling points to 10).
+Thirdly I build a material that uses both the Inhomogeneous_incoherent and incoherent processes, to perform the same action.
 
 
 The first two setups, I have a detector placed on the side of a sample, with 10 different boxes that follow each other.
@@ -29,7 +29,7 @@ The result of this is,
 ![Transmission geometry](trans_linear.png)
 
 Another experiment is performed, just to check that adding a directional process, such as the PhononSimple_process does not break the system.
-This material is created with the linearly rising scattering cross section, implemented with the Inhomogenous process, as well as a PhononSimple_process.
+This material is created with the linearly rising scattering cross section, implemented with the Inhomogeneous process, as well as a PhononSimple_process.
 
 
 

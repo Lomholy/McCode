@@ -1,0 +1,575 @@
+/*******************************************************************************
+*
+*  McStas, neutron ray-tracing package
+*  Copyright(C) 2007 Risoe National Laboratory.
+*
+* %I
+* Written by: Daniel Lomholt Christensen
+* Date: 29.09.2026
+* Version: $Revision: 0.1 $
+* Origin: University of Copenhagen
+*
+* Union process for small angle scattering from a sample whose form factor,
+* structure factor and prefactors vary with position and time.
+*
+* %D
+* Inhomogeneous version of SANS_process.comp. The differential cross-section is
+*
+*   dSigma/dOmega(q; r, t) = scale(r, t) * F(q; r, t)^2 * S(q; r, t) + background(r, t)
+*
+* where F and S are tinyexpr strings, and scale and background are either numbers or
+* tinyexpr strings (scale_expr, background_expr). The variables available are
+*   q          |q| in AA^-1
+*   qx, qy, qz the components of q = k_i - k_f in AA^-1, in the frame of this process
+*   x, y, z    the position in m, relative to the center of the geometry, in the frame
+*              of this process
+*   t          the neutron time in s
+*   p1 ... p6  generic constants
+*
+* Part of the Union components.
+*
+* Algorithm:
+* Union evaluates the inverse penetration depth mu at number_of_sample_points points
+* along each path through a geometry. mu is the total scattering cross-section,
+*
+*   mu(k; r, t) = 2 pi / k^2 * ( scale(r, t) * I(k; r, t) + background(r, t) * qmax^2 / 2 )
+*   I(k; r, t)  = int_0^qmax q dq < F^2 S >_phi,   qmax = min(q_cut, 2k)
+*
+* I is too expensive to integrate at every point, so it is cached on a grid and
+* interpolated. The grid only has axes along the variables among x, y, z, t that F or S
+* depend on (found by compiling the expressions without each variable). background_expr
+* is always evaluated directly. scale_expr is too, unless it shares a variable with F or
+* S; then the grid also gets axes along the variables of scale_expr and stores scale * I,
+* so that mu stays between its values on either side of a step. Each grid node stores
+* I (or scale * I) for the wavelengths 1..30 AA, is filled
+* the first time it is needed, and is interpolated multilinearly between nodes and
+* linearly in wavelength. The integral uses Simpson's rule in ln q from 1e-7 AA^-1 to
+* qmax, with n_q_per_decade points per decade, and an n_phi point average over the
+* azimuthal angle (assuming k_i along the process z axis) when F or S use qx, qy, qz.
+*
+* The spatial range of the grid is the bounding box of the geometries using the process,
+* given by Union_master, unless x_min/x_max etc. are set. The time range must be given
+* with t_min/t_max if F or S depend on t. Points outside the grid use the nearest edge,
+* and the number of such lookups is printed at the end.
+*
+* In a scattering event the outgoing direction is drawn within the focusing solid angle
+* dOmega, and the weight is multiplied by dOmega * dSigma/dOmega(q; r, t) / mu, where mu
+* is the value Union_master used when choosing the scattering point.
+*
+* Example (radius growing linearly along x):
+*   Inhomogeneous_SANS_process(form_factor = "3*(sin(q*(p1+p2*x))-q*(p1+p2*x)*cos(q*(p1+p2*x)))/(q*(p1+p2*x))^3",
+*                              p1 = 100, p2 = 5000, scale = 1e5, n_x = 20)
+*
+* LIMITATIONS:
+* - tinyexpr expressions use function pointers internally and cannot be
+*   compiled for GPU (-openacc). This component is CPU-only.
+*
+* %P
+* INPUT PARAMETERS:
+* form_factor: [str]         tinyexpr expression for F, in q, qx, qy, qz, x, y, z, t and p1..p6
+* structure_factor: [str]    tinyexpr expression for S, in q, qx, qy, qz, x, y, z, t and p1..p6
+* scale_expr: [str]          Optional tinyexpr expression for scale, in x, y, z, t and p1..p6; overrides scale
+* background_expr: [str]     Optional tinyexpr expression for background, in x, y, z, t and p1..p6; overrides background
+* p1: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p2: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p3: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p4: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p5: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* p6: [1]                    Generic numeric constant, meaning defined by the user's expressions
+* scale: [m^-1 sr^-1]        Prefactor multiplying F^2*S
+* background: [m^-1 sr^-1]   Flat background added to the cross-section
+* number_of_sample_points: [1] Points per path where Union_master evaluates mu
+* n_x: [1]                   Cache nodes along x, used if the cache has an x axis
+* n_y: [1]                   Cache nodes along y, used if the cache has a y axis
+* n_z: [1]                   Cache nodes along z, used if the cache has a z axis
+* n_t: [1]                   Cache nodes along t, used if the cache has a t axis
+* x_min: [m]                 Lower x of the cache; the geometry bounding box is used unless x_min < x_max
+* x_max: [m]                 Upper x of the cache
+* y_min: [m]                 Lower y of the cache; the geometry bounding box is used unless y_min < y_max
+* y_max: [m]                 Upper y of the cache
+* z_min: [m]                 Lower z of the cache; the geometry bounding box is used unless z_min < z_max
+* z_max: [m]                 Upper z of the cache
+* t_min: [s]                 Lower t of the cache, required if the cache has a t axis
+* t_max: [s]                 Upper t of the cache
+* q_cut: [AA^-1]             Upper q limit of the cross-section integral
+* n_q_per_decade: [1]        Integration points per decade of q
+* n_phi: [1]                 Azimuthal points in the integral when F or S use qx, qy, qz
+* prefill: [0/1]             Fill the whole cache at the first lookup instead of node by node
+* direct: [0/1]              Integrate at every point instead of using the cache (for testing)
+* max_cache_mb: [MB]         Largest allowed cache
+* interact_fraction: [1]     How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
+* init: [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
+*
+* CALCULATED PARAMETERS:
+* ISANS_storage:             Storage used to communicate with the probability and scattering functions
+*
+* %L
+* The homogeneous version <a href="SANS_process.html">SANS_process.comp</a>.
+* The tinyexpr library: https://github.com/codeplea/tinyexpr
+*
+* %E
+******************************************************************************/
+
+DEFINE COMPONENT Inhomogeneous_SANS_process
+
+SETTING PARAMETERS(string form_factor="1", string structure_factor="1",
+string scale_expr="", string background_expr="",
+p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
+scale=1, background=0, int number_of_sample_points=20,
+int n_x=20, int n_y=20, int n_z=20, int n_t=20,
+x_min=0, x_max=0, y_min=0, y_max=0, z_min=0, z_max=0, t_min=0, t_max=0,
+q_cut=100, int n_q_per_decade=50, int n_phi=16,
+int prefill=0, int direct=0, max_cache_mb=1000,
+interact_fraction=-1, string init="")
+
+
+SHARE
+%{
+  %include "union-lib"
+
+  %include "tinyexpr.h"
+  %include "tinyexpr.c"
+
+  /* Indices into vars[]; cache dimension d (0..3) is the variable ISANS_X + d */
+  #define ISANS_Q 0
+  #define ISANS_QX 1
+  #define ISANS_QY 2
+  #define ISANS_QZ 3
+  #define ISANS_X 4
+  #define ISANS_NVARS 14
+  #define ISANS_NLAM 31
+
+  struct Inhomogeneous_SANS_physics_storage_struct {
+    char comp_name[256];
+    te_expr* F_expr;
+    te_expr* S_expr;
+    te_expr* scale_te; // NULL if the scale is constant
+    te_expr* bg_te;    // NULL if the background is constant
+    double c_scale;
+    double c_background;
+    double vars[8];    // q, qx, qy, qz, x, y, z, t bound in the expressions
+    double pars[6];    // p1..p6 bound in the expressions
+    int c_n_phi;       // 1 if F and S only use |q|
+    int scale_cached;  // 1 if the cache stores scale * I instead of I
+    int c_npd;
+    double c_q_cut;
+    double qmax2_half[ISANS_NLAM]; // qmax^2 / 2 for each wavelength, for the background term
+    int c_direct;
+    int c_prefill;
+    double c_max_bytes;
+
+    int n_dims;        // number of cache axes
+    int dim_var[4];    // variable of each axis, 0..3 = x, y, z, t
+    int n_nodes_dim[4];
+    double lo[4], hi[4]; // range of each variable x, y, z, t
+    int range_set[4];
+    long n_nodes;
+    double* table;     // I for each node and wavelength, n_nodes * ISANS_NLAM
+    char* filled;
+    long n_filled;
+    long n_clamped;
+  };
+
+  /* Compiles expr_str against all variables, or against all except skip_var (vars[] index) if skip_var >= 0 */
+  te_expr*
+  ISANS_compile (const char* expr_str, double* vars, double* pars, int skip_var) {
+    const char* names[ISANS_NVARS] = { "q", "qx", "qy", "qz", "x", "y", "z", "t", "p1", "p2", "p3", "p4", "p5", "p6" };
+    te_variable list[ISANS_NVARS];
+    int n = 0, err;
+    for (int i = 0; i < ISANS_NVARS; i++) {
+      if (i == skip_var)
+        continue;
+      list[n].name = names[i];
+      list[n].address = (i < 8) ? &vars[i] : &pars[i - 8];
+      list[n].type = TE_VARIABLE;
+      list[n].context = NULL;
+      n++;
+    }
+    return te_compile (expr_str, list, n, &err);
+  };
+
+  te_expr*
+  ISANS_compile_or_exit (const char* expr_str, double* vars, double* pars, const char* comp_name, const char* which) {
+    te_expr* e = ISANS_compile (expr_str, vars, pars, -1);
+    if (!e)
+      exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: failed to parse %s expression \"%s\"\n", comp_name, which, expr_str));
+    return e;
+  };
+
+  /* 1 if expr_str needs variable var (vars[] index) to compile */
+  int
+  ISANS_depends (const char* expr_str, double* vars, double* pars, int var) {
+    te_expr* e = ISANS_compile (expr_str, vars, pars, var);
+    if (!e)
+      return 1;
+    te_free (e);
+    return 0;
+  };
+
+  void
+  ISANS_set_point (struct Inhomogeneous_SANS_physics_storage_struct* s, double px, double py, double pz, double pt) {
+    s->vars[4] = px;
+    s->vars[5] = py;
+    s->vars[6] = pz;
+    s->vars[7] = pt;
+  };
+
+  double
+  ISANS_F2S (struct Inhomogeneous_SANS_physics_storage_struct* s, double q, double qx, double qy, double qz) {
+    s->vars[ISANS_Q] = q;
+    s->vars[ISANS_QX] = qx;
+    s->vars[ISANS_QY] = qy;
+    s->vars[ISANS_QZ] = qz;
+    double F = te_eval (s->F_expr);
+    return F * F * te_eval (s->S_expr);
+  };
+
+  /* I = int q dq <F^2 S>_phi up to min(q_cut, 2k) for wavelength il AA, at the point set in vars[4..7] */
+  double
+  ISANS_integral (struct Inhomogeneous_SANS_physics_storage_struct* s, int il) {
+    double k = 2.0 * PI / il;
+    double qmin = 1e-7;
+    double qmax = fmin (s->c_q_cut, 2.0 * k);
+    if (qmax <= qmin)
+      return 0;
+    int n = (int)ceil ((log10 (qmax) - log10 (qmin)) * s->c_npd);
+    if (n < 2)
+      n = 2;
+    if (n % 2)
+      n++;
+    double h = (log (qmax) - log (qmin)) / n;
+    double sum = 0;
+    for (int j = 0; j <= n; j++) {
+      double q = exp (log (qmin) + j * h);
+      double qpar = q * q / (2.0 * k);
+      double qperp = q * sqrt (fmax (0.0, 1.0 - q * q / (4.0 * k * k)));
+      double phi_sum = 0;
+      for (int m = 0; m < s->c_n_phi; m++) {
+        double phi = 2.0 * PI * (m + 0.5) / s->c_n_phi;
+        phi_sum += ISANS_F2S (s, q, -qperp * cos (phi), -qperp * sin (phi), qpar);
+      }
+      double g = phi_sum / s->c_n_phi * q * q;
+      sum += g * ((j == 0 || j == n) ? 1 : (j % 2 ? 4 : 2));
+    }
+    return sum * h / 3.0;
+  };
+
+  void
+  ISANS_fill (struct Inhomogeneous_SANS_physics_storage_struct* s, long node, int il) {
+    double saved[4] = { s->vars[4], s->vars[5], s->vars[6], s->vars[7] };
+    long rest = node;
+    for (int a = s->n_dims - 1; a >= 0; a--) {
+      int v = s->dim_var[a];
+      int n = s->n_nodes_dim[a];
+      int i = rest % n;
+      rest /= n;
+      s->vars[4 + v] = (n > 1) ? s->lo[v] + i * (s->hi[v] - s->lo[v]) / (n - 1) : 0.5 * (s->lo[v] + s->hi[v]);
+    }
+    s->table[node * ISANS_NLAM + il] = ISANS_integral (s, il) * (s->scale_cached ? te_eval (s->scale_te) : 1);
+    s->filled[node * ISANS_NLAM + il] = 1;
+    s->n_filled++;
+    for (int v = 0; v < 4; v++)
+      s->vars[4 + v] = saved[v];
+  };
+
+  void
+  ISANS_allocate (struct Inhomogeneous_SANS_physics_storage_struct* s) {
+    s->n_nodes = 1;
+    for (int a = 0; a < s->n_dims; a++) {
+      int v = s->dim_var[a];
+      if (!s->range_set[v] || !(s->lo[v] < s->hi[v]))
+        exit (fprintf (stderr,
+                       "Inhomogeneous_SANS_process: %s: no range for the cache along %s. Set %s_min < %s_max%s.\n", s->comp_name,
+                       (const char*[]){ "x", "y", "z", "t" }[v], (const char*[]){ "x", "y", "z", "t" }[v], (const char*[]){ "x", "y", "z", "t" }[v],
+                       v < 3 ? ", or use a geometry with shell points" : ""));
+      s->n_nodes *= s->n_nodes_dim[a];
+    }
+    double bytes = (double)s->n_nodes * ISANS_NLAM * (sizeof (double) + 1);
+    if (bytes > s->c_max_bytes)
+      exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: cache of %ld nodes needs %.0f MB, above max_cache_mb = %.0f.\n", s->comp_name, s->n_nodes,
+                     bytes / 1e6, s->c_max_bytes / 1e6));
+    s->table = calloc (s->n_nodes * ISANS_NLAM, sizeof (double));
+    s->filled = calloc (s->n_nodes * ISANS_NLAM, 1);
+    if (!s->table || !s->filled)
+      exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: could not allocate the cache.\n", s->comp_name));
+    if (s->c_prefill)
+      for (long node = 0; node < s->n_nodes; node++)
+        for (int il = 1; il < ISANS_NLAM; il++)
+          ISANS_fill (s, node, il);
+  };
+
+  /* I at the point in vars[4..7] for wavelength il, from the cache */
+  double
+  ISANS_cached (struct Inhomogeneous_SANS_physics_storage_struct* s, int il) {
+    if (s->c_direct)
+      return ISANS_integral (s, il);
+    if (!s->table)
+      ISANS_allocate (s);
+    int i0[4];
+    double w[4];
+    int clamped = 0;
+    for (int a = 0; a < s->n_dims; a++) {
+      int v = s->dim_var[a];
+      int n = s->n_nodes_dim[a];
+      double u = (n > 1) ? (s->vars[4 + v] - s->lo[v]) / (s->hi[v] - s->lo[v]) * (n - 1) : 0;
+      if (u < 0) {
+        u = 0;
+        clamped = 1;
+      }
+      if (u > n - 1) {
+        u = n - 1;
+        clamped = 1;
+      }
+      i0[a] = (int)floor (u);
+      if (i0[a] > n - 2)
+        i0[a] = (n > 1) ? n - 2 : 0;
+      w[a] = u - i0[a];
+    }
+    s->n_clamped += clamped;
+    double result = 0;
+    for (int corner = 0; corner < (1 << s->n_dims); corner++) {
+      double weight = 1;
+      long node = 0;
+      for (int a = 0; a < s->n_dims; a++) {
+        int bit = (corner >> a) & 1;
+        weight *= bit ? w[a] : 1 - w[a];
+        node = node * s->n_nodes_dim[a] + i0[a] + bit;
+      }
+      if (weight == 0)
+        continue;
+      if (!s->filled[node * ISANS_NLAM + il])
+        ISANS_fill (s, node, il);
+      result += weight * s->table[node * ISANS_NLAM + il];
+    }
+    return result;
+  };
+
+  double
+  ISANS_scale (struct Inhomogeneous_SANS_physics_storage_struct* s) {
+    return s->scale_te ? te_eval (s->scale_te) : s->c_scale;
+  };
+
+  double
+  ISANS_background (struct Inhomogeneous_SANS_physics_storage_struct* s) {
+    return s->bg_te ? te_eval (s->bg_te) : s->c_background;
+  };
+
+  /* Total scattering cross-section [m^-1] at the point in vars[4..7], for wavevector length k [AA^-1] */
+  double
+  ISANS_mu (struct Inhomogeneous_SANS_physics_storage_struct* s, double k) {
+    double lambda = 2.0 * PI / k;
+    double I, Q2;
+    if (lambda <= 1.0) {
+      I = ISANS_cached (s, 1);
+      Q2 = s->qmax2_half[1];
+    } else if (lambda >= 30.0) {
+      I = ISANS_cached (s, 30);
+      Q2 = s->qmax2_half[30];
+    } else {
+      int Ilam = (int)floor (lambda);
+      int Ilam2 = Ilam + 1;
+      I = (Ilam2 - lambda) * ISANS_cached (s, Ilam) + (lambda - Ilam) * ISANS_cached (s, Ilam2);
+      Q2 = (Ilam2 - lambda) * s->qmax2_half[Ilam] + (lambda - Ilam) * s->qmax2_half[Ilam2];
+    }
+    return 2.0 * PI / (k * k) * ((s->scale_cached ? 1 : ISANS_scale (s)) * I + ISANS_background (s) * Q2);
+  };
+
+  void
+  Inhomogeneous_SANS_setup (union data_transfer_union data_transfer, Coords box_min, Coords box_max) {
+    struct Inhomogeneous_SANS_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_SANS_physics_storage_struct;
+    double bmin[3] = { box_min.x, box_min.y, box_min.z };
+    double bmax[3] = { box_max.x, box_max.y, box_max.z };
+    for (int v = 0; v < 3; v++) {
+      if (s->range_set[v] == 2)
+        continue;
+      double pad = 1e-3 * (bmax[v] - bmin[v]);
+      if (!s->range_set[v]) {
+        s->lo[v] = bmin[v] - pad;
+        s->hi[v] = bmax[v] + pad;
+        s->range_set[v] = 1;
+      } else {
+        s->lo[v] = fmin (s->lo[v], bmin[v] - pad);
+        s->hi[v] = fmax (s->hi[v], bmax[v] + pad);
+      }
+    }
+  };
+
+  int
+  Inhomogeneous_SANS_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data,
+                                 _class_particle* _particle) {
+    struct Inhomogeneous_SANS_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_SANS_physics_storage_struct;
+    double k = sqrt (k_initial[0] * k_initial[0] + k_initial[1] * k_initial[1] + k_initial[2] * k_initial[2]);
+    ISANS_set_point (s, _particle->x, _particle->y, _particle->z, _particle->t);
+    *my = ISANS_mu (s, k);
+    return 1;
+  };
+
+  int
+  Inhomogeneous_SANS_physics_scattering (double* k_final, double* k_initial, double* weight, union data_transfer_union data_transfer,
+                                         struct focus_data_struct* focus_data, _class_particle* _particle, double selected_mu) {
+    struct Inhomogeneous_SANS_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_SANS_physics_storage_struct;
+    double k_length = sqrt (k_initial[0] * k_initial[0] + k_initial[1] * k_initial[1] + k_initial[2] * k_initial[2]);
+
+    Coords k_out;
+    double solid_angle;
+    focus_data->focusing_function (&k_out, &solid_angle, focus_data);
+    NORM (k_out.x, k_out.y, k_out.z);
+    k_final[0] = k_out.x * k_length;
+    k_final[1] = k_out.y * k_length;
+    k_final[2] = k_out.z * k_length;
+
+    double qx = k_initial[0] - k_final[0];
+    double qy = k_initial[1] - k_final[1];
+    double qz = k_initial[2] - k_final[2];
+    double q = sqrt (qx * qx + qy * qy + qz * qz);
+
+    if (selected_mu <= 0)
+      return 0;
+    ISANS_set_point (s, _particle->x, _particle->y, _particle->z, _particle->t);
+    double dsdo = ISANS_scale (s) * ISANS_F2S (s, q, qx, qy, qz) + ISANS_background (s);
+    *weight *= solid_angle * dsdo / selected_mu;
+    return 1;
+  };
+
+  #ifndef PROCESS_DETECTOR
+  #define PROCESS_DETECTOR dummy
+  #endif
+
+  #ifndef PROCESS_INHOMOGENEOUS_SANS_DETECTOR
+  #define PROCESS_INHOMOGENEOUS_SANS_DETECTOR dummy
+  #endif
+
+  // Register this process with the Union_master dispatch (see union-lib.h)
+  #undef UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SANS
+  #define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SANS(out, ...) case Inhomogeneous_SANS: out = Inhomogeneous_SANS_physics_my(__VA_ARGS__); break;
+  #undef UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SANS
+  #define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SANS(out, ...) case Inhomogeneous_SANS: out = Inhomogeneous_SANS_physics_scattering(__VA_ARGS__, selected_mu); break;
+%}
+
+DECLARE
+%{
+  struct Inhomogeneous_SANS_physics_storage_struct ISANS_storage;
+
+  struct global_process_element_struct global_process_element;
+  struct scattering_process_struct This_process;
+%}
+
+INITIALIZE
+%{
+  struct union_state_struct* union_state_p = union_acquire ();
+  struct Inhomogeneous_SANS_physics_storage_struct* s = &ISANS_storage;
+  memset (s, 0, sizeof (*s));
+  sprintf (s->comp_name, "%s", NAME_CURRENT_COMP);
+
+  if (!form_factor || !strcmp (form_factor, ""))
+    exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: form_factor expression is empty.\n", NAME_CURRENT_COMP));
+  if (!structure_factor || !strcmp (structure_factor, ""))
+    exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: structure_factor expression is empty.\n", NAME_CURRENT_COMP));
+  if (n_phi < 1 || n_q_per_decade < 2 || number_of_sample_points < 1)
+    exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: n_phi, n_q_per_decade and number_of_sample_points must be positive.\n", NAME_CURRENT_COMP));
+
+  double par_values[6] = { p1, p2, p3, p4, p5, p6 };
+  for (int i = 0; i < 6; i++)
+    s->pars[i] = par_values[i];
+  s->c_scale = scale;
+  s->c_background = background;
+  s->c_q_cut = q_cut;
+  s->c_npd = n_q_per_decade;
+  s->c_direct = direct;
+  s->c_prefill = prefill;
+  s->c_max_bytes = max_cache_mb * 1e6;
+
+  s->F_expr = ISANS_compile_or_exit (form_factor, s->vars, s->pars, NAME_CURRENT_COMP, "form_factor");
+  s->S_expr = ISANS_compile_or_exit (structure_factor, s->vars, s->pars, NAME_CURRENT_COMP, "structure_factor");
+  if (scale_expr && strcmp (scale_expr, ""))
+    s->scale_te = ISANS_compile_or_exit (scale_expr, s->vars, s->pars, NAME_CURRENT_COMP, "scale_expr");
+  if (background_expr && strcmp (background_expr, ""))
+    s->bg_te = ISANS_compile_or_exit (background_expr, s->vars, s->pars, NAME_CURRENT_COMP, "background_expr");
+
+  int anisotropic = 0;
+  for (int v = ISANS_QX; v <= ISANS_QZ; v++)
+    anisotropic |= ISANS_depends (form_factor, s->vars, s->pars, v) || ISANS_depends (structure_factor, s->vars, s->pars, v);
+  s->c_n_phi = anisotropic ? n_phi : 1;
+
+  const char* dim_names[4] = { "x", "y", "z", "t" };
+  int nodes_per_var[4] = { n_x, n_y, n_z, n_t };
+  int dep_FS[4], dep_scale[4];
+  for (int v = 0; v < 4; v++) {
+    dep_FS[v] = ISANS_depends (form_factor, s->vars, s->pars, ISANS_X + v) || ISANS_depends (structure_factor, s->vars, s->pars, ISANS_X + v);
+    dep_scale[v] = s->scale_te && ISANS_depends (scale_expr, s->vars, s->pars, ISANS_X + v);
+  }
+  for (int v = 0; v < 4; v++)
+    s->scale_cached |= dep_FS[v] && dep_scale[v];
+  double manual_lo[4] = { x_min, y_min, z_min, t_min };
+  double manual_hi[4] = { x_max, y_max, z_max, t_max };
+  for (int v = 0; v < 4; v++) {
+    if (manual_lo[v] < manual_hi[v]) {
+      s->lo[v] = manual_lo[v];
+      s->hi[v] = manual_hi[v];
+      s->range_set[v] = 2;
+    }
+    if (!(dep_FS[v] || (s->scale_cached && dep_scale[v])))
+      continue;
+    if (nodes_per_var[v] < 1)
+      exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: n_%s must be at least 1.\n", NAME_CURRENT_COMP, dim_names[v]));
+    if (v == 3 && s->range_set[v] != 2)
+      exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: the cache has a t axis, so t_min < t_max must be set.\n", NAME_CURRENT_COMP));
+    s->dim_var[s->n_dims] = v;
+    s->n_nodes_dim[s->n_dims] = nodes_per_var[v];
+    s->n_dims++;
+  }
+
+  for (int il = 1; il < ISANS_NLAM; il++) {
+    double qmax = fmin (q_cut, 4.0 * PI / il);
+    s->qmax2_half[il] = 0.5 * qmax * qmax;
+  }
+
+  printf ("Inhomogeneous_SANS_process: %s: cache along", NAME_CURRENT_COMP);
+  if (s->n_dims == 0)
+    printf (" no dimensions");
+  for (int a = 0; a < s->n_dims; a++)
+    printf (" %s (%d nodes)", dim_names[s->dim_var[a]], s->n_nodes_dim[a]);
+  printf ("%s%s\n", s->scale_cached ? ", storing scale * I" : "", anisotropic ? ", anisotropic" : "");
+
+  scattering_process_struct_init (&This_process);
+  This_process.non_isotropic_rot_index = 1;
+  This_process.needs_cross_section_focus = -1;
+  This_process.sampling_points = number_of_sample_points;
+  This_process.eProcess = Inhomogeneous_SANS;
+  This_process.data_transfer.pointer_to_a_Inhomogeneous_SANS_physics_storage_struct = s;
+  This_process.probability_for_scattering_function = &Inhomogeneous_SANS_physics_my;
+  This_process.setup_function = &Inhomogeneous_SANS_setup;
+
+  sprintf (This_process.name, "%s", NAME_CURRENT_COMP);
+  This_process.process_p_interact = interact_fraction;
+  rot_copy (This_process.rotation_matrix, ROT_A_CURRENT_COMP);
+  sprintf (global_process_element.name, "%s", NAME_CURRENT_COMP);
+  global_process_element.component_index = INDEX_CURRENT_COMP;
+  global_process_element.p_scattering_process = &This_process;
+
+  struct pointer_to_global_process_list* global_process_list = &union_state_p->u_process_list;
+  add_element_to_process_list (global_process_list, global_process_element);
+%}
+
+TRACE
+%{
+%}
+
+FINALLY
+%{
+  struct Inhomogeneous_SANS_physics_storage_struct* s = &ISANS_storage;
+  if (!direct)
+    printf ("Inhomogeneous_SANS_process: %s: %ld of %ld cache entries filled, %ld lookups outside the cache range\n", NAME_CURRENT_COMP, s->n_filled,
+            s->n_nodes * (ISANS_NLAM - 1), s->n_clamped);
+  te_free (s->F_expr);
+  te_free (s->S_expr);
+  if (s->scale_te)
+    te_free (s->scale_te);
+  if (s->bg_te)
+    te_free (s->bg_te);
+  free (s->table);
+  free (s->filled);
+  union_release (NAME_CURRENT_COMP);
+%}
+
+END
