@@ -45,6 +45,10 @@ and the other discrete (Incoherent_process).
 
 The 10th example plays with some more complex tiny expressions using the
 gaussian function and the heavyside function.
+
+The 11th and 12th examples give the Inhomogeneous_incoherent_process the same
+steps as the 10 boxes of inc_linear, as a sum of heavyside functions, so they
+must reproduce inc_linear and inc_trans.
 ```
 
 ## Examples
@@ -59,6 +63,8 @@ gaussian function and the heavyside function.
 - **Test: sample=inc_trans Detector: lin_det_I=0.0785055**
 - **Test: sample=inho_trans Detector: lin_det_I=0.0791337**
 - **Test: sample=gauss_heavy Detector: lin_det_I=0.0985658**
+- **Test: sample=inho_hvs Detector: lin_det_I=0.0185066**
+- **Test: sample=inho_hvs_trans Detector: lin_det_I=0.0784756**
 
 ## Input parameters
 

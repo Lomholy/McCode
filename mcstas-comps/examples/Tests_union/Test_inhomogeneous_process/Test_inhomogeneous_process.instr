@@ -46,6 +46,10 @@
 * The 10th example plays with some more complex tiny expressions using the 
 * gaussian function and the heavyside function.
 *
+* The 11th and 12th examples give the Inhomogeneous_incoherent_process the same
+* steps as the 10 boxes of inc_linear, as a sum of heavyside functions, so they
+* must reproduce inc_linear and inc_trans.
+*
 *
 *
 * %Test: sample=thin Detector: lin_det_I=0.007387
@@ -58,6 +62,8 @@
 * %Test: sample=inc_trans Detector: lin_det_I=0.0785055
 * %Test: sample=inho_trans Detector: lin_det_I=0.0791337
 * %Test: sample=gauss_heavy Detector: lin_det_I=0.0985658
+* %Test: sample=inho_hvs Detector: lin_det_I=0.0185066
+* %Test: sample=inho_hvs_trans Detector: lin_det_I=0.0784756
 *
 *
 *
@@ -91,6 +97,7 @@ DECLARE
   int activate_inc_and_inho_linear;
   int activate_phonon;
   int activate_gauss;
+  int activate_inho_hvs;
   double rot_samples;
 
 %}
@@ -110,6 +117,8 @@ INITIALIZE
   activate_inho_linear = 0;
   activate_inc_and_inho_linear = 0;
   activate_phonon = 0;
+  activate_gauss = 0;
+  activate_inho_hvs = 0;
   rot_samples = 0;
 
   if (!strcmp("thin", sample)){
@@ -133,6 +142,12 @@ INITIALIZE
   } else if (!strcmp("inho_trans", sample)){
     rot_samples = 90;
     activate_inho_linear = 1;
+    width = 0.01;
+  } else if (!strcmp("inho_hvs", sample)){
+    activate_inho_hvs = 1;
+  } else if (!strcmp("inho_hvs_trans", sample)){
+    rot_samples = 90;
+    activate_inho_hvs = 1;
     width = 0.01;
   } else if (!strcmp("gauss_heavy", sample)){
     rot_samples = 90;
@@ -493,6 +508,32 @@ COMPONENT inho_lin_box = Union_box(
   zdepth = thick,
   material_string = "Inho_lin",
   number_of_activations = activate_inho_linear
+) AT (0,0, 0) RELATIVE arm_sample
+ROTATED (0, 0, 0) RELATIVE arm_sample
+
+
+// =================== Inhomogeneous_incoherent_process steps
+// The steps of the 10 boxes of the Incoherent_process Linear setup, at their boundaries
+COMPONENT inho_hvs_proc = Inhomogeneous_incoherent_process(
+  sigma_expr = "1.503 + 80.497/9*(hvs(z,-0.004,1,0) + hvs(z,-0.003,1,0) + hvs(z,-0.002,1,0) + hvs(z,-0.001,1,0) + hvs(z,0,1,0) + hvs(z,0.001,1,0) + hvs(z,0.002,1,0) + hvs(z,0.003,1,0) + hvs(z,0.004,1,0))",
+  unit_cell_volume = 13.827,
+  number_of_sample_points = 100
+)
+AT (0,0,0) RELATIVE arm_sample
+
+COMPONENT Inho_hvs = Union_make_material(
+    my_absorption =  100*5.08/13.827,
+    process_string="inho_hvs_proc"
+)
+AT (0,0,0) RELATIVE arm_sample
+
+COMPONENT inho_hvs_box = Union_box(
+  priority = 10,
+  xwidth=width,
+  yheight = 0.03,
+  zdepth = thick,
+  material_string = "Inho_hvs",
+  number_of_activations = activate_inho_hvs
 ) AT (0,0, 0) RELATIVE arm_sample
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
