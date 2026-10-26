@@ -22,8 +22,9 @@
 * 1 is the normal incoherent component,
 * 1 is a union box with an incoherent process
 * 1 is a union box with the inhomogeneous incoherent process
-* Then the next three setups showcase a linearly rising scattering cross section
-* in the first example, this linearly increasing cross section is implemented
+* Then the next three setups showcase a scattering cross section rising linearly
+* from that of Al (1.503 barn) to that of H (82 barn) through the box.
+* In the first example, this linearly increasing cross section is implemented
 * by 10 boxes utilizing the original inocherent process union component.
 *
 * Then the inhomogeneous incoherent component implements it with its simple syntax
@@ -45,18 +46,24 @@
 * The 10th example plays with some more complex tiny expressions using the 
 * gaussian function and the heavyside function.
 *
+* The 11th and 12th examples give the Inhomogeneous_incoherent_process the same
+* steps as the 10 boxes of inc_linear, as a sum of heavyside functions, so they
+* must reproduce inc_linear and inc_trans.
 *
 *
-* %Example: sample=thin Detector: lin_det_I=0.007387
-* %Example: sample=union_inc Detector: lin_det_I=0.007387
-* %Example: sample=union_inho Detector: lin_det_I=0.007387
-* %Example: sample=inc_linear Detector: lin_det_I=0.017457
-* %Example: sample=inho_linear Detector: lin_det_I=0.017457
-* %Example: sample=inc_and_inho Detector: lin_det_I=0.017457
-* %Example: sample=phonon thick=0.001 Detector: lin_det_I=0.00505839
-* %Example: sample=inc_trans Detector: lin_det_I=0.081029
-* %Example: sample=inho_trans Detector: lin_det_I=0.081040
-* %Example: sample=gauss_heavy Detector: lin_det_I=0.0985658
+*
+* %Test: sample=thin Detector: lin_det_I=0.007387
+* %Test: sample=union_inc Detector: lin_det_I=0.007387
+* %Test: sample=union_inho Detector: lin_det_I=0.007387
+* %Test: sample=inc_linear Detector: lin_det_I=0.0185229
+* %Test: sample=inho_linear Detector: lin_det_I=0.0185641
+* %Test: sample=inc_and_inho Detector: lin_det_I=0.018585
+* %Test: sample=phonon thick=0.001 Detector: lin_det_I=0.00505839
+* %Test: sample=inc_trans Detector: lin_det_I=0.0785055
+* %Test: sample=inho_trans Detector: lin_det_I=0.0791337
+* %Test: sample=gauss_heavy Detector: lin_det_I=0.0985658
+* %Test: sample=inho_hvs Detector: lin_det_I=0.0185066
+* %Test: sample=inho_hvs_trans Detector: lin_det_I=0.0784756
 *
 *
 *
@@ -64,7 +71,7 @@
 * %Parameters
 * thick   [m]:           Thickness of box samples
 * width   [m]:           Width of the box samples
-* sample  [string]:      Parameter choosing the specific sample. see %Examples for the options
+* sample  [string]:      Parameter choosing the specific sample. see the %Test lines for the options
 * 
 *
 * %Link
@@ -90,6 +97,7 @@ DECLARE
   int activate_inc_and_inho_linear;
   int activate_phonon;
   int activate_gauss;
+  int activate_inho_hvs;
   double rot_samples;
 
 %}
@@ -109,6 +117,8 @@ INITIALIZE
   activate_inho_linear = 0;
   activate_inc_and_inho_linear = 0;
   activate_phonon = 0;
+  activate_gauss = 0;
+  activate_inho_hvs = 0;
   rot_samples = 0;
 
   if (!strcmp("thin", sample)){
@@ -132,6 +142,12 @@ INITIALIZE
   } else if (!strcmp("inho_trans", sample)){
     rot_samples = 90;
     activate_inho_linear = 1;
+    width = 0.01;
+  } else if (!strcmp("inho_hvs", sample)){
+    activate_inho_hvs = 1;
+  } else if (!strcmp("inho_hvs_trans", sample)){
+    rot_samples = 90;
+    activate_inho_hvs = 1;
     width = 0.01;
   } else if (!strcmp("gauss_heavy", sample)){
     rot_samples = 90;
@@ -254,9 +270,10 @@ COMPONENT inho_box = Union_box(
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
 // =================== Incoherent_process Linear
-// Linear means a gradient from 5.08 to 50 over the 10 cm of the box
+// Linear means a gradient from 1.503 (Al) to 82 (H) over the thickness of the box,
+// 80.497/9 per slab from the first slab to the last
 COMPONENT inc_proc_0 = Incoherent_process(
-  sigma = 5.08, unit_cell_volume = 13.827
+  sigma = 1.503, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -277,7 +294,7 @@ COMPONENT inc_box_0 = Union_box(
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT inc_proc_1 = Incoherent_process(
-  sigma = 5.08 + 9.58/2, unit_cell_volume = 13.827
+  sigma = 1.503 + 80.497/9, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -299,7 +316,7 @@ ROTATED (0, 0, 0) RELATIVE arm_sample
 
 
 COMPONENT inc_proc_2 = Incoherent_process(
-  sigma = 5.08 + 9.58/2*2, unit_cell_volume = 13.827
+  sigma = 1.503 + 80.497/9*2, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -320,7 +337,7 @@ COMPONENT inc_box_2 = Union_box(
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT inc_proc_3 = Incoherent_process(
-  sigma = 5.08 + 9.58/2*3, unit_cell_volume = 13.827
+  sigma = 1.503 + 80.497/9*3, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -341,7 +358,7 @@ COMPONENT inc_box_3 = Union_box(
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT inc_proc_4 = Incoherent_process(
-  sigma = 5.08 + 9.58/2*4, unit_cell_volume = 13.827
+  sigma = 1.503 + 80.497/9*4, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -362,7 +379,7 @@ COMPONENT inc_box_4 = Union_box(
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT inc_proc_5 = Incoherent_process(
-  sigma = 5.08 + 9.58/2*5, unit_cell_volume = 13.827
+  sigma = 1.503 + 80.497/9*5, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -384,7 +401,7 @@ ROTATED (0, 0, 0) RELATIVE arm_sample
 
 
 COMPONENT inc_proc_6 = Incoherent_process(
-  sigma = 5.08 + 9.58/2*6, unit_cell_volume = 13.827
+  sigma = 1.503 + 80.497/9*6, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -405,7 +422,7 @@ COMPONENT inc_box_6 = Union_box(
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT inc_proc_7 = Incoherent_process(
-  sigma = 5.08 + 9.58/2*7, unit_cell_volume = 13.827
+  sigma = 1.503 + 80.497/9*7, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -427,7 +444,7 @@ ROTATED (0, 0, 0) RELATIVE arm_sample
 
 
 COMPONENT inc_proc_8 = Incoherent_process(
-  sigma = 5.08 + 9.58/2*8, unit_cell_volume = 13.827
+  sigma = 1.503 + 80.497/9*8, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -448,7 +465,7 @@ COMPONENT inc_box_8 = Union_box(
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT inc_proc_9 = Incoherent_process(
-  sigma = 5.08 + 9.58/2*9, unit_cell_volume = 13.827
+  sigma = 1.503 + 80.497/9*9, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -472,7 +489,7 @@ ROTATED (0, 0, 0) RELATIVE arm_sample
 
 // =================== Inhomogeneous_incoherent_process Linear
 COMPONENT inho_lin_proc = Inhomogeneous_incoherent_process(
-  sigma_expr = "5.08 + 9.58/2*((z+0.0045)*1000)", unit_cell_volume = 13.827,
+  sigma_expr = "1.503 + 80.497/9*((z+0.0045)*1000)", unit_cell_volume = 13.827,
   // verbose=1,
   number_of_sample_points = 10
 )
@@ -495,15 +512,41 @@ COMPONENT inho_lin_box = Union_box(
 ROTATED (0, 0, 0) RELATIVE arm_sample
 
 
+// =================== Inhomogeneous_incoherent_process steps
+// The steps of the 10 boxes of the Incoherent_process Linear setup, at their boundaries
+COMPONENT inho_hvs_proc = Inhomogeneous_incoherent_process(
+  sigma_expr = "1.503 + 80.497/9*(hvs(z,-0.004,1,0) + hvs(z,-0.003,1,0) + hvs(z,-0.002,1,0) + hvs(z,-0.001,1,0) + hvs(z,0,1,0) + hvs(z,0.001,1,0) + hvs(z,0.002,1,0) + hvs(z,0.003,1,0) + hvs(z,0.004,1,0))",
+  unit_cell_volume = 13.827,
+  number_of_sample_points = 100
+)
+AT (0,0,0) RELATIVE arm_sample
+
+COMPONENT Inho_hvs = Union_make_material(
+    my_absorption =  100*5.08/13.827,
+    process_string="inho_hvs_proc"
+)
+AT (0,0,0) RELATIVE arm_sample
+
+COMPONENT inho_hvs_box = Union_box(
+  priority = 10,
+  xwidth=width,
+  yheight = 0.03,
+  zdepth = thick,
+  material_string = "Inho_hvs",
+  number_of_activations = activate_inho_hvs
+) AT (0,0, 0) RELATIVE arm_sample
+ROTATED (0, 0, 0) RELATIVE arm_sample
+
+
 // ============================ Inhomogeneous + homogenous
 
 COMPONENT only_inc_proc = Incoherent_process(
-  sigma = 5.08, unit_cell_volume = 13.827
+  sigma = 1.503, unit_cell_volume = 13.827
 )
 AT (0,0,0) RELATIVE PREVIOUS
 
 COMPONENT only_inho_proc = Inhomogeneous_incoherent_process(
-  sigma_expr = "9.58/2*((z+0.0045)*1000)", unit_cell_volume = 13.827,
+  sigma_expr = "80.497/9*((z+0.0045)*1000)", unit_cell_volume = 13.827,
   // verbose=1,
   number_of_sample_points = 10
 )
