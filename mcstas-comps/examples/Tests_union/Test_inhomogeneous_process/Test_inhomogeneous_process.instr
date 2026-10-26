@@ -284,7 +284,7 @@ COMPONENT Inco_0 = Union_make_material(
 AT (0,0,0) RELATIVE arm_sample
 
 COMPONENT inc_box_0 = Union_box(
-  priority = 10,
+  priority = 100,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick/10 - eps,
@@ -305,7 +305,7 @@ COMPONENT Inco_1 = Union_make_material(
 AT (0,0,0) RELATIVE arm_sample
 
 COMPONENT inc_box_1 = Union_box(
-  priority = 11,
+  priority = 101,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick/10 - eps,
@@ -327,7 +327,7 @@ COMPONENT Inco_2 = Union_make_material(
 AT (0,0,0) RELATIVE arm_sample
 
 COMPONENT inc_box_2 = Union_box(
-  priority = 12,
+  priority = 102,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick/10 - eps,
@@ -348,7 +348,7 @@ COMPONENT Inco_3 = Union_make_material(
 AT (0,0,0) RELATIVE arm_sample
 
 COMPONENT inc_box_3 = Union_box(
-  priority = 13,
+  priority = 103,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick/10 - eps,
@@ -369,7 +369,7 @@ COMPONENT Inco_4 = Union_make_material(
 AT (0,0,0) RELATIVE arm_sample
 
 COMPONENT inc_box_4 = Union_box(
-  priority = 14,
+  priority = 104,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick/10 - eps,
@@ -390,7 +390,7 @@ COMPONENT Inco_5 = Union_make_material(
 AT (0,0,0) RELATIVE arm_sample
 
 COMPONENT inc_box_5 = Union_box(
-  priority = 15,
+  priority = 105,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick/10 - eps,
@@ -412,7 +412,7 @@ COMPONENT Inco_6 = Union_make_material(
 AT (0,0,0) RELATIVE arm_sample
 
 COMPONENT inc_box_6 = Union_box(
-  priority = 16,
+  priority = 106,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick/10 - eps,
@@ -433,7 +433,7 @@ COMPONENT Inco_7 = Union_make_material(
 AT (0,0,0) RELATIVE arm_sample
 
 COMPONENT inc_box_7 = Union_box(
-  priority = 17,
+  priority = 107,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick/10 - eps,
@@ -455,7 +455,7 @@ COMPONENT Inco_8 = Union_make_material(
 AT (0,0,0) RELATIVE arm_sample
 
 COMPONENT inc_box_8 = Union_box(
-  priority = 18,
+  priority = 108,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick/10 - eps,
@@ -476,7 +476,7 @@ COMPONENT Inco_9 = Union_make_material(
 AT (0,0,0) RELATIVE arm_sample
 
 COMPONENT inc_box_9 = Union_box(
-  priority = 19,
+  priority = 109,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick/10 - eps,
@@ -617,7 +617,7 @@ COMPONENT gauss_mat = Union_make_material(
 AT (0,0,0) RELATIVE PREVIOUS
 
 COMPONENT  gauss_box = Union_box(
-  priority = 163,
+  priority = 13.5,
   xwidth=width,
   yheight = 0.03,
   zdepth = thick,
