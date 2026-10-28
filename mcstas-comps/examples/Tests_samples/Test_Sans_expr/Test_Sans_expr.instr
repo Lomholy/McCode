@@ -21,18 +21,32 @@
 *   sample_choice=2: Sans_expr with the hard-sphere form factor as an expression
 *   sample_choice=3: Sans_expr with the same form factor written in qx, qy, qz
 *
-* All choices should give the same intensity on the detectors. Choice 3 checks the
-* anisotropic code path of Sans_expr, which must agree with choice 2 for an
+* All these choices should give the same intensity on the detectors. Choice 3 checks
+* the anisotropic code path of Sans_expr, which must agree with choice 2 for an
 * isotropic model.
+*
+* Choices 4 and 5 check Sigma_s of a tilted anisotropic sample: a strongly scattering
+* sphere (radius 5 mm, Sigma_s about 100 /m) with an anisotropic Gaussian
+* exp(-((qx p1)^2 + (qy p2)^2 + (qz p3)^2)/2), p1 = 200, p2 = 100, p3 = 20 AA:
+*
+*   sample_choice=4: Sans_expr rotated by 30 deg about y
+*   sample_choice=5: Sans_expr not rotated, with the expression written in the rotated
+*                    coordinates (p4 = cos 30 deg, p5 = sin 30 deg)
+*
+* Both describe the same sample, so they must give the same intensities. In choice 4
+* the beam is tilted by 30 deg in the frame of the component, where Sigma_s is about
+* 15 % larger than for a beam along its z axis.
 *
 * %Example: sample_choice=0 Detector: psd_det_I=9.68222e+06
 * %Example: sample_choice=1 Detector: psd_det_I=9.65918e+06
-* %Example: sample_choice=2 Detector: psd_det_I=9.68222e+06
-* %Example: sample_choice=3 Detector: psd_det_I=9.68222e+06
+* %Example: sample_choice=2 Detector: psd_det_I=9.68223e+06
+* %Example: sample_choice=3 Detector: psd_det_I=9.68223e+06
+* %Example: sample_choice=4 Detector: psd_det_I=8.87947e+06
+* %Example: sample_choice=5 Detector: psd_det_I=8.87937e+06
 *
 * %Parameters
 * E_i: [meV] Energy of the simulated neutrons.
-* sample_choice: [1] Sample to use: 0 Sans_spheres, 1 SANS_spheres2, 2 Sans_expr (q), 3 Sans_expr (qx, qy, qz).
+* sample_choice: [1] Sample to use: 0 Sans_spheres, 1 SANS_spheres2, 2 Sans_expr (q), 3 Sans_expr (qx, qy, qz), 4 and 5 tilted anisotropic Sans_expr.
 * flux_mult: [1] Factor multiplied onto the source flux.
 *
 * %Link
@@ -52,6 +66,7 @@ DECLARE
   double sphere_phi;
   double sphere_drho;
   double sphere_scale;
+  double gauss_scale;
 %}
 
 INITIALIZE
@@ -66,6 +81,7 @@ INITIALIZE
   sphere_drho = 5;
   /* Phi * Delta_rho^2 * V in fm^2/AA^3 = m^-1 */
   sphere_scale = sphere_phi * sphere_drho * sphere_drho * 4.0 * PI / 3.0 * pow (sphere_R, 3);
+  gauss_scale = 1.3e6;
 %}
 
 TRACE
@@ -101,7 +117,7 @@ COMPONENT sans_spheres = Sans_spheres(
     R = sphere_R, Phi = sphere_phi, Delta_rho = sphere_drho, sigma_abs = 0,
     xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
     focus_xw = focus_w, focus_yh = focus_h,
-    target_index = 6
+    target_index = 8
 ) WHEN (sample_choice == 0)
 AT (0, 0, 0) RELATIVE arm_sample
 
@@ -120,7 +136,7 @@ COMPONENT sans_expr_q = Sans_expr(
     p1 = sphere_R, scale = sphere_scale, sigma_abs = 0,
     xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
     focus_xw = focus_w, focus_yh = focus_h,
-    target_index = 4
+    target_index = 6
 ) WHEN (sample_choice == 2)
 AT (0, 0, 0) RELATIVE arm_sample
 
@@ -130,8 +146,29 @@ COMPONENT sans_expr_qvec = Sans_expr(
     p1 = sphere_R, scale = sphere_scale, sigma_abs = 0,
     xwidth = samp_w, yheight = samp_h, zdepth = samp_d,
     focus_xw = focus_w, focus_yh = focus_h,
-    target_index = 3
+    target_index = 5
 ) WHEN (sample_choice == 3)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT sans_expr_tilted = Sans_expr(
+    form_factor = "exp(-((qx*p1)^2 + (qy*p2)^2 + (qz*p3)^2)/2)",
+    structure_factor = "1",
+    p1 = 200, p2 = 100, p3 = 20, scale = gauss_scale, sigma_abs = 0,
+    radius = 0.005,
+    focus_xw = focus_w, focus_yh = focus_h,
+    target_index = 4
+) WHEN (sample_choice == 4)
+AT (0, 0, 0) RELATIVE arm_sample
+ROTATED (0, 30, 0) RELATIVE arm_sample
+
+COMPONENT sans_expr_rotated_expr = Sans_expr(
+    form_factor = "exp(-(((p4*qx - p5*qz)*p1)^2 + (qy*p2)^2 + ((p5*qx + p4*qz)*p3)^2)/2)",
+    structure_factor = "1",
+    p1 = 200, p2 = 100, p3 = 20, p4 = cos (30 * DEG2RAD), p5 = sin (30 * DEG2RAD), scale = gauss_scale, sigma_abs = 0,
+    radius = 0.005,
+    focus_xw = focus_w, focus_yh = focus_h,
+    target_index = 3
+) WHEN (sample_choice == 5)
 AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT total_scat = PSD_monitor_4PI(

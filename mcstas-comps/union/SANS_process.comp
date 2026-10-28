@@ -44,10 +44,16 @@
 *
 *   mu(k) = 1/k^2 int_0^2k q dq int_0^2pi dphi dSigma/dOmega(q(q,phi))
 *
-* which is tabulated in INITIALIZE for wavelengths 1..30 AA and interpolated
-* in wavelength, as in Sans_spheres.comp. The phi integral assumes the incident
-* wave vector is along the process z axis; if the expressions only use q it is
-* done analytically and the table is exact.
+* integrated over the Ewald sphere of the wave vector k, and tabulated for
+* wavelengths 1..30 AA, as in Sans_spheres.comp. If the expressions only use q, mu
+* does not depend on the direction of k, and is tabulated in INITIALIZE. Otherwise
+* it is tabulated also over the direction of k in the process frame (n_dir_theta
+* polar angles and n_dir_phi azimuths), each node computed the first time a ray
+* needs it, and interpolated linearly in wavelength and direction, so a tilted or
+* rotated anisotropic sample has the right mu along every path. The q integral uses
+* log grids from both ends of the Ewald sphere (q from 0, and sqrt(4k^2 - q^2) from
+* 0, up to q = sqrt(2) k), so features near forward and near backward scattering
+* are both resolved.
 *
 * In a scattering event the outgoing direction is drawn uniformly within the
 * focusing solid angle dOmega of the geometry, and the weight is multiplied by
@@ -80,7 +86,9 @@
 * p6: [1]                   Generic numeric constant, meaning defined by the user's expressions
 * scale: [m^-1 sr^-1]       Prefactor multiplying F^2*S
 * background: [m^-1 sr^-1]  Flat background added to the cross-section
-* n_phi: [1]                Number of azimuthal points used to tabulate mu for anisotropic expressions
+* n_phi: [1]                Number of azimuthal points around k in the integral of mu for anisotropic expressions
+* n_dir_theta: [1]          Number of polar angles of k, from 0 to 180 deg, in the mu table for anisotropic expressions
+* n_dir_phi: [1]            Number of azimuths of k in the mu table for anisotropic expressions
 * interact_fraction: [1]    How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
 *
 * CALCULATED PARAMETERS:
@@ -97,7 +105,7 @@ DEFINE COMPONENT SANS_process
 
 SETTING PARAMETERS(string form_factor="1", string structure_factor="1",
 p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
-scale=1, background=0, int n_phi=64, interact_fraction=-1)
+scale=1, background=0, int n_phi=64, int n_dir_theta=91, int n_dir_phi=72, interact_fraction=-1)
 
 
 SHARE
@@ -114,7 +122,16 @@ SHARE
     double pars[6];   // p1..p6 bound in the expressions
     double dsdo_scale;
     double dsdo_background;
-    double Idsdw[31]; // int q dq <dSigma/dOmega>_phi for wavelengths 1..30 AA
+    // Tables of int q dq <dSigma/dOmega>_phi over the Ewald sphere, for wavelengths 1..30 AA:
+    // iso for expressions in q only, otherwise I over directions of k in the process frame
+    // (n_polar polar angles from 0 to 180 deg, n_azim azimuths), computed when first needed
+    int Nphi;
+    int q_only;
+    double iso[31];
+    int n_polar;
+    int n_azim;
+    double* I;
+    char* filled;
   };
 
   /* Compiles expr_str with q, qx, qy, qz bound to qv[0..3] and p1..p6 bound to pars[0..5] */
@@ -159,28 +176,122 @@ SHARE
     return s->dsdo_scale * F * F * S + s->dsdo_background;
   };
 
-  /* Total scattering cross-section [m^-1] for wavevector length k [AA^-1], interpolated in wavelength */
+  /* int q dq <dSigma/dOmega>_phi for k = k khat [AA^-1], with
+   * q(q,phi) = q^2/2k khat - qperp (cos(phi) e1 + sin(phi) e2), qperp = q sqrt(1 - q^2/4k^2),
+   * where e1, e2 are the theta and phi unit vectors of khat (x and y for khat along z). */
   double
-  SANS_process_mu (struct SANS_physics_storage_struct* s, double k) {
+  SANS_process_Idsdw (struct SANS_physics_storage_struct* s, double k, Coords khat, Coords e1, Coords e2) {
+    // Log grids from both ends of the Ewald sphere, so that features near forward and
+    // near backward scattering are both resolved: q from 0 to sqrt(2) k, and
+    // Q = sqrt(4k^2 - q^2) from 0 to sqrt(2) k, with q dq = Q dQ
+    double Qminl = log10 (0.0000001);
+    double Qmidl = log10 (sqrt (2.0) * k);
+    int istp = floor ((Qmidl - Qminl) * 300.0 + 0.5);
+    double step = (Qmidl - Qminl) / istp;
+    double Isq = 0.0;
+    for (int half = 0; half < 2; half++) {
+      double umin = 0.0;
+      for (int kkk = 0; kkk <= istp; kkk++) {
+        double umax = pow (10.0, Qminl + kkk * step);
+        double u = 0.5 * (umin + umax);
+        double q, qpar, qperp;
+        if (half == 0) {
+          q = u;
+          qpar = q * q / (2.0 * k);
+          qperp = q * sqrt (fmax (0.0, 1.0 - q * q / (4.0 * k * k)));
+        } else {
+          q = sqrt (fmax (0.0, 4.0 * k * k - u * u));
+          qpar = 2.0 * k - u * u / (2.0 * k);
+          qperp = q * u / (2.0 * k);
+        }
+        double phi_sum = 0.0;
+        for (int jjj = 0; jjj < s->Nphi; jjj++) {
+          double phi = 2.0 * PI * (jjj + 0.5) / s->Nphi;
+          double c = -qperp * cos (phi);
+          double pt = -qperp * sin (phi);
+          phi_sum += SANS_process_dSigdOmega (s, q, qpar * khat.x + c * e1.x + pt * e2.x, qpar * khat.y + c * e1.y + pt * e2.y,
+                                                      qpar * khat.z + c * e1.z + pt * e2.z);
+        }
+        Isq += phi_sum / s->Nphi * u * (umax - umin);
+        umin = umax;
+      }
+    }
+    return Isq;
+  };
+
+  /* Direction table node of wavelength ilam [AA], polar index it and azimuth index ip */
+  double
+  SANS_process_node (struct SANS_physics_storage_struct* s, int ilam, int it, int ip) {
+    long index = ((long)ilam * s->n_polar + it) * s->n_azim + ip;
+    if (!s->filled[index]) {
+      double theta = PI * it / (s->n_polar - 1);
+      double phi = 2.0 * PI * ip / s->n_azim;
+      Coords khat = coords_set (sin (theta) * cos (phi), sin (theta) * sin (phi), cos (theta));
+      Coords e1 = coords_set (cos (theta) * cos (phi), cos (theta) * sin (phi), -sin (theta));
+      Coords e2 = coords_set (-sin (phi), cos (phi), 0);
+      s->I[index] = SANS_process_Idsdw (s, 2.0 * PI / ilam, khat, e1, e2);
+      s->filled[index] = 1;
+    }
+    return s->I[index];
+  };
+
+  /* int q dq <dSigma/dOmega>_phi at wavelength ilam [AA] for k along (kx, ky, kz),
+   * interpolated linearly in the polar angle and azimuth of k */
+  double
+  SANS_process_Idsdw_at (struct SANS_physics_storage_struct* s, int ilam, double kx, double ky, double kz) {
+    if (s->q_only)
+      return s->iso[ilam];
+    double k = sqrt (kx * kx + ky * ky + kz * kz);
+    double ft = acos (fmax (-1.0, fmin (1.0, kz / k))) / PI * (s->n_polar - 1);
+    int it = (int)floor (ft);
+    if (it > s->n_polar - 2)
+      it = s->n_polar - 2;
+    ft -= it;
+    double phi = atan2 (ky, kx);
+    if (phi < 0)
+      phi += 2.0 * PI;
+    double fp = phi / (2.0 * PI) * s->n_azim;
+    int ip = (int)floor (fp);
+    fp -= ip;
+    ip %= s->n_azim;
+    int ip2 = (ip + 1) % s->n_azim;
+    // Nodes with zero weight are not computed
+    double I = 0;
+    if ((1 - ft) * (1 - fp) > 0)
+      I += (1 - ft) * (1 - fp) * SANS_process_node (s, ilam, it, ip);
+    if ((1 - ft) * fp > 0)
+      I += (1 - ft) * fp * SANS_process_node (s, ilam, it, ip2);
+    if (ft * (1 - fp) > 0)
+      I += ft * (1 - fp) * SANS_process_node (s, ilam, it + 1, ip);
+    if (ft * fp > 0)
+      I += ft * fp * SANS_process_node (s, ilam, it + 1, ip2);
+    return I;
+  };
+
+  /* Total scattering cross-section [m^-1] for k = (kx, ky, kz) [AA^-1] in the process frame,
+   * interpolated linearly in wavelength */
+  double
+  SANS_process_mu (struct SANS_physics_storage_struct* s, double kx, double ky, double kz) {
+    double k = sqrt (kx * kx + ky * ky + kz * kz);
     double lambda = 2.0 * PI / k;
     double I;
-    int Ilam, Ilam2;
     if (lambda <= 1.0)
-      I = s->Idsdw[1];
+      I = SANS_process_Idsdw_at (s, 1, kx, ky, kz);
     else if (lambda >= 30.0)
-      I = s->Idsdw[30];
+      I = SANS_process_Idsdw_at (s, 30, kx, ky, kz);
     else {
-      Ilam = (int)floor (lambda);
-      Ilam2 = Ilam + 1;
-      I = (Ilam2 - lambda) * s->Idsdw[Ilam] + (lambda - Ilam) * s->Idsdw[Ilam2];
+      int Ilam = (int)floor (lambda);
+      double w = lambda - Ilam;
+      I = (1 - w) * SANS_process_Idsdw_at (s, Ilam, kx, ky, kz);
+      if (w > 0)
+        I += w * SANS_process_Idsdw_at (s, Ilam + 1, kx, ky, kz);
     }
     return 2.0 * PI * I / (k * k);
   };
 
   int
   SANS_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data, _class_particle* _particle) {
-    double k = sqrt (k_initial[0] * k_initial[0] + k_initial[1] * k_initial[1] + k_initial[2] * k_initial[2]);
-    *my = SANS_process_mu (data_transfer.pointer_to_a_SANS_physics_storage_struct, k);
+    *my = SANS_process_mu (data_transfer.pointer_to_a_SANS_physics_storage_struct, k_initial[0], k_initial[1], k_initial[2]);
     return 1;
   };
 
@@ -203,7 +314,7 @@ SHARE
     double qz = k_initial[2] - k_final[2];
     double q = sqrt (qx * qx + qy * qy + qz * qz);
 
-    double mu = SANS_process_mu (s, k_length);
+    double mu = SANS_process_mu (s, k_initial[0], k_initial[1], k_initial[2]);
     if (mu <= 0)
       return 0;
     *weight *= solid_angle * SANS_process_dSigdOmega (s, q, qx, qy, qz) / mu;
@@ -253,36 +364,25 @@ INITIALIZE
   SANS_storage.dsdo_background = background;
   SANS_storage.F_expr = SANS_process_compile (form_factor, SANS_storage.q_vars, SANS_storage.pars, NAME_CURRENT_COMP, "form_factor");
   SANS_storage.S_expr = SANS_process_compile (structure_factor, SANS_storage.q_vars, SANS_storage.pars, NAME_CURRENT_COMP, "structure_factor");
-  int Nphi = (SANS_process_is_isotropic (form_factor, SANS_storage.pars) && SANS_process_is_isotropic (structure_factor, SANS_storage.pars)) ? 1 : n_phi;
-
-  /* Idsdw[lambda] = int q dq <dSigma/dOmega>_phi for lambda = 1..30 AA, with k_i along the process z axis.
-   * q(q,phi) = (-qperp cos(phi), -qperp sin(phi), q^2/2k), qperp = q sqrt(1 - q^2/4k^2). */
-  int iii, kkk, jjj;
-  double Qminl = log10 (0.0000001);
-  double Qmaxd = 100;
-  int istp = floor ((log10 (Qmaxd) - Qminl) * 300.0 + 0.5);
-  double q, Isq, k, qpar, qperp, phi, phi_sum, qmin, qmax, step;
-
-  SANS_storage.Idsdw[0] = 0;
-  for (iii = 1; iii <= 30; iii++) {
-    k = 2.0 * PI / iii;
-    Isq = 0.0;
-    qmin = 0.0;
-    step = (log10 (fmin (Qmaxd, 4.0 * PI / iii)) - Qminl) / istp;
-    for (kkk = 0; kkk <= istp; kkk++) {
-      qmax = pow (10.0, Qminl + kkk * step);
-      q = 0.5 * (qmin + qmax);
-      qpar = q * q / (2.0 * k);
-      qperp = q * sqrt (fmax (0.0, 1.0 - q * q / (4.0 * k * k)));
-      phi_sum = 0.0;
-      for (jjj = 0; jjj < Nphi; jjj++) {
-        phi = 2.0 * PI * (jjj + 0.5) / Nphi;
-        phi_sum += SANS_process_dSigdOmega (&SANS_storage, q, -qperp * cos (phi), -qperp * sin (phi), qpar);
-      }
-      Isq += phi_sum / Nphi * q * (qmax - qmin);
-      qmin = qmax;
-    }
-    SANS_storage.Idsdw[iii] = Isq;
+  SANS_storage.q_only = SANS_process_is_isotropic (form_factor, SANS_storage.pars) && SANS_process_is_isotropic (structure_factor, SANS_storage.pars);
+  SANS_storage.Nphi = SANS_storage.q_only ? 1 : n_phi;
+  SANS_storage.n_polar = n_dir_theta;
+  SANS_storage.n_azim = n_dir_phi;
+  SANS_storage.I = NULL;
+  SANS_storage.filled = NULL;
+  if (SANS_storage.q_only) {
+    // Expressions in q only: the integrals do not depend on the direction of k
+    SANS_storage.iso[0] = 0;
+    for (int ilam = 1; ilam <= 30; ilam++)
+      SANS_storage.iso[ilam] = SANS_process_Idsdw (&SANS_storage, 2.0 * PI / ilam, coords_set (0, 0, 1), coords_set (1, 0, 0), coords_set (0, 1, 0));
+  } else {
+    if (n_dir_theta < 2 || n_dir_phi < 1)
+      exit (fprintf (stderr, "SANS_process: %s: n_dir_theta must be at least 2 and n_dir_phi at least 1.\n", NAME_CURRENT_COMP));
+    long n_nodes = 31L * n_dir_theta * n_dir_phi;
+    SANS_storage.I = malloc (n_nodes * sizeof (double));
+    SANS_storage.filled = calloc (n_nodes, 1);
+    if (!SANS_storage.I || !SANS_storage.filled)
+      exit (fprintf (stderr, "SANS_process: %s: could not allocate the mu table.\n", NAME_CURRENT_COMP));
   }
 
   scattering_process_struct_init (&This_process);
@@ -313,6 +413,8 @@ FINALLY
 %{
   te_free (SANS_storage.F_expr);
   te_free (SANS_storage.S_expr);
+  free (SANS_storage.I);
+  free (SANS_storage.filled);
   union_release (NAME_CURRENT_COMP);
 %}
 
