@@ -35,11 +35,13 @@
 *
 *******************************************************************************/
 
-%include "tinyexpr.h"
-%include "tinyexpr.c"
+%include "tinyexpr"
 
 #ifndef SANS_EXPR_LIB_H
 #define SANS_EXPR_LIB_H
+
+// Number of variables of the expressions: q, qx, qy, qz, p1..p6
+#define SANS_EXPR_NVARS 10
 
 // Largest |q| [AA^-1] of the small-angle scattering
 #ifndef SANS_EXPR_Q_MAX
@@ -65,7 +67,7 @@ struct sans_expr_table {
 };
 
 te_expr* sans_expr_compile (const char* expr_str, double* qv, double* pars, const char* component, const char* comp_name, const char* which);
-int sans_expr_is_isotropic (const char* expr_str, double* pars);
+int sans_expr_is_isotropic (const char* expr_str, double* qv, double* pars);
 double sans_expr_dSigdOmega (struct sans_expr_table* t, double q, double qx, double qy, double qz);
 double sans_expr_largest (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, double q_low, double q_high, int n_q,
                           double* at_q);

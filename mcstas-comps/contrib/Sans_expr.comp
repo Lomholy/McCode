@@ -53,6 +53,7 @@
 * attenuation uses Sigma_s
 * of the incoming direction on the way in and of the outgoing direction on the
 * way out, so a tilted or rotated anisotropic sample is attenuated correctly.
+* The expressions, cross-sections and tables are handled by share/sans-expr-lib.
 *
 * The component is for small-angle scattering: only |q| <= 0.5 AA^-1 enters the total
 * cross-section, and INITIALIZE stops the simulation if scale*F^2*S at |q| > 0.5 AA^-1
@@ -202,7 +203,7 @@ INITIALIZE
 
   F_expr = sans_expr_compile (form_factor, q_vars, pars, "Sans_expr", NAME_CURRENT_COMP, "form_factor");
   S_expr = sans_expr_compile (structure_factor, q_vars, pars, "Sans_expr", NAME_CURRENT_COMP, "structure_factor");
-  int q_only = sans_expr_is_isotropic (form_factor, pars) && sans_expr_is_isotropic (structure_factor, pars);
+  int q_only = sans_expr_is_isotropic (form_factor, q_vars, pars) && sans_expr_is_isotropic (structure_factor, q_vars, pars);
   sans_expr_check_large_q (F_expr, S_expr, q_vars, scale, q_only, "Sans_expr", NAME_CURRENT_COMP);
   sans_expr_table_init (&table, F_expr, S_expr, q_vars, scale, background, q_only, n_phi, n_dir_theta, n_dir_phi, "Sans_expr",
                         NAME_CURRENT_COMP);

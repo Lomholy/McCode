@@ -11,15 +11,24 @@
 #ifndef SANS_EXPR_LIB_C
 #define SANS_EXPR_LIB_C
 
-/* Compiles expr_str with q, qx, qy, qz bound to qv[0..3] and p1..p6 bound to pars[0..5] */
+// Variables of the expressions: q, qx, qy, qz bound to qv[0..3] and p1..p6 bound to pars[0..5]
+static const char *const sans_expr_names[SANS_EXPR_NVARS] = { "q", "qx", "qy", "qz", "p1", "p2", "p3", "p4", "p5", "p6" };
+
+static void
+sans_expr_addresses (double *qv, double *pars, double **addresses) {
+  for (int i = 0; i < 4; i++)
+    addresses[i] = &qv[i];
+  for (int i = 0; i < 6; i++)
+    addresses[4 + i] = &pars[i];
+}
+
 te_expr *
 sans_expr_compile (const char *expr_str, double *qv, double *pars,
                    const char *component, const char *comp_name, const char *which) {
+  double *addresses[SANS_EXPR_NVARS];
+  sans_expr_addresses (qv, pars, addresses);
   int err;
-  te_variable vars[10] = { { "q", &qv[0] },    { "qx", &qv[1] },   { "qy", &qv[2] },   { "qz", &qv[3] },
-                           { "p1", &pars[0] }, { "p2", &pars[1] }, { "p3", &pars[2] },
-                           { "p4", &pars[3] }, { "p5", &pars[4] }, { "p6", &pars[5] } };
-  te_expr *out = te_compile (expr_str, vars, 10, &err);
+  te_expr *out = te_compile_vars (expr_str, sans_expr_names, addresses, SANS_EXPR_NVARS, -1, &err);
   if (!out)
     exit (fprintf (stderr,
                    "%s: %s: failed to parse %s expression \"%s\" "
@@ -28,17 +37,14 @@ sans_expr_compile (const char *expr_str, double *qv, double *pars,
   return out;
 }
 
-/* Returns 1 if expr_str compiles without qx, qy, qz, i.e. depends on |q| only */
+/* Returns 1 if expr_str needs none of qx, qy, qz, i.e. depends on |q| only */
 int
-sans_expr_is_isotropic (const char *expr_str, double *pars) {
-  double q_dummy = 1.0;
-  int err;
-  te_variable vars[7] = { { "q", &q_dummy },   { "p1", &pars[0] }, { "p2", &pars[1] }, { "p3", &pars[2] },
-                          { "p4", &pars[3] }, { "p5", &pars[4] }, { "p6", &pars[5] } };
-  te_expr *e = te_compile (expr_str, vars, 7, &err);
-  if (!e)
-    return 0;
-  te_free (e);
+sans_expr_is_isotropic (const char *expr_str, double *qv, double *pars) {
+  double *addresses[SANS_EXPR_NVARS];
+  sans_expr_addresses (qv, pars, addresses);
+  for (int var = 1; var <= 3; var++)
+    if (te_depends_on (expr_str, sans_expr_names, addresses, SANS_EXPR_NVARS, var))
+      return 0;
   return 1;
 }
 

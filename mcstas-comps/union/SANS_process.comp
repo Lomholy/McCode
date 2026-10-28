@@ -53,6 +53,7 @@
 * rotated anisotropic sample has the right mu along every path. The q integral runs
 * over |q| <= 0.5 AA^-1, with log grids from both ends of the Ewald sphere (q from 0,
 * and sqrt(4k^2 - q^2) from 0, up to q = sqrt(2) k) where that range reaches them.
+* The expressions, cross-sections and tables are handled by share/sans-expr-lib.
 *
 * In a scattering event the outgoing direction is drawn uniformly within the
 * focusing solid angle dOmega of the geometry, and the weight is multiplied by
@@ -196,7 +197,8 @@ INITIALIZE
   SANS_storage.pars[5] = p6;
   te_expr* F_expr = sans_expr_compile (form_factor, SANS_storage.q_vars, SANS_storage.pars, "SANS_process", NAME_CURRENT_COMP, "form_factor");
   te_expr* S_expr = sans_expr_compile (structure_factor, SANS_storage.q_vars, SANS_storage.pars, "SANS_process", NAME_CURRENT_COMP, "structure_factor");
-  int q_only = sans_expr_is_isotropic (form_factor, SANS_storage.pars) && sans_expr_is_isotropic (structure_factor, SANS_storage.pars);
+  int q_only = sans_expr_is_isotropic (form_factor, SANS_storage.q_vars, SANS_storage.pars)
+               && sans_expr_is_isotropic (structure_factor, SANS_storage.q_vars, SANS_storage.pars);
   sans_expr_check_large_q (F_expr, S_expr, SANS_storage.q_vars, scale, q_only, "SANS_process", NAME_CURRENT_COMP);
   sans_expr_table_init (&SANS_storage.table, F_expr, S_expr, SANS_storage.q_vars, scale, background, q_only, n_phi, n_dir_theta, n_dir_phi,
                         "SANS_process", NAME_CURRENT_COMP);
