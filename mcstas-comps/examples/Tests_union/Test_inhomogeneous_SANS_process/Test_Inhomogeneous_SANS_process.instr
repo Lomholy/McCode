@@ -40,15 +40,15 @@
 * The detectors count rays scattered exactly once. psd_det_early and psd_det_late
 * split them by the time the ray reached the sample.
 *
-* %Example: sample_choice=0 Detector: psd_det_single_I=9.56954e+06
-* %Example: sample_choice=1 Detector: psd_det_single_I=1.0003e+07
-* %Example: sample_choice=2 Detector: psd_det_single_I=1.0204e+07
-* %Example: sample_choice=3 Detector: psd_det_single_I=8.83871e+06
-* %Example: sample_choice=4 Detector: psd_det_single_I=8.82551e+06
-* %Example: sample_choice=6 Detector: psd_det_early_I=3.25536e+06
-* %Example: sample_choice=7 Detector: psd_det_late_I=5.21464e+06
-* %Example: sample_choice=8 Detector: psd_det_early_I=3.39399e+06
-* %Example: sample_choice=8 Detector: psd_det_late_I=5.19958e+06
+* %Example: sample_choice=0 Detector: psd_det_single_I=1.00167e+07
+* %Example: sample_choice=1 Detector: psd_det_single_I=9.88376e+06
+* %Example: sample_choice=2 Detector: psd_det_single_I=9.86618e+06
+* %Example: sample_choice=3 Detector: psd_det_single_I=9.52607e+06
+* %Example: sample_choice=4 Detector: psd_det_single_I=9.79733e+06
+* %Example: sample_choice=6 Detector: psd_det_early_I=3.21564e+06
+* %Example: sample_choice=7 Detector: psd_det_late_I=4.7804e+06
+* %Example: sample_choice=8 Detector: psd_det_early_I=3.61441e+06
+* %Example: sample_choice=8 Detector: psd_det_late_I=5.2007e+06
 *
 * %Parameters
 * E_i: [meV] Energy of the simulated neutrons.
