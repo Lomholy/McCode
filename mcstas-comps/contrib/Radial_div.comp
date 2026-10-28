@@ -98,8 +98,11 @@ TRACE
   double h_div, v_div, lambda, r_div;
   lambda = (2 * PI / V2K) / sqrt (vx * vx + vy * vy + vz * vz);
 
+  int backprop = allow_backprop; /* set by caller: also count backward hits */
+  double t0 = t;
+  ALLOW_BACKPROP;
   PROP_Z0;
-  if (x > xmin && x < xmax && y > ymin && y < ymax && lambda > Lmin && lambda < Lmax) {
+  if ((backprop || t >= t0) && z == 0.0 && x > xmin && x < xmax && y > ymin && y < ymax && lambda > Lmin && lambda < Lmax) {
     h_div = RAD2DEG * atan2 (vx, vz);
     v_div = RAD2DEG * atan2 (vy, vz);
     r_div = sqrt (h_div * h_div + v_div * v_div);
@@ -115,7 +118,7 @@ TRACE
       SCATTER;
     }
   }
-  if (restore_neutron) {
+  if (restore_neutron || !SCATTERED) {
     RESTORE_NEUTRON (INDEX_CURRENT_COMP, x, y, z, vx, vy, vz, t, sx, sy, sz, p);
   }
 %}

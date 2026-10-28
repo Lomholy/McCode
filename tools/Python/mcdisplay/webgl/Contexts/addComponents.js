@@ -181,8 +181,35 @@ export function loadComponents(parentnode, components) {
     );
     compList[i].applyMatrix4(comp_matrix);
     compList[i].name = components[i].name;
+    // --trace=2 shapes: their edges as lines, shown with or instead of the surface
+    compList[i].children
+      .filter((obj) => obj.isMesh)
+      .forEach((mesh) => {
+        const edges = new THREE.LineSegments(
+          new THREE.EdgesGeometry(mesh.geometry),
+          new THREE.LineBasicMaterial({ color: mesh.material.color })
+        );
+        edges.userData.isEdges = true;
+        mesh.add(edges);
+      });
     parentnode.add(compList[i]);
   }
+  const shapes = parentnode.userData.shapes ?? { surfaces: true, lines: false };
+  showShapes(parentnode, shapes.surfaces, shapes.lines);
+}
+
+// show the --trace=2 shapes of all components as surfaces and/or lines
+// (remembered on the scene, so a reload by loadComponents keeps the choice)
+export function showShapes(parentnode, surfaces, lines) {
+  parentnode.userData.shapes = { surfaces, lines };
+  parentnode.children
+    .filter((child) => child.type === "Group" && !child.name.includes(RAY))
+    .forEach((group) =>
+      group.traverse((obj) => {
+        if (obj.isMesh) obj.material.visible = surfaces;
+        if (obj.userData.isEdges) obj.visible = lines;
+      })
+    );
 }
 
 // add multiline
