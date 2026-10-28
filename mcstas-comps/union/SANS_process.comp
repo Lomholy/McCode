@@ -50,14 +50,19 @@
 * it is tabulated also over the direction of k in the process frame (n_dir_theta
 * polar angles and n_dir_phi azimuths), each node computed the first time a ray
 * needs it, and interpolated linearly in wavelength and direction, so a tilted or
-* rotated anisotropic sample has the right mu along every path. The q integral uses
-* log grids from both ends of the Ewald sphere (q from 0, and sqrt(4k^2 - q^2) from
-* 0, up to q = sqrt(2) k), so features near forward and near backward scattering
-* are both resolved.
+* rotated anisotropic sample has the right mu along every path. The q integral runs
+* over |q| <= 0.5 AA^-1, with log grids from both ends of the Ewald sphere (q from 0,
+* and sqrt(4k^2 - q^2) from 0, up to q = sqrt(2) k) where that range reaches them.
 *
 * In a scattering event the outgoing direction is drawn uniformly within the
 * focusing solid angle dOmega of the geometry, and the weight is multiplied by
 * dOmega * dSigma/dOmega(q) / mu(k).
+*
+* The component is for small-angle scattering: only |q| <= 0.5 AA^-1 enters the total
+* cross-section, and INITIALIZE stops the simulation if scale*F^2*S at |q| > 0.5 AA^-1
+* exceeds 1e-3 of its largest value at |q| <= 0.5 AA^-1. It samples |q| and, for
+* expressions in qx, qy, qz, 206 directions, so narrow features away from the axes
+* can be missed.
 *
 * tinyexpr supports +, -, *, /, ^, %, unary -, parentheses, and the
 * functions abs, acos, asin, atan, atan2, ceil, cos, cosh, exp, fac, floor,
@@ -114,6 +119,11 @@ SHARE
 
   %include "tinyexpr.h"
   %include "tinyexpr.c"
+
+  /* Largest |q| [AA^-1] of the small-angle scattering, see SANS_process_check_large_q */
+  #ifndef SANS_PROCESS_Q_MAX
+  #define SANS_PROCESS_Q_MAX 0.5
+  #endif
 
   struct SANS_physics_storage_struct {
     te_expr* F_expr;
@@ -181,19 +191,34 @@ SHARE
    * where e1, e2 are the theta and phi unit vectors of khat (x and y for khat along z). */
   double
   SANS_process_Idsdw (struct SANS_physics_storage_struct* s, double k, Coords khat, Coords e1, Coords e2) {
-    // Log grids from both ends of the Ewald sphere, so that features near forward and
-    // near backward scattering are both resolved: q from 0 to sqrt(2) k, and
-    // Q = sqrt(4k^2 - q^2) from 0 to sqrt(2) k, with q dq = Q dQ
+    // Only |q| <= SANS_PROCESS_Q_MAX contributes (see SANS_process_check_large_q). Log grids from
+    // both ends of the Ewald sphere resolve features near forward and near backward
+    // scattering: u = q from 0 to sqrt(2) k, and u = Q = sqrt(4k^2 - q^2) from 0 to sqrt(2) k,
+    // with q dq = Q dQ; the backward half is used only where |q| <= SANS_PROCESS_Q_MAX reaches it.
+    double q_end = fmin (SANS_PROCESS_Q_MAX, 2.0 * k);
+    double q_split = sqrt (2.0) * k;
     double Qminl = log10 (0.0000001);
-    double Qmidl = log10 (sqrt (2.0) * k);
+    double Qmidl = log10 (q_split);
     int istp = floor ((Qmidl - Qminl) * 300.0 + 0.5);
     double step = (Qmidl - Qminl) / istp;
     double Isq = 0.0;
     for (int half = 0; half < 2; half++) {
+      if (half == 1 && q_end <= q_split)
+        break;
+      double u_lo = half == 0 ? 0.0 : sqrt (fmax (0.0, 4.0 * k * k - q_end * q_end));
+      double u_hi = half == 0 ? fmin (q_end, q_split) : q_split;
       double umin = 0.0;
       for (int kkk = 0; kkk <= istp; kkk++) {
         double umax = pow (10.0, Qminl + kkk * step);
-        double u = 0.5 * (umin + umax);
+        double a = fmax (umin, u_lo);
+        double b = fmin (umax, u_hi);
+        umin = umax;
+        if (b <= a) {
+          if (a >= u_hi)
+            break;
+          continue;
+        }
+        double u = 0.5 * (a + b);
         double q, qpar, qperp;
         if (half == 0) {
           q = u;
@@ -212,8 +237,9 @@ SHARE
           phi_sum += SANS_process_dSigdOmega (s, q, qpar * khat.x + c * e1.x + pt * e2.x, qpar * khat.y + c * e1.y + pt * e2.y,
                                                       qpar * khat.z + c * e1.z + pt * e2.z);
         }
-        Isq += phi_sum / s->Nphi * u * (umax - umin);
-        umin = umax;
+        Isq += phi_sum / s->Nphi * u * (b - a);
+        if (b >= u_hi)
+          break;
       }
     }
     return Isq;
@@ -266,6 +292,64 @@ SHARE
     if (ft * fp > 0)
       I += ft * fp * SANS_process_node (s, ilam, it + 1, ip2);
     return I;
+  };
+
+  /* scale F^2 S with the largest magnitude at the values of |q| from q_low to q_high (log
+   * spaced) and, for expressions in qx, qy, qz, in 200 directions spread over the sphere plus
+   * the six axis directions; at_q is set to its (q, qx, qy, qz) */
+  double
+  SANS_process_largest (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, double q_low, double q_high,
+                        int n_q, double* at_q) {
+    int n_fib = q_only ? 0 : 200;
+    int n_dir = q_only ? 1 : n_fib + 6;
+    double axes[6][3] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+    double golden_angle = PI * (3.0 - sqrt (5.0));
+    double largest = 0;
+    for (int i = 0; i < n_q; i++) {
+      double q = q_low * pow (q_high / q_low, (double)i / (n_q - 1));
+      for (int j = 0; j < n_dir; j++) {
+        double u[3] = { 1, 0, 0 };
+        if (j < n_fib) {
+          u[2] = 1.0 - 2.0 * (j + 0.5) / n_fib;
+          double ur = sqrt (fmax (0.0, 1.0 - u[2] * u[2]));
+          u[0] = ur * cos (j * golden_angle);
+          u[1] = ur * sin (j * golden_angle);
+        } else if (!q_only) {
+          for (int c = 0; c < 3; c++)
+            u[c] = axes[j - n_fib][c];
+        }
+        qv[0] = q;
+        for (int c = 0; c < 3; c++)
+          qv[c + 1] = q * u[c];
+        double F = te_eval (Fexpr);
+        double ds = dsdo_scale * F * F * te_eval (Sexpr);
+        if (fabs (ds) > fabs (largest)) {
+          largest = ds;
+          for (int c = 0; c < 4; c++)
+            at_q[c] = qv[c];
+        }
+      }
+    }
+    return largest;
+  };
+
+  /* Stops the simulation if scale F^2 S at |q| > SANS_PROCESS_Q_MAX (up to 4 pi AA^-1, backscattering
+   * at 1 AA) exceeds 1e-3 of its largest magnitude at |q| <= SANS_PROCESS_Q_MAX: the total
+   * cross-section only includes |q| <= SANS_PROCESS_Q_MAX */
+  void
+  SANS_process_check_large_q (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, const char* comp_name) {
+    double q_limit = SANS_PROCESS_Q_MAX;
+    double fraction = 1e-3;
+    double at_low[4], at_high[4];
+    double low = SANS_process_largest (Fexpr, Sexpr, qv, dsdo_scale, q_only, 1e-4, q_limit, 200, at_low);
+    double high = SANS_process_largest (Fexpr, Sexpr, qv, dsdo_scale, q_only, q_limit * 1.0001, 4.0 * PI, 400, at_high);
+    if (fabs (high) > fraction * fabs (low))
+      exit (fprintf (stderr,
+                     "SANS_process: %s: ERROR: scale*F^2*S at |q| > %g AA^-1 reaches %g m^-1 sr^-1 at |q| = %g AA^-1 "
+                     "(qx, qy, qz = %g, %g, %g), more than %g of its largest value %g m^-1 sr^-1 at |q| <= %g AA^-1. "
+                     "The component is for small-angle scattering, and its total cross-section only includes "
+                     "|q| <= %g AA^-1; give expressions that decay at large q, also along qx, qy and qz.\n",
+                     comp_name, q_limit, high, at_high[0], at_high[1], at_high[2], at_high[3], fraction, low, q_limit, q_limit));
   };
 
   /* Total scattering cross-section [m^-1] for k = (kx, ky, kz) [AA^-1] in the process frame,
@@ -365,6 +449,7 @@ INITIALIZE
   SANS_storage.F_expr = SANS_process_compile (form_factor, SANS_storage.q_vars, SANS_storage.pars, NAME_CURRENT_COMP, "form_factor");
   SANS_storage.S_expr = SANS_process_compile (structure_factor, SANS_storage.q_vars, SANS_storage.pars, NAME_CURRENT_COMP, "structure_factor");
   SANS_storage.q_only = SANS_process_is_isotropic (form_factor, SANS_storage.pars) && SANS_process_is_isotropic (structure_factor, SANS_storage.pars);
+  SANS_process_check_large_q (SANS_storage.F_expr, SANS_storage.S_expr, SANS_storage.q_vars, scale, SANS_storage.q_only, NAME_CURRENT_COMP);
   SANS_storage.Nphi = SANS_storage.q_only ? 1 : n_phi;
   SANS_storage.n_polar = n_dir_theta;
   SANS_storage.n_azim = n_dir_phi;
