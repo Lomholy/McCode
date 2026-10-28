@@ -82,7 +82,13 @@
 * The positions, <span class="latex">$x, y, z$</span>
 * The velocities <span class="latex">$vx, vy, vz$</span>
 * and the time <span class="latex">$t$</span>
-* 
+* Etrans_expr may in addition use r1, r2 and r3, uniform random numbers in [0, 1) drawn
+* for each scattering event, e.g. Etrans_expr = "2 + 0.5*(2*r1 - 1)" for Etrans = 2 meV
+* spread uniformly by deltaE = 0.5 meV as in Incoherent.comp. The energy transfer is
+* applied in every scattering event; the quasielastic broadening (f_QE, gamma) is added on top.
+* Only the variables used by the expressions are updated before they are evaluated,
+* and an expression that uses none of them is evaluated once in INITIALIZE.
+*
 * McStas uses a sligthly modified version of tiny expressions that evaluate 
 * exponentials from right to left instead of the standard left to right.
 * Furthermore McStas has added two functions to tiny expressions. These are:
@@ -112,6 +118,8 @@
 * gamma:                  [meV]     Lorentzian width of quasielastic broadening (HWHM) [1]
 * gamma_expr:             [meV]     Tiny expression to be calculated as replacement for the gamma value.
 * f_QE:                   [1]       Fraction of quasielastic scattering (rest is elastic) [1]
+* Etrans:                 [meV]     Energy transfer to the sample, E_f = E_i - Etrans, as in Incoherent.comp
+* Etrans_expr:            [string]  Tiny expression to be calculated as replacement for Etrans; may also use r1, r2, r3
 * number_of_sample_points [1]       Number of points that are sampled along the neutron path through a material
 * interact_fraction:      [1]       How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
 * verbose                 [1]       Flag that prints out the values calculated in the cross section calculation
@@ -132,7 +140,8 @@ SETTING PARAMETERS( sigma=0, string sigma_expr = "",
                     unit_cell_volume=0, string unit_cell_volume_expr = "",
                     gamma=0, string gamma_expr = "",
                     f_QE=0,
-                    number_of_sample_points = 20, 
+                    Etrans=0, string Etrans_expr = "",
+                    number_of_sample_points = 20,
                     interact_fraction=-1, 
                      int verbose = 0, string init=""
                     )
@@ -146,57 +155,83 @@ SHARE
   %include "tinyexpr.c"
   %include "union-lib"
 
+  // Variables of the expressions, in the order of vars[]: IINC_NPARTICLE of the ray, then the
+  // random numbers r1, r2, r3, which only Etrans_expr may use
+  #define IINC_NPARTICLE 7
+  #define IINC_NVARS 10
+  static const char* const IINC_names[IINC_NVARS] = { "x", "y", "z", "vx", "vy", "vz", "t", "r1", "r2", "r3" };
+
+  // A factor of mu, the Lorentzian width or the energy transfer: value, or expr if it uses any variable
+  struct Inhomogeneous_incoherent_factor {
+    te_expr* expr;
+    double value;
+  };
+
   struct Inhomogeneous_incoherent_struct {
     // Variables that needs to be transfered between any of the following places:
     // The initialize in this component
     // The function for calculating my
     // The function for calculating scattering
     double QE_sampling_frequency;
-    double lorentzian_width;
-    te_expr* lorentzian_width_expr;
-    double sig;
-    te_expr* sig_expr;
-    double unit_cell_vol;
-    te_expr* unit_cell_vol_expr;
-    double pack_fact;
-    te_expr* pack_fact_expr;
-    double* particle[7];
+    struct Inhomogeneous_incoherent_factor width;
+    struct Inhomogeneous_incoherent_factor etrans;
+    struct Inhomogeneous_incoherent_factor sig;
+    struct Inhomogeneous_incoherent_factor unit_cell_vol;
+    struct Inhomogeneous_incoherent_factor pack_fact;
+    double vars[IINC_NVARS];
+    int uses[IINC_NVARS]; // 1 if an expression uses the variable, which is then set before evaluating
     int verbosity;
+  };
+
+  // Compiles expr_str if given, else uses value; an expression without variables is evaluated once here
+  void
+  Inhomogeneous_incoherent_factor_init (struct Inhomogeneous_incoherent_struct* s, struct Inhomogeneous_incoherent_factor* f, const char* expr_str,
+                                        double value, const char* comp_name, const char* which) {
+    f->expr = NULL;
+    f->value = value;
+    if (!expr_str || !strcmp (expr_str, ""))
+      return;
+    double* addresses[IINC_NVARS];
+    for (int i = 0; i < IINC_NVARS; i++)
+      addresses[i] = &s->vars[i];
+    int err;
+    f->expr = te_compile_vars (expr_str, IINC_names, addresses, IINC_NVARS, -1, &err);
+    if (!f->expr)
+      exit (fprintf (stderr, "Inhomogeneous_incoherent_process: %s: failed to parse %s \"%s\" (tinyexpr error near character %d)\n", comp_name, which,
+                     expr_str, err));
+    int used = 0;
+    for (int i = 0; i < IINC_NVARS; i++)
+      if (te_depends_on (expr_str, IINC_names, addresses, IINC_NVARS, i))
+        s->uses[i] = used = 1;
+    if (!used) {
+      f->value = te_eval (f->expr);
+      te_free (f->expr);
+      f->expr = NULL;
+    }
+  };
+
+  void
+  Inhomogeneous_incoherent_set_vars (struct Inhomogeneous_incoherent_struct* s, _class_particle* _particle) {
+    double values[IINC_NPARTICLE] = { _particle->x, _particle->y, _particle->z, _particle->vx, _particle->vy, _particle->vz, _particle->t };
+    for (int i = 0; i < IINC_NPARTICLE; i++)
+      if (s->uses[i])
+        s->vars[i] = values[i];
+  };
+
+  double
+  Inhomogeneous_incoherent_value (struct Inhomogeneous_incoherent_factor* f) {
+    return f->expr ? te_eval (f->expr) : f->value;
   };
 
   // Function for calculating my in Incoherent case
   int
   Inhomogeneous_incoherent_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data,
                                       _class_particle* _particle) {
-    double sigma;
-    double unit_cell_volume;
-    double packing_factor;
-    *data_transfer.Inhomogeneous_incoherent_struct->particle[0] = _particle->x;
-    *data_transfer.Inhomogeneous_incoherent_struct->particle[1] = _particle->y;
-    *data_transfer.Inhomogeneous_incoherent_struct->particle[2] = _particle->z;
-    *data_transfer.Inhomogeneous_incoherent_struct->particle[3] = _particle->vx;
-    *data_transfer.Inhomogeneous_incoherent_struct->particle[4] = _particle->vy;
-    *data_transfer.Inhomogeneous_incoherent_struct->particle[5] = _particle->vz;
-    *data_transfer.Inhomogeneous_incoherent_struct->particle[6] = _particle->t;
-
-    if (data_transfer.Inhomogeneous_incoherent_struct->sig) {
-      sigma = data_transfer.Inhomogeneous_incoherent_struct->sig;
-    } else {
-      // printf("\n Setting sigma with new values\npointer_z=%g\tpart_z=%g\tpointer=%p\n",
-      //        *data_transfer.Inhomogeneous_incoherent_struct->particle[2], _particle->z, data_transfer.Inhomogeneous_incoherent_struct->particle[2]);
-      sigma = te_eval (data_transfer.Inhomogeneous_incoherent_struct->sig_expr);
-      // printf("sigma=%g\n", sigma);
-    }
-    if (data_transfer.Inhomogeneous_incoherent_struct->unit_cell_vol) {
-      unit_cell_volume = data_transfer.Inhomogeneous_incoherent_struct->unit_cell_vol;
-    } else {
-      unit_cell_volume = te_eval (data_transfer.Inhomogeneous_incoherent_struct->unit_cell_vol_expr);
-    }
-    if (data_transfer.Inhomogeneous_incoherent_struct->pack_fact) {
-      packing_factor = data_transfer.Inhomogeneous_incoherent_struct->pack_fact;
-    } else {
-      packing_factor = te_eval (data_transfer.Inhomogeneous_incoherent_struct->pack_fact_expr);
-    }
+    struct Inhomogeneous_incoherent_struct* s = data_transfer.Inhomogeneous_incoherent_struct;
+    Inhomogeneous_incoherent_set_vars (s, _particle);
+    double sigma = Inhomogeneous_incoherent_value (&s->sig);
+    double unit_cell_volume = Inhomogeneous_incoherent_value (&s->unit_cell_vol);
+    double packing_factor = Inhomogeneous_incoherent_value (&s->pack_fact);
 
     *my = ((packing_factor / unit_cell_volume) * 100 * sigma);
     if (data_transfer.Inhomogeneous_incoherent_struct->verbosity) {
@@ -213,13 +248,10 @@ SHARE
   int
   Inhomogeneous_incoherent_physics_scattering (double* k_final, double* k_initial, double* weight, union data_transfer_union data_transfer,
                                               struct focus_data_struct* focus_data, _class_particle* _particle) {
-    double lorentzian_width;
-    double QE_sampling_frequency = data_transfer.Inhomogeneous_incoherent_struct->QE_sampling_frequency;
-    if (data_transfer.Inhomogeneous_incoherent_struct->lorentzian_width) {
-      lorentzian_width = data_transfer.Inhomogeneous_incoherent_struct->lorentzian_width;
-    } else {
-      lorentzian_width = te_eval (data_transfer.Inhomogeneous_incoherent_struct->lorentzian_width_expr);
-    }
+    struct Inhomogeneous_incoherent_struct* s = data_transfer.Inhomogeneous_incoherent_struct;
+    double QE_sampling_frequency = s->QE_sampling_frequency;
+    Inhomogeneous_incoherent_set_vars (s, _particle);
+    double lorentzian_width = Inhomogeneous_incoherent_value (&s->width);
 
     // New version of incoherent scattering
     double k_length = sqrt (k_initial[0] * k_initial[0] + k_initial[1] * k_initial[1] + k_initial[2] * k_initial[2]);
@@ -231,16 +263,19 @@ SHARE
     NORM (k_out.x, k_out.y, k_out.z);
     *weight *= solid_angle * 0.25 / PI;
 
-    double v_i, v_f, E_i, dE, E_f;
-
-    if (rand01 () < QE_sampling_frequency) {
-      v_i = k_length * K2V;
-      E_i = VS2E * v_i * v_i;
-      dE = lorentzian_width * tan (PI / 2 * randpm1 ());
-      E_f = E_i + dE;
+    // Energy change: -Etrans, with r1, r2, r3 drawn for this event, plus the quasielastic broadening
+    for (int i = IINC_NPARTICLE; i < IINC_NVARS; i++)
+      if (s->uses[i])
+        s->vars[i] = rand01 ();
+    double dE = -Inhomogeneous_incoherent_value (&s->etrans);
+    if (rand01 () < QE_sampling_frequency)
+      dE += lorentzian_width * tan (PI / 2 * randpm1 ());
+    if (dE != 0) {
+      double v_i = k_length * K2V;
+      double E_f = VS2E * v_i * v_i + dE;
       if (E_f <= 0)
         return 0;
-      v_f = SE2V * sqrt (E_f);
+      double v_f = SE2V * sqrt (E_f);
       k_length = v_f * V2K;
     }
 
@@ -290,58 +325,19 @@ INITIALIZE
     exit (1);
   }
 
-  // Store variable names and pointers.
-  Inhomogeneous_storage.particle[0] = malloc (sizeof (double));
-  Inhomogeneous_storage.particle[1] = malloc (sizeof (double));
-  Inhomogeneous_storage.particle[2] = malloc (sizeof (double));
-  Inhomogeneous_storage.particle[3] = malloc (sizeof (double));
-  Inhomogeneous_storage.particle[4] = malloc (sizeof (double));
-  Inhomogeneous_storage.particle[5] = malloc (sizeof (double));
-  Inhomogeneous_storage.particle[6] = malloc (sizeof (double));
-  te_variable vars[] = { { "x", Inhomogeneous_storage.particle[0] },  { "y", Inhomogeneous_storage.particle[1] },  { "z", Inhomogeneous_storage.particle[2] },
-                         { "vx", Inhomogeneous_storage.particle[3] }, { "vy", Inhomogeneous_storage.particle[4] }, { "vz", Inhomogeneous_storage.particle[5] },
-                         { "t", Inhomogeneous_storage.particle[6] } };
-
   // ===========================================================================
   // ==================== Compile the expression with variables. ===============
   // ===========================================================================
-  int err;
-  if (strcmp (sigma_expr, "")) {
-    te_expr* sigma_expression = te_compile (sigma_expr, vars, 7, &err);
-    if (!sigma_expression) {
-      printf ("Parse error at %d\n", err);
-      exit (1);
-    }
-    Inhomogeneous_storage.sig_expr = sigma_expression;
-  } else
-    Inhomogeneous_storage.sig = sigma;
-  if (strcmp (unit_cell_volume_expr, "")) {
-    te_expr* unit_cell_volume_expression = te_compile (unit_cell_volume_expr, vars, 7, &err);
-    if (!unit_cell_volume_expression) {
-      printf ("Parse error at %d\n", err);
-      exit (1);
-    }
-    Inhomogeneous_storage.unit_cell_vol_expr = unit_cell_volume_expression;
-  } else
-    Inhomogeneous_storage.unit_cell_vol = unit_cell_volume;
-  if (strcmp (packing_factor_expr, "")) {
-    te_expr* packing_fac_expression = te_compile (packing_factor_expr, vars, 7, &err);
-    if (!packing_fac_expression) {
-      printf ("Parse error at %d\n", err);
-      exit (1);
-    }
-    Inhomogeneous_storage.pack_fact_expr = packing_fac_expression;
-  } else
-    Inhomogeneous_storage.pack_fact = packing_factor;
-  if (strcmp (gamma_expr, "")) {
-    te_expr* gamma_expression = te_compile (gamma_expr, vars, 7, &err);
-    if (!gamma_expression) {
-      printf ("Parse error at %d\n", err);
-      exit (1);
-    }
-    Inhomogeneous_storage.lorentzian_width_expr = gamma_expression;
-  } else
-    Inhomogeneous_storage.lorentzian_width = gamma;
+  struct Inhomogeneous_incoherent_struct* s = &Inhomogeneous_storage;
+  memset (s->uses, 0, sizeof (s->uses));
+  Inhomogeneous_incoherent_factor_init (s, &s->sig, sigma_expr, sigma, NAME_CURRENT_COMP, "sigma_expr");
+  Inhomogeneous_incoherent_factor_init (s, &s->unit_cell_vol, unit_cell_volume_expr, unit_cell_volume, NAME_CURRENT_COMP, "unit_cell_volume_expr");
+  Inhomogeneous_incoherent_factor_init (s, &s->pack_fact, packing_factor_expr, packing_factor, NAME_CURRENT_COMP, "packing_factor_expr");
+  Inhomogeneous_incoherent_factor_init (s, &s->width, gamma_expr, gamma, NAME_CURRENT_COMP, "gamma_expr");
+  for (int i = IINC_NPARTICLE; i < IINC_NVARS; i++)
+    if (s->uses[i])
+      exit (fprintf (stderr, "Inhomogeneous_incoherent_process: %s: %s is only available in Etrans_expr.\n", NAME_CURRENT_COMP, IINC_names[i]));
+  Inhomogeneous_incoherent_factor_init (s, &s->etrans, Etrans_expr, Etrans, NAME_CURRENT_COMP, "Etrans_expr");
   Inhomogeneous_storage.QE_sampling_frequency = f_QE;
   Inhomogeneous_storage.verbosity = verbose;
 
@@ -386,7 +382,11 @@ TRACE
 
 FINALLY
 %{
-  // Since the process and it's storage is a static allocation, there is nothing to deallocate
+  struct Inhomogeneous_incoherent_factor* factors[4] = { &Inhomogeneous_storage.sig, &Inhomogeneous_storage.unit_cell_vol, &Inhomogeneous_storage.pack_fact,
+                                                         &Inhomogeneous_storage.width };
+  for (int i = 0; i < 4; i++)
+    if (factors[i]->expr)
+      te_free (factors[i]->expr);
   union_release (NAME_CURRENT_COMP);
 %}
 

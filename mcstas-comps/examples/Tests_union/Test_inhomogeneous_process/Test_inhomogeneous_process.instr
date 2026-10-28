@@ -50,6 +50,12 @@
 * steps as the 10 boxes of inc_linear, as a sum of heavyside functions, so they
 * must reproduce inc_linear and inc_trans.
 *
+* The 13th and 14th examples transfer Etrans = 2 meV, spread uniformly by
+* deltaE = 0.5 meV, to the sample: thin_etrans with the Incoherent component
+* (Etrans, deltaE), union_inho_etrans with Etrans_expr = "2 + 0.5*(2*r1 - 1)".
+* E_det shows the scattered energies: 22.8 to 23.8 meV after one scattering,
+* and 2 meV less for each further scattering.
+*
 *
 *
 * %Test: sample=thin Detector: lin_det_I=0.007387
@@ -64,6 +70,8 @@
 * %Test: sample=gauss_heavy Detector: lin_det_I=0.0985658
 * %Test: sample=inho_hvs Detector: lin_det_I=0.0185066
 * %Test: sample=inho_hvs_trans Detector: lin_det_I=0.0784756
+* %Test: sample=thin_etrans Detector: E_det_I=0.00723534
+* %Test: sample=union_inho_etrans Detector: E_det_I=0.00721415
 *
 *
 *
@@ -99,6 +107,9 @@ DECLARE
   int activate_gauss;
   int activate_inho_hvs;
   double rot_samples;
+  double Etrans_thin;
+  double deltaE_thin;
+  char etrans_inho[64];
 
 %}
 
@@ -120,6 +131,9 @@ INITIALIZE
   activate_gauss = 0;
   activate_inho_hvs = 0;
   rot_samples = 0;
+  Etrans_thin = 0;
+  deltaE_thin = 0;
+  etrans_inho[0] = 0;
 
   if (!strcmp("thin", sample)){
     is_thin = 1;
@@ -149,6 +163,13 @@ INITIALIZE
     rot_samples = 90;
     activate_inho_hvs = 1;
     width = 0.01;
+  } else if (!strcmp("thin_etrans", sample)){
+    is_thin = 1;
+    Etrans_thin = 2;
+    deltaE_thin = 0.5;
+  } else if (!strcmp("union_inho_etrans", sample)){
+    activate_inho = 1;
+    sprintf (etrans_inho, "2 + 0.5*(2*r1 - 1)");
   } else if (!strcmp("gauss_heavy", sample)){
     rot_samples = 90;
     activate_gauss = 1;
@@ -212,7 +233,9 @@ COMPONENT box_sample = Incoherent(
     yheight=0.03,
     zdepth=thick,
     sigma_inc = 5.08,
-    sigma_abs = 5.08
+    sigma_abs = 5.08,
+    Etrans = Etrans_thin,
+    deltaE = deltaE_thin
 ) WHEN (is_thin)
 AT (0, 0, 0) RELATIVE arm_sample
 ROTATED (0, 0, 0) RELATIVE arm_sample
@@ -249,7 +272,8 @@ ROTATED (0, 0, 0) RELATIVE arm_sample
 // =================== Inhomogeneous_incoherent_process constant
 
 COMPONENT inho_proc = Inhomogeneous_incoherent_process(
-  sigma_expr = "5.08", unit_cell_volume = 13.827
+  sigma_expr = "5.08", unit_cell_volume = 13.827,
+  Etrans_expr = etrans_inho
 )
 AT (0,0,0) RELATIVE arm_sample
 
@@ -677,6 +701,16 @@ COMPONENT lin_det = PSD_monitor(
     filename="lin_det",
     xwidth = 0.02,
     yheight = 0.1,
+    restore_neutron = 1
+) AT (0, 0, .0151) RELATIVE arm_det
+
+COMPONENT E_det = E_monitor(
+    nE = 100,
+    filename="E_det",
+    xwidth = 0.02,
+    yheight = 0.1,
+    Emin = 15,
+    Emax = 28,
     restore_neutron = 1
 ) AT (0, 0, .0151) RELATIVE arm_det
 
