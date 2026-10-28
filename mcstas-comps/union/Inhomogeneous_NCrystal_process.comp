@@ -237,22 +237,21 @@ SHARE
   #endif
   };
 
-  /* Compiles expr_str against x, y, z, t, p1..p6, leaving out vars[skip_var] if skip_var >= 0 */
+  static const char* const INC_names[INC_NVARS] = { "x", "y", "z", "t", "p1", "p2", "p3", "p4", "p5", "p6" };
+
+  void
+  INC_addresses (double* vars, double** addresses) {
+    for (int i = 0; i < INC_NVARS; i++)
+      addresses[i] = &vars[i];
+  };
+
+  /* Compiles expr_str against x, y, z, t, p1..p6 in vars[] */
   te_expr*
-  INC_compile (const char* expr_str, double* vars, int skip_var) {
-    const char* names[INC_NVARS] = { "x", "y", "z", "t", "p1", "p2", "p3", "p4", "p5", "p6" };
-    te_variable list[INC_NVARS];
-    int n = 0, err;
-    for (int i = 0; i < INC_NVARS; i++) {
-      if (i == skip_var)
-        continue;
-      list[n].name = names[i];
-      list[n].address = &vars[i];
-      list[n].type = TE_VARIABLE;
-      list[n].context = NULL;
-      n++;
-    }
-    return te_compile (expr_str, list, n, &err);
+  INC_compile (const char* expr_str, double* vars) {
+    double* addresses[INC_NVARS];
+    INC_addresses (vars, addresses);
+    int err;
+    return te_compile_vars (expr_str, INC_names, addresses, INC_NVARS, -1, &err);
   };
 
   void
@@ -277,22 +276,21 @@ SHARE
       T->source = realloc (T->source, T->n * sizeof (char*));
       T->expr = realloc (T->expr, T->n * sizeof (te_expr*));
       T->source[T->n - 1] = INC_strndup (open + 2, close - open - 2);
-      T->expr[T->n - 1] = INC_compile (T->source[T->n - 1], vars, -1);
+      T->expr[T->n - 1] = INC_compile (T->source[T->n - 1], vars);
       if (!T->expr[T->n - 1])
         exit (fprintf (stderr, "Inhomogeneous_NCrystal_process: %s: failed to parse expression \"%s\" in %s.\n", comp_name, T->source[T->n - 1], what));
       p = close + 1;
     }
   };
 
-  /* 1 if any expression of T needs variable var (vars[] index) to compile */
+  /* 1 if any expression of T needs variable var (vars[] index) */
   int
   INC_depends (struct INC_template* T, double* vars, int var) {
-    for (int i = 0; i < T->n; i++) {
-      te_expr* e = INC_compile (T->source[i], vars, var);
-      if (!e)
+    double* addresses[INC_NVARS];
+    INC_addresses (vars, addresses);
+    for (int i = 0; i < T->n; i++)
+      if (te_depends_on (T->source[i], INC_names, addresses, INC_NVARS, var))
         return 1;
-      te_free (e);
-    }
     return 0;
   };
 

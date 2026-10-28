@@ -222,32 +222,29 @@ SHARE
     return out;
   };
 
-  /* Compiles expr_str against x, y, z, t, p1..p6, leaving out vars[skip_var] if skip_var >= 0 */
-  te_expr*
-  ISC_compile (const char* expr_str, double* vars, int skip_var) {
-    const char* names[ISC_NVARS] = { "x", "y", "z", "t", "p1", "p2", "p3", "p4", "p5", "p6" };
-    te_variable list[ISC_NVARS];
-    int n = 0, err;
-    for (int i = 0; i < ISC_NVARS; i++) {
-      if (i == skip_var)
-        continue;
-      list[n].name = names[i];
-      list[n].address = &vars[i];
-      list[n].type = TE_VARIABLE;
-      list[n].context = NULL;
-      n++;
-    }
-    return te_compile (expr_str, list, n, &err);
+  static const char* const ISC_names[ISC_NVARS] = { "x", "y", "z", "t", "p1", "p2", "p3", "p4", "p5", "p6" };
+
+  void
+  ISC_addresses (double* vars, double** addresses) {
+    for (int i = 0; i < ISC_NVARS; i++)
+      addresses[i] = &vars[i];
   };
 
-  /* 1 if expr_str needs variable var (vars[] index) to compile */
+  /* Compiles expr_str against x, y, z, t, p1..p6 in vars[] */
+  te_expr*
+  ISC_compile (const char* expr_str, double* vars) {
+    double* addresses[ISC_NVARS];
+    ISC_addresses (vars, addresses);
+    int err;
+    return te_compile_vars (expr_str, ISC_names, addresses, ISC_NVARS, -1, &err);
+  };
+
+  /* 1 if expr_str needs variable var (vars[] index) */
   int
   ISC_expr_depends (const char* expr_str, double* vars, int var) {
-    te_expr* e = ISC_compile (expr_str, vars, var);
-    if (!e)
-      return 1;
-    te_free (e);
-    return 0;
+    double* addresses[ISC_NVARS];
+    ISC_addresses (vars, addresses);
+    return te_depends_on (expr_str, ISC_names, addresses, ISC_NVARS, var);
   };
 
   void
@@ -272,7 +269,7 @@ SHARE
       T->source = realloc (T->source, T->n * sizeof (char*));
       T->expr = realloc (T->expr, T->n * sizeof (te_expr*));
       T->source[T->n - 1] = ISC_strndup (open + 2, close - open - 2);
-      T->expr[T->n - 1] = ISC_compile (T->source[T->n - 1], vars, -1);
+      T->expr[T->n - 1] = ISC_compile (T->source[T->n - 1], vars);
       if (!T->expr[T->n - 1])
         exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: failed to parse expression \"%s\" in %s.\n", comp_name, T->source[T->n - 1], what));
       p = close + 1;
@@ -903,7 +900,7 @@ INITIALIZE
     if (!expr_values[e] || !strcmp (expr_values[e], ""))
       continue;
     s->expr_source[e] = ISC_strndup (expr_values[e], strlen (expr_values[e]));
-    s->expr[e] = ISC_compile (s->expr_source[e], s->vars, -1);
+    s->expr[e] = ISC_compile (s->expr_source[e], s->vars);
     if (!s->expr[e])
       exit (fprintf (stderr, "Inhomogeneous_single_crystal_process: %s: failed to parse %s expression \"%s\".\n", NAME_CURRENT_COMP, expr_names[e],
                      expr_values[e]));

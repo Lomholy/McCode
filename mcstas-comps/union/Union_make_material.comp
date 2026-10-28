@@ -196,21 +196,12 @@ SHARE
     double vars[UNION_MATERIAL_NVARS];
   };
 
-  te_expr*
-  Union_material_compile (const char* expr_str, double* vars, int skip_var) {
-    const char* names[UNION_MATERIAL_NVARS] = { "x", "y", "z", "t", "v", "p1", "p2", "p3", "p4", "p5", "p6" };
-    te_variable list[UNION_MATERIAL_NVARS];
-    int n = 0, err;
-    for (int i = 0; i < UNION_MATERIAL_NVARS; i++) {
-      if (i == skip_var)
-        continue;
-      list[n].name = names[i];
-      list[n].address = &vars[i];
-      list[n].type = TE_VARIABLE;
-      list[n].context = NULL;
-      n++;
-    }
-    return te_compile (expr_str, list, n, &err);
+  static const char* const Union_material_names[UNION_MATERIAL_NVARS] = { "x", "y", "z", "t", "v", "p1", "p2", "p3", "p4", "p5", "p6" };
+
+  void
+  Union_material_addresses (double* vars, double** addresses) {
+    for (int i = 0; i < UNION_MATERIAL_NVARS; i++)
+      addresses[i] = &vars[i];
   }
 
   /* my_a_function of materials with mu_absorption_expr: inverse penetration depth at 2200 m/s */
@@ -301,19 +292,17 @@ INITIALIZE
     memset (&absorption_storage, 0, sizeof (absorption_storage));
     for (int i = 0; i < 6; i++)
       absorption_storage.vars[5 + i] = par_values[i];
-    absorption_storage.expr = Union_material_compile (mu_absorption_expr, absorption_storage.vars, -1);
+    double* addresses[UNION_MATERIAL_NVARS];
+    Union_material_addresses (absorption_storage.vars, addresses);
+    int err;
+    absorption_storage.expr = te_compile_vars (mu_absorption_expr, Union_material_names, addresses, UNION_MATERIAL_NVARS, -1, &err);
     if (!absorption_storage.expr) {
       printf ("ERROR, Union make material named %s could not parse mu_absorption_expr \"%s\".\n", NAME_CURRENT_COMP, mu_absorption_expr);
       exit (1);
     }
     int varies = 0;
-    for (int var = 0; var < 5; var++) {
-      te_expr* e = Union_material_compile (mu_absorption_expr, absorption_storage.vars, var);
-      if (e)
-        te_free (e);
-      else
-        varies = 1;
-    }
+    for (int var = 0; var < 5; var++)
+      varies |= te_depends_on (mu_absorption_expr, Union_material_names, addresses, UNION_MATERIAL_NVARS, var);
     if (varies) {
       if (absorption_sampling_points < 1) {
         printf ("ERROR, Union make material named %s needs absorption_sampling_points >= 1.\n", NAME_CURRENT_COMP);
