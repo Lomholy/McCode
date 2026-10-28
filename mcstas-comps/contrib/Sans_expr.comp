@@ -42,11 +42,17 @@
 *
 *   Sigma_s(k) = 1/k^2 int_0^2k q dq int_0^2pi dphi dSigma/dOmega(q(q,phi))
 *
-* which is tabulated in INITIALIZE for wavelengths 1..30 AA, assuming the
-* incident wave vector is along the local z axis. For a divergent beam and an
-* anisotropic model this is an approximation (a 3 deg tilt changes Sigma_s by
-* ~0.1% for a strongly anisotropic Gaussian). If the expressions only use q,
-* the phi integral is done analytically and the tabulation is exact.
+* integrated over the Ewald sphere of the wave vector k, and tabulated for
+* wavelengths 1..30 AA. If the expressions only use q, Sigma_s does not depend on
+* the direction of k, and is tabulated in INITIALIZE. Otherwise it is tabulated
+* also over the direction of k in the local frame (n_dir_theta polar angles and
+* n_dir_phi azimuths), each node computed the first time a ray needs it, and
+* interpolated linearly in wavelength and direction. The q integral uses log grids
+* from both ends of the Ewald sphere (q from 0, and sqrt(4k^2 - q^2) from 0, up to
+* q = sqrt(2) k), so features near forward and near backward scattering are both
+* resolved. The attenuation uses Sigma_s
+* of the incoming direction on the way in and of the outgoing direction on the
+* way out, so a tilted or rotated anisotropic sample is attenuated correctly.
 *
 * tinyexpr supports +, -, *, /, ^, %, unary -, parentheses, and the
 * functions abs, acos, asin, atan, atan2, ceil, cos, cosh, exp, fac, floor,
@@ -86,7 +92,9 @@
 * p6: [1]            Generic numeric constant, meaning defined by the user's expressions
 * scale: [m^-1 sr^-1] Prefactor multiplying F^2*S
 * background: [m^-1 sr^-1] Flat background added to the cross-section
-* n_phi: [1]         Number of azimuthal points used to tabulate Sigma_s for anisotropic expressions
+* n_phi: [1]         Number of azimuthal points around k_i in the integral of Sigma_s for anisotropic expressions
+* n_dir_theta: [1]   Number of polar angles of k_i, from 0 to 180 deg, in the Sigma_s table for anisotropic expressions
+* n_dir_phi: [1]     Number of azimuths of k_i in the Sigma_s table for anisotropic expressions
 * sigma_abs: [m^-1]  Absorption cross section density at 2200 m/s
 * radius: [m]        Outer radius of sample in (x,z) plane for cylinder/sphere
 * xwidth: [m]        horiz. dimension of sample, as a width
@@ -118,7 +126,7 @@ DEFINE COMPONENT Sans_expr
 
 SETTING PARAMETERS (string form_factor="1", string structure_factor="1",
 p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
-scale=1, background=0, int n_phi=64, sigma_abs=0,
+scale=1, background=0, int n_phi=64, int n_dir_theta=91, int n_dir_phi=72, sigma_abs=0,
 xwidth=0, yheight=0, zdepth=0, radius=0,
 target_x = 0, target_y = 0, target_z = 6, int target_index=0,
 focus_xw=0, focus_yh=0, focus_aw=0, focus_ah=0,  focus_r=0)
@@ -172,16 +180,143 @@ SHARE %{
     S = te_eval (Sexpr);
     return scale * F * F * S + background;
   };
+
+  /* Tables of int q dq <dSigma/dOmega>_phi over the Ewald sphere, for wavelengths 1..30 AA:
+   * iso for expressions in q only, otherwise I over directions of k_i in the local frame
+   * (n_polar polar angles from 0 to 180 deg, n_azim azimuths), computed when first needed. */
+  struct Sans_expr_table {
+    te_expr *Fexpr;
+    te_expr *Sexpr;
+    double *qv;
+    double dsdo_scale;
+    double dsdo_background;
+    int Nphi;
+    int q_only;
+    double iso[31];
+    int n_polar;
+    int n_azim;
+    double *I;
+    char *filled;
+  };
+
+  /* int q dq <dSigma/dOmega>_phi for k_i = k khat [AA^-1], with
+   * q(q,phi) = q^2/2k khat - qperp (cos(phi) e1 + sin(phi) e2), qperp = q sqrt(1 - q^2/4k^2),
+   * where e1, e2 are the theta and phi unit vectors of khat (x and y for khat along z). */
+  double
+  Sans_expr_Idsdw (struct Sans_expr_table *t, double k, Coords khat, Coords e1, Coords e2) {
+    // Log grids from both ends of the Ewald sphere, so that features near forward and
+    // near backward scattering are both resolved: q from 0 to sqrt(2) k, and
+    // Q = sqrt(4k^2 - q^2) from 0 to sqrt(2) k, with q dq = Q dQ
+    double Qminl = log10 (0.0000001);
+    double Qmidl = log10 (sqrt (2.0) * k);
+    int istp = floor ((Qmidl - Qminl) * 300.0 + 0.5);
+    double step = (Qmidl - Qminl) / istp;
+    double Isq = 0.0;
+    for (int half = 0; half < 2; half++) {
+      double umin = 0.0;
+      for (int kkk = 0; kkk <= istp; kkk++) {
+        double umax = pow (10.0, Qminl + kkk * step);
+        double u = 0.5 * (umin + umax);
+        double q, qpar, qperp;
+        if (half == 0) {
+          q = u;
+          qpar = q * q / (2.0 * k);
+          qperp = q * sqrt (fmax (0.0, 1.0 - q * q / (4.0 * k * k)));
+        } else {
+          q = sqrt (fmax (0.0, 4.0 * k * k - u * u));
+          qpar = 2.0 * k - u * u / (2.0 * k);
+          qperp = q * u / (2.0 * k);
+        }
+        double phi_sum = 0.0;
+        for (int jjj = 0; jjj < t->Nphi; jjj++) {
+          double phi = 2.0 * PI * (jjj + 0.5) / t->Nphi;
+          double c = -qperp * cos (phi);
+          double s = -qperp * sin (phi);
+          phi_sum += Sans_expr_dSigdOmega (t->Fexpr, t->Sexpr, t->qv, t->dsdo_scale, t->dsdo_background, q, qpar * khat.x + c * e1.x + s * e2.x, qpar * khat.y + c * e1.y + s * e2.y,
+                                                                                                              qpar * khat.z + c * e1.z + s * e2.z);
+        }
+        Isq += phi_sum / t->Nphi * u * (umax - umin);
+        umin = umax;
+      }
+    }
+    return Isq;
+  };
+
+  /* Direction table node of wavelength ilam [AA], polar index it and azimuth index ip */
+  double
+  Sans_expr_node (struct Sans_expr_table *t, int ilam, int it, int ip) {
+    long index = ((long)ilam * t->n_polar + it) * t->n_azim + ip;
+    if (!t->filled[index]) {
+      double theta = PI * it / (t->n_polar - 1);
+      double phi = 2.0 * PI * ip / t->n_azim;
+      Coords khat = coords_set (sin (theta) * cos (phi), sin (theta) * sin (phi), cos (theta));
+      Coords e1 = coords_set (cos (theta) * cos (phi), cos (theta) * sin (phi), -sin (theta));
+      Coords e2 = coords_set (-sin (phi), cos (phi), 0);
+      t->I[index] = Sans_expr_Idsdw (t, 2.0 * PI / ilam, khat, e1, e2);
+      t->filled[index] = 1;
+    }
+    return t->I[index];
+  };
+
+  /* int q dq <dSigma/dOmega>_phi at wavelength ilam [AA] for k_i along (kx, ky, kz),
+   * interpolated linearly in the polar angle and azimuth of k_i */
+  double
+  Sans_expr_Idsdw_at (struct Sans_expr_table *t, int ilam, double kx, double ky, double kz) {
+    if (t->q_only)
+      return t->iso[ilam];
+    double k = sqrt (kx * kx + ky * ky + kz * kz);
+    double ft = acos (fmax (-1.0, fmin (1.0, kz / k))) / PI * (t->n_polar - 1);
+    int it = (int)floor (ft);
+    if (it > t->n_polar - 2)
+      it = t->n_polar - 2;
+    ft -= it;
+    double phi = atan2 (ky, kx);
+    if (phi < 0)
+      phi += 2.0 * PI;
+    double fp = phi / (2.0 * PI) * t->n_azim;
+    int ip = (int)floor (fp);
+    fp -= ip;
+    ip %= t->n_azim;
+    int ip2 = (ip + 1) % t->n_azim;
+    // Nodes with zero weight are not computed
+    double I = 0;
+    if ((1 - ft) * (1 - fp) > 0)
+      I += (1 - ft) * (1 - fp) * Sans_expr_node (t, ilam, it, ip);
+    if ((1 - ft) * fp > 0)
+      I += (1 - ft) * fp * Sans_expr_node (t, ilam, it, ip2);
+    if (ft * (1 - fp) > 0)
+      I += ft * (1 - fp) * Sans_expr_node (t, ilam, it + 1, ip);
+    if (ft * fp > 0)
+      I += ft * fp * Sans_expr_node (t, ilam, it + 1, ip2);
+    return I;
+  };
+
+  /* Total scattering cross-section [m^-1] for k_i = (kx, ky, kz) [AA^-1] in the local frame,
+   * interpolated linearly in wavelength */
+  double
+  Sans_expr_sigma_s (struct Sans_expr_table *t, double kx, double ky, double kz) {
+    double k0 = sqrt (kx * kx + ky * ky + kz * kz);
+    double lambda = 2.0 * PI / k0;
+    double I;
+    if (lambda <= 1.0)
+      I = Sans_expr_Idsdw_at (t, 1, kx, ky, kz);
+    else if (lambda >= 30.0)
+      I = Sans_expr_Idsdw_at (t, 30, kx, ky, kz);
+    else {
+      int Ilam = (int)floor (lambda);
+      double w = lambda - Ilam;
+      I = (1 - w) * Sans_expr_Idsdw_at (t, Ilam, kx, ky, kz);
+      if (w > 0)
+        I += w * Sans_expr_Idsdw_at (t, Ilam + 1, kx, ky, kz);
+    }
+    return 2 * PI * I / (k0 * k0);
+  };
 %}
 DECLARE
 %{
   double mu_a_v;
   double shape;
-  DArray1d Idsdw;
-  double Qminl;
-  double Qmaxl;
-
-  int isotropic;
+  struct Sans_expr_table table;
   double pars[6];
   double q_vars[4];
   te_expr *F_expr;
@@ -240,54 +375,35 @@ INITIALIZE
 
   F_expr = Sans_expr_compile (form_factor, q_vars, pars, NAME_CURRENT_COMP, "form_factor");
   S_expr = Sans_expr_compile (structure_factor, q_vars, pars, NAME_CURRENT_COMP, "structure_factor");
-  isotropic = Sans_expr_is_isotropic (form_factor, pars) && Sans_expr_is_isotropic (structure_factor, pars);
-  int Nphi = isotropic ? 1 : n_phi;
-
-  // Perform integral of dsigdomega over all of omega for use in adjusting the weight of the neutron.
-  int iii, kkk, jjj;
-  double Qmind = 0.0000001;
-  double Qmaxd = 100;
-
-  Qminl = log10 (Qmind);
-  Qmaxl = log10 (Qmaxd);
-
-  double q, Isq, k, qpar, qperp, phi, phi_sum;
-  double qmin, qmax, step;
-  int istp;
-
-  istp = floor ((Qmaxl - Qminl) * 300.0 + 0.5);
-
-  Idsdw = create_darr1d (31);
-
-  /* Idsdw[lambda] = int q dq <dSigma/dOmega>_phi for lambda = 1..30 AA, with k_i along local z.
-   * q(q,phi) = (-qperp cos(phi), -qperp sin(phi), q^2/2k), qperp = q sqrt(1 - q^2/4k^2). */
-  for (iii = 1; iii <= 30; iii++) {
-    k = 2.0 * PI / iii;
-    Isq = 0.0;
-    qmin = 0.0;
-    step = (log10 (fmin (Qmaxd, 4.0 * PI / iii)) - Qminl) / istp;
-    for (kkk = 0; kkk <= istp; kkk++) {
-      qmax = pow (10.0, Qminl + kkk * step);
-      q = 0.5 * (qmin + qmax);
-      qpar = q * q / (2.0 * k);
-      qperp = q * sqrt (fmax (0.0, 1.0 - q * q / (4.0 * k * k)));
-      phi_sum = 0.0;
-      for (jjj = 0; jjj < Nphi; jjj++) {
-        phi = 2.0 * PI * (jjj + 0.5) / Nphi;
-        phi_sum += Sans_expr_dSigdOmega (F_expr, S_expr, q_vars, scale, background,
-                                         q, -qperp * cos (phi), -qperp * sin (phi), qpar);
-      }
-      Isq += phi_sum / Nphi * q * (qmax - qmin);
-      qmin = qmax;
-    };
-    Idsdw[iii] = Isq;
-  };
+  table.Fexpr = F_expr;
+  table.Sexpr = S_expr;
+  table.qv = q_vars;
+  table.dsdo_scale = scale;
+  table.dsdo_background = background;
+  table.q_only = Sans_expr_is_isotropic (form_factor, pars) && Sans_expr_is_isotropic (structure_factor, pars);
+  table.Nphi = table.q_only ? 1 : n_phi;
+  table.n_polar = n_dir_theta;
+  table.n_azim = n_dir_phi;
+  table.I = NULL;
+  table.filled = NULL;
+  if (table.q_only) {
+    // Expressions in q only: the integrals do not depend on the direction of k_i
+    table.iso[0] = 0;
+    for (int ilam = 1; ilam <= 30; ilam++)
+      table.iso[ilam] = Sans_expr_Idsdw (&table, 2.0 * PI / ilam, coords_set (0, 0, 1), coords_set (1, 0, 0), coords_set (0, 1, 0));
+  } else {
+    if (n_dir_theta < 2 || n_dir_phi < 1)
+      exit (fprintf (stderr, "Sans_expr: %s: n_dir_theta must be at least 2 and n_dir_phi at least 1.\n", NAME_CURRENT_COMP));
+    long n_nodes = 31L * n_dir_theta * n_dir_phi;
+    table.I = malloc (n_nodes * sizeof (double));
+    table.filled = calloc (n_nodes, 1);
+    if (!table.I || !table.filled)
+      exit (fprintf (stderr, "Sans_expr: %s: could not allocate the Sigma_s table.\n", NAME_CURRENT_COMP));
+  }
 %}
 TRACE
 %{
-  double t0, t1, v, l_full, l_in, l_out, dt, mu_s, Scoh;
-  double k0, lambda;
-  int Ilam, Ilam2;
+  double t0, t1, v, l_full, l_in, l_out, dt, mu_s, sigma_in, sigma_out;
   double aim_x = 0, aim_y = 0, aim_z = 1;
   double solid_angle, vx_i, vy_i, vz_i, qx, qy, qz, q;
   char intersect = 0;
@@ -308,19 +424,8 @@ TRACE
     dt = rand01 () * (t1 - t0) + t0; /* Time of scattering */
     PROP_DT (dt);                    /* Point of scattering */
     l_in = v * (dt - t0);            /* Penetration in sample */
-    k0 = V2K * v;
-    lambda = 2.0 * PI / k0;
-    Ilam = floor (lambda) > 1 ? (int)floor (lambda) : 1;
-    Ilam2 = Ilam + 1 < 30 ? Ilam + 1 : 30;
-    /* Coherent "SANS" scattering  - in 3 intervals, asymptotic values at the low and high WL end */
-    if (lambda <= 1.0)
-      Scoh = 2 * PI * Idsdw[1] / (k0 * k0);
-    else {
-      if (lambda >= 30.0)
-        Scoh = 2 * PI * Idsdw[30] / (k0 * k0);
-      else
-        Scoh = 2 * PI * ((Ilam2 - lambda) * Idsdw[Ilam] + (lambda - Ilam) * Idsdw[Ilam2]) / (k0 * k0);
-    };
+    /* Total scattering cross-section for the incoming direction */
+    sigma_in = Sans_expr_sigma_s (&table, V2K * vx, V2K * vy, V2K * vz);
 
     vx_i = vx;
     vy_i = vy;
@@ -355,8 +460,10 @@ TRACE
     PROP_DT (t1);
 
     mu_s = Sans_expr_dSigdOmega (F_expr, S_expr, q_vars, scale, background, q, qx, qy, qz);
+    /* Total scattering cross-section for the outgoing direction */
+    sigma_out = Sans_expr_sigma_s (&table, V2K * vx, V2K * vy, V2K * vz);
 
-    p *= l_full * solid_angle * mu_s * exp (-(mu_a_v / v + Scoh) * (l_in + l_out));
+    p *= l_full * solid_angle * mu_s * exp (-mu_a_v / v * (l_in + l_out) - sigma_in * l_in - sigma_out * l_out);
     SCATTER;
   }
 %}
@@ -365,7 +472,8 @@ FINALLY
 %{
   te_free (F_expr);
   te_free (S_expr);
-  destroy_darr1d (Idsdw);
+  free (table.I);
+  free (table.filled);
 %}
 
 MCDISPLAY
