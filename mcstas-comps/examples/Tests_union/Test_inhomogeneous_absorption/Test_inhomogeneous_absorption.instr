@@ -425,8 +425,8 @@ COMPONENT x_box_9 = Union_box(
 // =================== Detectors
 
 COMPONENT abs_zx = Union_abs_logger_2D_space(
-    D_direction_1 = "z", D1_min = -thick/2, D1_max = thick/2, n1 = 100,
-    D_direction_2 = "x", D2_min = -width/2, D2_max = width/2, n2 = 30,
+    D_direction_1 = "z", D1_min = -thick/2, D1_max = thick/2, n1 = 200,
+      D_direction_2 = "x", D2_min = -width/2, D2_max = width/2, n2 = 200,
     filename = "abs_zx"
 ) AT (0, 0, 0) RELATIVE arm_sample
 
