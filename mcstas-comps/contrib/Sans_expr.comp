@@ -54,6 +54,11 @@
 * of the incoming direction on the way in and of the outgoing direction on the
 * way out, so a tilted or rotated anisotropic sample is attenuated correctly.
 *
+* INITIALIZE warns if scale*F^2*S at |q| > 0.5 AA^-1 exceeds 1e-3 of its largest value
+* at |q| <= 0.5 AA^-1, since the expressions are meant for small-angle scattering. It
+* samples |q| and, for expressions in qx, qy, qz, 206 directions, so narrow features
+* away from the axes can be missed.
+*
 * tinyexpr supports +, -, *, /, ^, %, unary -, parentheses, and the
 * functions abs, acos, asin, atan, atan2, ceil, cos, cosh, exp, fac, floor,
 * gauss, ln, log, log10, ncr, npr, pow, sin, sinh, sqrt, tan, tanh, plus the
@@ -179,6 +184,61 @@ SHARE %{
     F = te_eval (Fexpr);
     S = te_eval (Sexpr);
     return scale * F * F * S + background;
+  };
+
+  /* scale F^2 S with the largest magnitude at the values of |q| from q_low to q_high (log
+   * spaced) and, for expressions in qx, qy, qz, in 200 directions spread over the sphere plus
+   * the six axis directions; at_q is set to its (q, qx, qy, qz) */
+  double
+  Sans_expr_largest (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, double q_low, double q_high,
+                     int n_q, double* at_q) {
+    int n_fib = q_only ? 0 : 200;
+    int n_dir = q_only ? 1 : n_fib + 6;
+    double axes[6][3] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+    double golden_angle = PI * (3.0 - sqrt (5.0));
+    double largest = 0;
+    for (int i = 0; i < n_q; i++) {
+      double q = q_low * pow (q_high / q_low, (double)i / (n_q - 1));
+      for (int j = 0; j < n_dir; j++) {
+        double u[3] = { 1, 0, 0 };
+        if (j < n_fib) {
+          u[2] = 1.0 - 2.0 * (j + 0.5) / n_fib;
+          double ur = sqrt (fmax (0.0, 1.0 - u[2] * u[2]));
+          u[0] = ur * cos (j * golden_angle);
+          u[1] = ur * sin (j * golden_angle);
+        } else if (!q_only) {
+          for (int c = 0; c < 3; c++)
+            u[c] = axes[j - n_fib][c];
+        }
+        qv[0] = q;
+        for (int c = 0; c < 3; c++)
+          qv[c + 1] = q * u[c];
+        double F = te_eval (Fexpr);
+        double ds = dsdo_scale * F * F * te_eval (Sexpr);
+        if (fabs (ds) > fabs (largest)) {
+          largest = ds;
+          for (int c = 0; c < 4; c++)
+            at_q[c] = qv[c];
+        }
+      }
+    }
+    return largest;
+  };
+
+  /* Warns if scale F^2 S at |q| > 0.5 AA^-1 (up to 4 pi AA^-1, backscattering at 1 AA) exceeds
+   * 1e-3 of its largest magnitude at |q| <= 0.5 AA^-1 */
+  void
+  Sans_expr_check_large_q (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, const char* comp_name) {
+    double q_limit = 0.5;
+    double fraction = 1e-3;
+    double at_low[4], at_high[4];
+    double low = Sans_expr_largest (Fexpr, Sexpr, qv, dsdo_scale, q_only, 1e-4, q_limit, 200, at_low);
+    double high = Sans_expr_largest (Fexpr, Sexpr, qv, dsdo_scale, q_only, q_limit * 1.0001, 4.0 * PI, 400, at_high);
+    if (fabs (high) > fraction * fabs (low))
+      printf ("Sans_expr: %s: WARNING: scale*F^2*S at |q| > %g AA^-1 reaches %g m^-1 sr^-1 at |q| = %g AA^-1 "
+              "(qx, qy, qz = %g, %g, %g), more than %g of its largest value %g m^-1 sr^-1 at |q| <= %g AA^-1. "
+              "The expressions are meant for small-angle scattering.\n",
+              comp_name, q_limit, high, at_high[0], at_high[1], at_high[2], at_high[3], fraction, low, q_limit);
   };
 
   /* Tables of int q dq <dSigma/dOmega>_phi over the Ewald sphere, for wavelengths 1..30 AA:
@@ -381,6 +441,7 @@ INITIALIZE
   table.dsdo_scale = scale;
   table.dsdo_background = background;
   table.q_only = Sans_expr_is_isotropic (form_factor, pars) && Sans_expr_is_isotropic (structure_factor, pars);
+  Sans_expr_check_large_q (F_expr, S_expr, q_vars, scale, table.q_only, NAME_CURRENT_COMP);
   table.Nphi = table.q_only ? 1 : n_phi;
   table.n_polar = n_dir_theta;
   table.n_azim = n_dir_phi;
