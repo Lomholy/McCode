@@ -25,18 +25,22 @@
 *   sample_choice=1: absorption along z, 10 boxes
 *   sample_choice=2: absorption along x, mu_absorption_expr, 100 sampling points
 *   sample_choice=3: absorption along x, 10 boxes
+*   sample_choice=4: absorption along z, mu_absorption_expr with the steps of the 10
+*                    boxes as a sum of hvs functions, 100 sampling points
 *
 * Along z the absorption is recorded where it happens, by the Union_abs_logger_2D_space
 * abs_zx; along x the transmitted intensity is recorded by the PSD_monitor trans_x
 * behind the box. Along z both samples give every ray the same integrated absorption, so
 * 0 and 1 agree in total. Along x the absorption varies across each 3 mm box in sample
 * 2, and the transmission averaged over such a box is slightly higher than at its
-* center, so 2 transmits about 5e-5 more than 3.
+* center, so 2 transmits about 5e-5 more than 3. The steps of 4 lie on the boundaries of
+* its 0.1 mm sampling segments, so 4 reproduces the absorption of 1 along z as well.
 *
 * %Test: sample_choice=0 Detector: abs_zx_I=0.0845871
 * %Test: sample_choice=1 Detector: abs_zx_I=0.0845873
 * %Test: sample_choice=2 Detector: trans_x_I=0.119781
 * %Test: sample_choice=3 Detector: trans_x_I=0.119734
+* %Test: sample_choice=4 Detector: abs_zx_I=0.0845874
 *
 * %Parameters
 * sample_choice: [1] Sample to use, see the description.
@@ -57,6 +61,7 @@ DECLARE
   int z_boxes;
   int x_expr;
   int x_boxes;
+  int z_steps;
 %}
 
 INITIALIZE
@@ -70,7 +75,8 @@ INITIALIZE
   z_boxes = sample_choice == 1;
   x_expr = sample_choice == 2;
   x_boxes = sample_choice == 3;
-  if (sample_choice < 0 || sample_choice > 3) {
+  z_steps = sample_choice == 4;
+  if (sample_choice < 0 || sample_choice > 4) {
     fprintf (stderr, "Unsupported instrument parameter value sample_choice=%d.\n", sample_choice);
     exit (-1);
   }
@@ -116,6 +122,24 @@ COMPONENT z_expr_box = Union_box(
     zdepth = thick,
     material_string = "z_expr_mat",
     number_of_activations = z_expr
+) AT (0, 0, 0) RELATIVE arm_sample
+
+// =================== Absorption along z, mu_absorption_expr with steps
+// The steps of the 10 boxes below, at their boundaries
+
+COMPONENT z_steps_mat = Union_make_material(
+    absorber = 1,
+    mu_absorption_expr = "10 + 10*(hvs(z,-0.004,1,0) + hvs(z,-0.003,1,0) + hvs(z,-0.002,1,0) + hvs(z,-0.001,1,0) + hvs(z,0,1,0) + hvs(z,0.001,1,0) + hvs(z,0.002,1,0) + hvs(z,0.003,1,0) + hvs(z,0.004,1,0))",
+    absorption_sampling_points = 100
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT z_steps_box = Union_box(
+    priority = 12,
+    xwidth = width,
+    yheight = height,
+    zdepth = thick,
+    material_string = "z_steps_mat",
+    number_of_activations = z_steps
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 // =================== Absorption along z, 10 boxes
