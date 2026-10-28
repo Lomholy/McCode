@@ -79,6 +79,15 @@ void te_print(const te_expr *n);
 /* This is safe to call on NULL pointers. */
 void te_free(te_expr *n);
 
+/* Parses the input expression with the var_count variables names[i] bound to addresses[i],
+ * leaving out variable skip (-1 for none). */
+/* Returns NULL on error, with the position of the error in *error. */
+te_expr *te_compile_vars(const char *expression, const char *const *names, double *const *addresses, int var_count, int skip, int *error);
+
+/* Returns 1 if the input expression, which compiles with the var_count variables names[i]
+ * bound to addresses[i], needs variable var, i.e. does not compile without it. */
+int te_depends_on(const char *expression, const char *const *names, double *const *addresses, int var_count, int var);
+
 
 #ifdef __cplusplus
 }
