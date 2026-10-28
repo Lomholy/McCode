@@ -644,6 +644,7 @@ double *total_mus;
 double (*my_a_function)(struct physics_struct *physics, double x, double y, double z, double t, double v);
 void *my_a_data;
 int my_a_sampling_points;
+int my_a_log_per_segment; // absorber-only: one absorption logger event per sampling segment
 double *mu_abs; // my_a_function at the sampling points of the current path
 };
 
@@ -1483,6 +1484,7 @@ void adjust_abs_weight_factor (struct Volume_struct *Volume, double *my_sum_plus
                                Coords position, Coords velocity, double t);
 
 double inhomogeneous_absorption_distance (struct physics_struct *physics, double abs_weight_factor, double v_length);
+double inhomogeneous_absorption_in_segment (struct physics_struct *physics, int j, double v_length, double *transmitted, double *absorbed);
 
 void transform_wavevector_into_local_coord_system (struct Volume_struct *Volume, Coords *wavevector_rotated,
                                                    double *k_rotated, int p_index, Coords *wavevector,

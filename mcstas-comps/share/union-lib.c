@@ -8281,6 +8281,19 @@ void overwrite_if_empty(char *input_string, char *overwrite) {
     return physics->cumul_dists[j] - physics->dist / 2 + within * physics->dist;
   }
 
+  // Distance along the path to the absorption event of segment j, for a ray that crossed an
+  // absorber-only volume with my_a_function, with the position within the segment from exp(-mu x).
+  // absorbed is set to the fraction of the incoming weight absorbed in the segment, and
+  // transmitted, the transmission up to segment j, is updated to that up to segment j + 1.
+  double
+  inhomogeneous_absorption_in_segment (struct physics_struct* physics, int j, double v_length, double* transmitted, double* absorbed) {
+    double seg_mu = physics->mu_abs[j] * (2200 / v_length) * physics->dist;
+    *absorbed = *transmitted * (1 - exp (-seg_mu));
+    *transmitted *= exp (-seg_mu);
+    double within = seg_mu > 0 ? -log (1.0 - rand01 () * (1.0 - exp (-seg_mu))) / seg_mu : rand01 ();
+    return physics->cumul_dists[j] - physics->dist / 2 + within * physics->dist;
+  }
+
   void
   inhomogeneous_set_cumul_dist_array (struct physics_struct* physics, int i) {
     physics->cumul_dists[i] = (i > 0) ? physics->cumul_dists[i - 1] + physics->dist : physics->dist / 2;

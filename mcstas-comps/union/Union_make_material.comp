@@ -40,12 +40,20 @@
 * each point is reached), and integrates the absorption over them, also together with the
 * sampling points of inhomogeneous processes in the material.
 *
+* In an absorber-only material with such an expression, a ray gives the absorption loggers
+* one event in each of the absorption_sampling_points segments of its path, each with the
+* weight absorbed in that segment, instead of one event with all the absorbed weight
+* (absorption_log_per_segment=0). This lowers the noise of the loggers. The events of one
+* ray are counted as independent, so for loggers with bins longer than a segment, where
+* one ray puts several events in the same bin, the error bars are too small.
+*
 * %P
 * INPUT PARAMETERS:
 * process_string:       [string] Comma seperated names of physical processes
 * my_absorption:        [1/m]    Inverse penetration depth from absorption at standard energy
 * mu_absorption_expr:      [str]    Optional tinyexpr expression for the inverse penetration depth from absorption at 2200 m/s [1/m], in x, y, z [m] (relative to the geometry center, master axes), t [s], v [m/s] and p1..p6; scaled by 2200/v like my_absorption, and overrides it
 * absorption_sampling_points: [1] Points per path where Union_master evaluates mu_absorption_expr, if it depends on x, y, z, t or v
+* absorption_log_per_segment: [0/1] If 1, an absorber-only material with a varying mu_absorption_expr gives the absorption loggers one event per sampling segment of each path, otherwise one event per path. Error bars of loggers with bins longer than a segment are then too small
 * p1:                   [1]      Generic constant for mu_absorption_expr
 * p2:                   [1]      Generic constant for mu_absorption_expr
 * p3:                   [1]      Generic constant for mu_absorption_expr
@@ -74,7 +82,7 @@
 DEFINE COMPONENT Union_make_material
 
 SETTING PARAMETERS(string process_string="NULL", my_absorption=0, absorber=0,
-                   string mu_absorption_expr="", int absorption_sampling_points=20,
+                   string mu_absorption_expr="", int absorption_sampling_points=20, int absorption_log_per_segment=1,
                    p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
                     refraction_density=0, refraction_sigma_coh=0, refraction_weight=0,  refraction_SLD=-1500, string init=""
 			   )
@@ -314,6 +322,7 @@ INITIALIZE
       this_material.my_a_function = &Union_material_absorption;
       this_material.my_a_data = &absorption_storage;
       this_material.my_a_sampling_points = absorption_sampling_points;
+      this_material.my_a_log_per_segment = absorption_log_per_segment;
       material_my_a = 0;
     } else {
       material_my_a = te_eval (absorption_storage.expr);

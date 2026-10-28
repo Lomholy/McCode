@@ -1794,58 +1794,72 @@ TRACE
       // Avoid logging absorption when the ray is in vacuum.
       if (current_volume != 0 && abs_weight_factor_set == 1) {    // Volume 0 is always vacuum, and if this is the current volume, an event will not occur
         if (Volumes[current_volume]->p_physics->is_vacuum == 0) { // No absorption in vacuum
-
-          if (scattering_event == 1) {
-            // When scattering events occur, place the absoprtion the same place (the total cross section is used to place it)
-            abs_distance = length_to_scattering;
-          } else {
-            // When the ray exits a volume, the absorption position should be exponentially distributed using the total cross section
-            if (volume_is_only_absorber (Volumes[current_volume]) && Volumes[current_volume]->p_physics->my_a_function) {
-              abs_distance = inhomogeneous_absorption_distance (Volumes[current_volume]->p_physics, abs_weight_factor, v_length);
+          struct physics_struct* abs_physics = Volumes[current_volume]->p_physics;
+          // Absorber-only volumes with my_a_function can give one event per sampling segment
+          int per_segment = scattering_event == 0 && volume_is_only_absorber (Volumes[current_volume]) && abs_physics->my_a_function
+                            && abs_physics->my_a_log_per_segment;
+          int n_abs_events = per_segment ? abs_physics->sampling_points : 1;
+          double transmitted = 1;
+          for (int abs_event = 0; abs_event < n_abs_events; abs_event++) {
+            double abs_weight = initial_weight * (1.0 - abs_weight_factor);
+            if (per_segment) {
+              double absorbed;
+              abs_distance = inhomogeneous_absorption_in_segment (abs_physics, abs_event, v_length, &transmitted, &absorbed);
+              abs_weight = initial_weight * absorbed;
+              if (abs_weight <= 0)
+                continue;
+            } else if (scattering_event == 1) {
+              // When scattering events occur, place the absoprtion the same place (the total cross section is used to place it)
+              abs_distance = length_to_scattering;
             } else {
-              my_abs = Volumes[current_volume]->p_physics->my_a * (2200 / v_length);
-              abs_distance = -log (1.0 - rand0max (1.0 - exp (-my_sum_plus_abs * length_to_boundary))) / my_sum_plus_abs;
+              // When the ray exits a volume, the absorption position should be exponentially distributed using the total cross section
+              if (volume_is_only_absorber (Volumes[current_volume]) && abs_physics->my_a_function) {
+                abs_distance = inhomogeneous_absorption_distance (abs_physics, abs_weight_factor, v_length);
+              } else {
+                my_abs = abs_physics->my_a * (2200 / v_length);
+                abs_distance = -log (1.0 - rand0max (1.0 - exp (-my_sum_plus_abs * length_to_boundary))) / my_sum_plus_abs;
+              }
             }
-          }
 
-          t_abs_propagation = abs_distance / v_length;
+            t_abs_propagation = abs_distance / v_length;
 
-          abs_position = coords_set (x + t_abs_propagation * vx, y + t_abs_propagation * vy, z + t_abs_propagation * vz);
+            abs_position = coords_set (x + t_abs_propagation * vx, y + t_abs_propagation * vy, z + t_abs_propagation * vz);
 
-          // This info needs to be loaded into the absorption loggers
+            // This info needs to be loaded into the absorption loggers
 
-          // Need to run through relevant absorption loggers here
-          #ifdef Union_trace_verbal_setting
-          printf ("Running abs_logger system for specific volumes \n");
-          #endif
+            // Need to run through relevant absorption loggers here
+            #ifdef Union_trace_verbal_setting
+            printf ("Running abs_logger system for specific volumes \n");
+            #endif
 
-          // Logging for detector components assosiated with this volume
-          for (log_index = 0; log_index < Volumes[current_volume]->abs_loggers.num_elements; log_index++) {
-            // This function calls a logger function which in turn stores some data among the passed, and possibly performs some basic data analysis
-            // Position and k_new given in master coordinates, the abs_logger must transform to its coordnate system if required
-            Volumes[current_volume]->abs_loggers.p_abs_logger[log_index]->function_pointers.active_record_function (
-                &abs_position, k_new, initial_weight * (1.0 - abs_weight_factor), t + t_abs_propagation, scattered_flag[current_volume],
-                number_of_scattering_events, Volumes[current_volume]->abs_loggers.p_abs_logger[log_index], &abs_loggers_with_data_array, _particle);
-            // If the logging component have a conditional attatched, the collected data will be written to a temporary place
-            // At the end of the rays life, it will be checked if the condition is met
-            //  if it is met, the temporary data is transfered to permanent, and temp is cleared.
-            //  if it is not met, the temporary data is cleared.
-          }
+            // Logging for detector components assosiated with this volume
+            for (log_index = 0; log_index < Volumes[current_volume]->abs_loggers.num_elements; log_index++) {
+              // This function calls a logger function which in turn stores some data among the passed, and possibly performs some basic data analysis
+              // Position and k_new given in master coordinates, the abs_logger must transform to its coordnate system if required
+              Volumes[current_volume]->abs_loggers.p_abs_logger[log_index]->function_pointers.active_record_function (
+                  &abs_position, k_new, abs_weight, t + t_abs_propagation, scattered_flag[current_volume],
+                  number_of_scattering_events, Volumes[current_volume]->abs_loggers.p_abs_logger[log_index], &abs_loggers_with_data_array, _particle);
+              // If the logging component have a conditional attatched, the collected data will be written to a temporary place
+              // At the end of the rays life, it will be checked if the condition is met
+              //  if it is met, the temporary data is transfered to permanent, and temp is cleared.
+              //  if it is not met, the temporary data is cleared.
+            }
 
-          #ifdef Union_trace_verbal_setting
-          printf ("Running abs_logger system for all volumes \n");
-          #endif
-          for (log_index = 0; log_index < global_all_volume_abs_logger_list_master->num_elements; log_index++) {
-            // As above, but on a global scale, meaning scattering in all volumes are logged
+            #ifdef Union_trace_verbal_setting
+            printf ("Running abs_logger system for all volumes \n");
+            #endif
+            for (log_index = 0; log_index < global_all_volume_abs_logger_list_master->num_elements; log_index++) {
+              // As above, but on a global scale, meaning scattering in all volumes are logged
 
-            // Problems with VN, PV, as there is no assosiated volume or process. The functions however need to have the same input to make the logger components
-            // general. Could be interesting to have a monitor that just globally measurres the second scattering event in any volume (must be two in the same).
-            // Weird but not meaningless.
+              // Problems with VN, PV, as there is no assosiated volume or process. The functions however need to have the same input to make the logger components
+              // general. Could be interesting to have a monitor that just globally measurres the second scattering event in any volume (must be two in the same).
+              // Weird but not meaningless.
 
-            // Above version includes scattered_flag_VP, but selected_process may be undefined at this point.
-            global_all_volume_abs_logger_list_master->elements[log_index].abs_logger->function_pointers.active_record_function (
-                &abs_position, k_new, initial_weight * (1.0 - abs_weight_factor), t + t_abs_propagation, scattered_flag[current_volume],
-                number_of_scattering_events, global_all_volume_abs_logger_list_master->elements[log_index].abs_logger, &abs_loggers_with_data_array, _particle);
+              // Above version includes scattered_flag_VP, but selected_process may be undefined at this point.
+              global_all_volume_abs_logger_list_master->elements[log_index].abs_logger->function_pointers.active_record_function (
+                  &abs_position, k_new, abs_weight, t + t_abs_propagation, scattered_flag[current_volume],
+                  number_of_scattering_events, global_all_volume_abs_logger_list_master->elements[log_index].abs_logger, &abs_loggers_with_data_array, _particle);
+            }
           }
         }
       }
