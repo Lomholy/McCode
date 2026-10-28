@@ -31,9 +31,6 @@
 *
 * Choices 0-3 should give the same intensity, and so should choices 4 and 5.
 * Choices 4 and 5 check that qx, qy, qz are in the same frame in both components.
-* Their Gaussian does not decay along qz, so near backward scattering, where the
-* Ewald sphere crosses the qz axis again, contributes as much to the total
-* scattering cross-section as forward scattering.
 * Choices 6 and 7 describe the same sample and must give the same intensities; in 6
 * the beam is tilted by 30 deg in the frame of the process, where mu is about 15 %
 * larger than for a beam along its z axis.
@@ -44,11 +41,11 @@
 * exactly once, which is what choices 0-3 are compared on.
 *
 * %Example: sample_choice=0 Detector: psd_det_single_I=9.68036e+06
-* %Example: sample_choice=1 Detector: psd_det_single_I=9.68037e+06
-* %Example: sample_choice=2 Detector: psd_det_single_I=9.56955e+06
-* %Example: sample_choice=3 Detector: psd_det_single_I=9.56955e+06
-* %Example: sample_choice=4 Detector: psd_det_single_I=3.46304e+06
-* %Example: sample_choice=5 Detector: psd_det_single_I=3.35664e+06
+* %Example: sample_choice=1 Detector: psd_det_single_I=9.68272e+06
+* %Example: sample_choice=2 Detector: psd_det_single_I=1.00167e+07
+* %Example: sample_choice=3 Detector: psd_det_single_I=1.00167e+07
+* %Example: sample_choice=4 Detector: psd_det_single_I=1.08252e+07
+* %Example: sample_choice=5 Detector: psd_det_single_I=1.08036e+07
 * %Example: sample_choice=6 Detector: psd_det_I=3.22779e+07
 * %Example: sample_choice=7 Detector: psd_det_I=3.22762e+07
 *
@@ -91,7 +88,7 @@ INITIALIZE
   /* Phi * Delta_rho^2 * V in fm^2/AA^3 = m^-1 */
   sphere_scale = sphere_phi * sphere_drho * sphere_drho * 4.0 * PI / 3.0 * pow (sphere_R, 3);
   if (sample_choice == 4 || sample_choice == 5)
-    sprintf (form_factor, "exp(-((qx*60)^2+(qy*20)^2)/2)");
+    sprintf (form_factor, "exp(-((qx*60)^2+(qy*20)^2+(qz*20)^2)/2)");
   else if (sample_choice == 3)
     sprintf (form_factor, "3*(sin(sqrt(qx^2+qy^2+qz^2)*p1)-sqrt(qx^2+qy^2+qz^2)*p1*cos(sqrt(qx^2+qy^2+qz^2)*p1))/(sqrt(qx^2+qy^2+qz^2)*p1)^3");
   else

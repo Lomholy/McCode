@@ -50,19 +50,19 @@
 * it is tabulated also over the direction of k in the process frame (n_dir_theta
 * polar angles and n_dir_phi azimuths), each node computed the first time a ray
 * needs it, and interpolated linearly in wavelength and direction, so a tilted or
-* rotated anisotropic sample has the right mu along every path. The q integral uses
-* log grids from both ends of the Ewald sphere (q from 0, and sqrt(4k^2 - q^2) from
-* 0, up to q = sqrt(2) k), so features near forward and near backward scattering
-* are both resolved.
+* rotated anisotropic sample has the right mu along every path. The q integral runs
+* over |q| <= 0.5 AA^-1, with log grids from both ends of the Ewald sphere (q from 0,
+* and sqrt(4k^2 - q^2) from 0, up to q = sqrt(2) k) where that range reaches them.
 *
 * In a scattering event the outgoing direction is drawn uniformly within the
 * focusing solid angle dOmega of the geometry, and the weight is multiplied by
 * dOmega * dSigma/dOmega(q) / mu(k).
 *
-* INITIALIZE warns if scale*F^2*S at |q| > 0.5 AA^-1 exceeds 1e-3 of its largest value
-* at |q| <= 0.5 AA^-1, since the expressions are meant for small-angle scattering. It
-* samples |q| and, for expressions in qx, qy, qz, 206 directions, so narrow features
-* away from the axes can be missed.
+* The component is for small-angle scattering: only |q| <= 0.5 AA^-1 enters the total
+* cross-section, and INITIALIZE stops the simulation if scale*F^2*S at |q| > 0.5 AA^-1
+* exceeds 1e-3 of its largest value at |q| <= 0.5 AA^-1. It samples |q| and, for
+* expressions in qx, qy, qz, 206 directions, so narrow features away from the axes
+* can be missed.
 *
 * tinyexpr supports +, -, *, /, ^, %, unary -, parentheses, and the
 * functions abs, acos, asin, atan, atan2, ceil, cos, cosh, exp, fac, floor,
@@ -119,6 +119,11 @@ SHARE
 
   %include "tinyexpr.h"
   %include "tinyexpr.c"
+
+  /* Largest |q| [AA^-1] of the small-angle scattering, see SANS_process_check_large_q */
+  #ifndef SANS_PROCESS_Q_MAX
+  #define SANS_PROCESS_Q_MAX 0.5
+  #endif
 
   struct SANS_physics_storage_struct {
     te_expr* F_expr;
@@ -186,19 +191,34 @@ SHARE
    * where e1, e2 are the theta and phi unit vectors of khat (x and y for khat along z). */
   double
   SANS_process_Idsdw (struct SANS_physics_storage_struct* s, double k, Coords khat, Coords e1, Coords e2) {
-    // Log grids from both ends of the Ewald sphere, so that features near forward and
-    // near backward scattering are both resolved: q from 0 to sqrt(2) k, and
-    // Q = sqrt(4k^2 - q^2) from 0 to sqrt(2) k, with q dq = Q dQ
+    // Only |q| <= SANS_PROCESS_Q_MAX contributes (see SANS_process_check_large_q). Log grids from
+    // both ends of the Ewald sphere resolve features near forward and near backward
+    // scattering: u = q from 0 to sqrt(2) k, and u = Q = sqrt(4k^2 - q^2) from 0 to sqrt(2) k,
+    // with q dq = Q dQ; the backward half is used only where |q| <= SANS_PROCESS_Q_MAX reaches it.
+    double q_end = fmin (SANS_PROCESS_Q_MAX, 2.0 * k);
+    double q_split = sqrt (2.0) * k;
     double Qminl = log10 (0.0000001);
-    double Qmidl = log10 (sqrt (2.0) * k);
+    double Qmidl = log10 (q_split);
     int istp = floor ((Qmidl - Qminl) * 300.0 + 0.5);
     double step = (Qmidl - Qminl) / istp;
     double Isq = 0.0;
     for (int half = 0; half < 2; half++) {
+      if (half == 1 && q_end <= q_split)
+        break;
+      double u_lo = half == 0 ? 0.0 : sqrt (fmax (0.0, 4.0 * k * k - q_end * q_end));
+      double u_hi = half == 0 ? fmin (q_end, q_split) : q_split;
       double umin = 0.0;
       for (int kkk = 0; kkk <= istp; kkk++) {
         double umax = pow (10.0, Qminl + kkk * step);
-        double u = 0.5 * (umin + umax);
+        double a = fmax (umin, u_lo);
+        double b = fmin (umax, u_hi);
+        umin = umax;
+        if (b <= a) {
+          if (a >= u_hi)
+            break;
+          continue;
+        }
+        double u = 0.5 * (a + b);
         double q, qpar, qperp;
         if (half == 0) {
           q = u;
@@ -217,8 +237,9 @@ SHARE
           phi_sum += SANS_process_dSigdOmega (s, q, qpar * khat.x + c * e1.x + pt * e2.x, qpar * khat.y + c * e1.y + pt * e2.y,
                                                       qpar * khat.z + c * e1.z + pt * e2.z);
         }
-        Isq += phi_sum / s->Nphi * u * (umax - umin);
-        umin = umax;
+        Isq += phi_sum / s->Nphi * u * (b - a);
+        if (b >= u_hi)
+          break;
       }
     }
     return Isq;
@@ -312,20 +333,23 @@ SHARE
     return largest;
   };
 
-  /* Warns if scale F^2 S at |q| > 0.5 AA^-1 (up to 4 pi AA^-1, backscattering at 1 AA) exceeds
-   * 1e-3 of its largest magnitude at |q| <= 0.5 AA^-1 */
+  /* Stops the simulation if scale F^2 S at |q| > SANS_PROCESS_Q_MAX (up to 4 pi AA^-1, backscattering
+   * at 1 AA) exceeds 1e-3 of its largest magnitude at |q| <= SANS_PROCESS_Q_MAX: the total
+   * cross-section only includes |q| <= SANS_PROCESS_Q_MAX */
   void
   SANS_process_check_large_q (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, const char* comp_name) {
-    double q_limit = 0.5;
+    double q_limit = SANS_PROCESS_Q_MAX;
     double fraction = 1e-3;
     double at_low[4], at_high[4];
     double low = SANS_process_largest (Fexpr, Sexpr, qv, dsdo_scale, q_only, 1e-4, q_limit, 200, at_low);
     double high = SANS_process_largest (Fexpr, Sexpr, qv, dsdo_scale, q_only, q_limit * 1.0001, 4.0 * PI, 400, at_high);
     if (fabs (high) > fraction * fabs (low))
-      printf ("SANS_process: %s: WARNING: scale*F^2*S at |q| > %g AA^-1 reaches %g m^-1 sr^-1 at |q| = %g AA^-1 "
-              "(qx, qy, qz = %g, %g, %g), more than %g of its largest value %g m^-1 sr^-1 at |q| <= %g AA^-1. "
-              "The expressions are meant for small-angle scattering.\n",
-              comp_name, q_limit, high, at_high[0], at_high[1], at_high[2], at_high[3], fraction, low, q_limit);
+      exit (fprintf (stderr,
+                     "SANS_process: %s: ERROR: scale*F^2*S at |q| > %g AA^-1 reaches %g m^-1 sr^-1 at |q| = %g AA^-1 "
+                     "(qx, qy, qz = %g, %g, %g), more than %g of its largest value %g m^-1 sr^-1 at |q| <= %g AA^-1. "
+                     "The component is for small-angle scattering, and its total cross-section only includes "
+                     "|q| <= %g AA^-1; give expressions that decay at large q, also along qx, qy and qz.\n",
+                     comp_name, q_limit, high, at_high[0], at_high[1], at_high[2], at_high[3], fraction, low, q_limit, q_limit));
   };
 
   /* Total scattering cross-section [m^-1] for k = (kx, ky, kz) [AA^-1] in the process frame,

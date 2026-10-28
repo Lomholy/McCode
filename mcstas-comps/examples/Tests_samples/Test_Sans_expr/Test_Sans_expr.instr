@@ -39,8 +39,8 @@
 *
 * %Example: sample_choice=0 Detector: psd_det_I=9.68222e+06
 * %Example: sample_choice=1 Detector: psd_det_I=9.65918e+06
-* %Example: sample_choice=2 Detector: psd_det_I=9.68223e+06
-* %Example: sample_choice=3 Detector: psd_det_I=9.68223e+06
+* %Example: sample_choice=2 Detector: psd_det_I=9.68459e+06
+* %Example: sample_choice=3 Detector: psd_det_I=9.68459e+06
 * %Example: sample_choice=4 Detector: psd_det_I=8.87947e+06
 * %Example: sample_choice=5 Detector: psd_det_I=8.87937e+06
 *
