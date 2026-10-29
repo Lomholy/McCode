@@ -13,7 +13,7 @@
 *
 * %Description
 * A 3.5 x 3.5 cm^2 Source_simple with neutrons of 25.3 +- 0.1 meV (2200 m/s, so the
-* 2200/v scaling of the absorption is 1) illuminates a 3 x 3 cm^2 slit 10.475 m
+* 2200/v scaling of the absorption is 1) illuminates a 3 x 3 cm^2 slit 99.975 m
 * downstream. Behind it is a 3 x 3 cm^2 (width x height), 1 cm deep absorbing box,
 * which does not overlap the slit.
 *
@@ -36,11 +36,11 @@
 * center, so 2 transmits about 5e-5 more than 3. The steps of 4 lie on the boundaries of
 * its 0.1 mm sampling segments, so 4 reproduces the absorption of 1 along z as well.
 *
-* %Test: sample_choice=0 Detector: abs_zx_I=0.0845871
-* %Test: sample_choice=1 Detector: abs_zx_I=0.0845873
-* %Test: sample_choice=2 Detector: trans_x_I=0.119781
-* %Test: sample_choice=3 Detector: trans_x_I=0.119734
-* %Test: sample_choice=4 Detector: abs_zx_I=0.0845874
+* %Test: sample_choice=0 Detector: abs_zx_I=0.000932789
+* %Test: sample_choice=1 Detector: abs_zx_I=0.000932788
+* %Test: sample_choice=2 Detector: trans_x_I=0.00132517
+* %Test: sample_choice=3 Detector: trans_x_I=0.00132458
+* %Test: sample_choice=4 Detector: abs_zx_I=0.000932789
 *
 * %Parameters
 * sample_choice: [1] Sample to use, see the description.
@@ -90,7 +90,7 @@ COMPONENT Origin = Progress_bar()
 COMPONENT source = Source_simple(
     yheight = 0.035,
     xwidth = 0.035,
-    dist = 10.475,
+    dist = 99.975,
     focus_xw = 0.03,
     focus_yh = 0.03,
     E0 = 25.3,
@@ -101,7 +101,7 @@ COMPONENT source = Source_simple(
 COMPONENT slit = Slit(
     xwidth = 0.03,
     yheight = 0.03
-) AT (0, 0, 10.475) RELATIVE source
+) AT (0, 0, 99.975) RELATIVE source
 
 COMPONENT arm_sample = Arm(
 ) AT (0, 0, 0.025) RELATIVE slit

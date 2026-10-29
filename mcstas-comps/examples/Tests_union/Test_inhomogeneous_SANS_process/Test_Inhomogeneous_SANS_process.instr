@@ -40,15 +40,15 @@
 * The detectors count rays scattered exactly once. psd_det_early and psd_det_late
 * split them by the time the ray reached the sample.
 *
-* %Example: sample_choice=0 Detector: psd_det_single_I=1.00167e+07
-* %Example: sample_choice=1 Detector: psd_det_single_I=9.88376e+06
-* %Example: sample_choice=2 Detector: psd_det_single_I=9.86618e+06
-* %Example: sample_choice=3 Detector: psd_det_single_I=9.52607e+06
-* %Example: sample_choice=4 Detector: psd_det_single_I=9.79733e+06
-* %Example: sample_choice=6 Detector: psd_det_early_I=3.21564e+06
-* %Example: sample_choice=7 Detector: psd_det_late_I=4.7804e+06
-* %Example: sample_choice=8 Detector: psd_det_early_I=3.61441e+06
-* %Example: sample_choice=8 Detector: psd_det_late_I=5.2007e+06
+* %Example: sample_choice=0 Detector: psd_det_single_I=111613
+* %Example: sample_choice=1 Detector: psd_det_single_I=109190
+* %Example: sample_choice=2 Detector: psd_det_single_I=109797
+* %Example: sample_choice=3 Detector: psd_det_single_I=93554.2
+* %Example: sample_choice=4 Detector: psd_det_single_I=94531.1
+* %Example: sample_choice=6 Detector: psd_det_early_I=36554.8
+* %Example: sample_choice=7 Detector: psd_det_late_I=66730.2
+* %Example: sample_choice=8 Detector: psd_det_early_I=35078.5
+* %Example: sample_choice=8 Detector: psd_det_late_I=56758.4
 *
 * %Parameters
 * E_i: [meV] Energy of the simulated neutrons.
@@ -94,8 +94,8 @@ INITIALIZE
   R_large = 150;
   R_hom = (sample_choice == 6) ? R_small : (sample_choice == 7) ? R_large : 100;
   scale_hom = scale_per_R3 * pow (R_hom, 3);
-  /* Median arrival time at the sample: 10.5 m at the speed of E_i */
-  t0 = 10.5 / (SE2V * sqrt (E_i));
+  /* Median arrival time at the sample: 100 m at the speed of E_i */
+  t0 = 100 / (SE2V * sqrt (E_i));
   direct_flag = (sample_choice == 5);
 
   const char* radius = "p1";
@@ -123,7 +123,7 @@ COMPONENT init = Union_init()
 
 COMPONENT source = Source_simple(
     radius = 0.05,
-    dist = 10.495,
+    dist = 99.995,
     focus_xw = samp_w,
     focus_yh = samp_h,
     E0 = E_i,
@@ -136,7 +136,7 @@ COMPONENT post_source_slit = Slit(
 ) AT (0, 0, 0.025) RELATIVE source
 
 COMPONENT pre_samp_arm = Arm(
-) AT (0, 0, 10.495) RELATIVE source
+) AT (0, 0, 99.995) RELATIVE source
 
 COMPONENT pre_samp_slit = Slit(
     radius = 0.005
