@@ -194,8 +194,8 @@ SHARE
    * at the point set in vars[4..7]; scale * I if scale_cached */
   double
   ISANS_integral (struct Inhomogeneous_SANS_physics_storage_struct* s, int il) {
-    double I = sans_expr_Idsdw (&s->expr, 2.0 * PI / il, coords_set (0, 0, 1), coords_set (1, 0, 0), coords_set (0, 1, 0));
-    return s->scale_cached ? I * te_eval (s->scale_te) : I;
+    double integral = sans_expr_Idsdw (&s->expr, 2.0 * PI / il, coords_set (0, 0, 1), coords_set (1, 0, 0), coords_set (0, 1, 0));
+    return s->scale_cached ? integral * te_eval (s->scale_te) : integral;
   };
 
   void
@@ -302,20 +302,20 @@ SHARE
   double
   ISANS_mu (struct Inhomogeneous_SANS_physics_storage_struct* s, double k) {
     double lambda = 2.0 * PI / k;
-    double I, Q2;
+    double integral, Q2;
     if (lambda <= 1.0) {
-      I = ISANS_cached (s, 1);
+      integral = ISANS_cached (s, 1);
       Q2 = s->qmax2_half[1];
     } else if (lambda >= 30.0) {
-      I = ISANS_cached (s, 30);
+      integral = ISANS_cached (s, 30);
       Q2 = s->qmax2_half[30];
     } else {
       int Ilam = (int)floor (lambda);
       int Ilam2 = Ilam + 1;
-      I = (Ilam2 - lambda) * ISANS_cached (s, Ilam) + (lambda - Ilam) * ISANS_cached (s, Ilam2);
+      integral = (Ilam2 - lambda) * ISANS_cached (s, Ilam) + (lambda - Ilam) * ISANS_cached (s, Ilam2);
       Q2 = (Ilam2 - lambda) * s->qmax2_half[Ilam] + (lambda - Ilam) * s->qmax2_half[Ilam2];
     }
-    return 2.0 * PI / (k * k) * ((s->scale_cached ? 1 : ISANS_scale (s)) * I + ISANS_background (s) * Q2);
+    return 2.0 * PI / (k * k) * ((s->scale_cached ? 1 : ISANS_scale (s)) * integral + ISANS_background (s) * Q2);
   };
 
   void

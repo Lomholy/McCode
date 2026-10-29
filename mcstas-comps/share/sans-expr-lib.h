@@ -62,7 +62,7 @@ struct sans_expr_table {
   double iso[31];
   int n_polar;
   int n_azim;
-  double* I;
+  double* node_I;
   char* filled;
 };
 
