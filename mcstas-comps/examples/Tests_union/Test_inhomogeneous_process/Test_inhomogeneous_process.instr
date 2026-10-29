@@ -14,6 +14,9 @@
 *
 * %Description
 * Test of different setups with the Inhomogeneous_incoherent_process.
+* The source, the slit and arm_sample, with E_i = 25.3 meV, come from
+* Test_inhomogeneous_absorption through %include; its sample_choice parameter is
+* not used here.
 * For all setups, the idea is the same. A source shines neutrons on the box,
 * and a detector placed right up on the side of the box, measures the 
 * incoherently scattered neutrons. 
@@ -58,20 +61,20 @@
 *
 *
 *
-* %Test: sample=thin Detector: lin_det_I=0.007387
-* %Test: sample=union_inc Detector: lin_det_I=0.007387
-* %Test: sample=union_inho Detector: lin_det_I=0.007387
-* %Test: sample=inc_linear Detector: lin_det_I=0.0185229
-* %Test: sample=inho_linear Detector: lin_det_I=0.0185641
-* %Test: sample=inc_and_inho Detector: lin_det_I=0.018585
-* %Test: sample=phonon thick=0.001 Detector: lin_det_I=0.00505839
-* %Test: sample=inc_trans Detector: lin_det_I=0.0785055
-* %Test: sample=inho_trans Detector: lin_det_I=0.0791337
-* %Test: sample=gauss_heavy Detector: lin_det_I=0.0985658
-* %Test: sample=inho_hvs Detector: lin_det_I=0.0185066
-* %Test: sample=inho_hvs_trans Detector: lin_det_I=0.0784756
-* %Test: sample=thin_etrans Detector: E_det_I=0.00723534
-* %Test: sample=union_inho_etrans Detector: E_det_I=0.00721415
+* %Test: sample=thin Detector: lin_det_I=0.00737896
+* %Test: sample=union_inc Detector: lin_det_I=0.00734838
+* %Test: sample=union_inho Detector: lin_det_I=0.00732146
+* %Test: sample=inc_linear Detector: lin_det_I=0.0185078
+* %Test: sample=inho_linear Detector: lin_det_I=0.0184958
+* %Test: sample=inc_and_inho Detector: lin_det_I=0.0185347
+* %Test: sample=phonon thick=0.001 Detector: lin_det_I=0.00502131
+* %Test: sample=inc_trans Detector: lin_det_I=0.0788241
+* %Test: sample=inho_trans Detector: lin_det_I=0.0794552
+* %Test: sample=gauss_heavy Detector: lin_det_I=0.0990818
+* %Test: sample=inho_hvs Detector: lin_det_I=0.0185079
+* %Test: sample=inho_hvs_trans Detector: lin_det_I=0.0787787
+* %Test: sample=thin_etrans Detector: E_det_I=0.00723727
+* %Test: sample=union_inho_etrans Detector: E_det_I=0.00724534
 *
 *
 *
@@ -95,7 +98,6 @@ DEFINE INSTRUMENT Test_inhomogeneous_process(thick=0.01,
 
 DECLARE
 %{
-  double E_i;
   double eps;
   int is_thin;
   int activate_inc;
@@ -118,8 +120,6 @@ DECLARE
 INITIALIZE
 %{
   eps=1e-6;
-
-  E_i = 25.3;
 
   is_thin = 0;
   activate_inc = 0;
@@ -185,22 +185,8 @@ INITIALIZE
 /* instrument is defined as a sequence of components.  */
 TRACE
 
-COMPONENT origin = Progress_bar()
-  AT (0,0,0) ABSOLUTE
-
-COMPONENT source = Source_simple(
-    yheight = 0.035,
-    xwidth = 0.035,
-    dist = 10.5,
-    focus_xw = .03,
-    focus_yh = .03,
-    E0 = E_i,
-    dE = 0.1,
-    flux = 1e4) AT (0, 0, 0) RELATIVE origin
-ROTATED (0, 0, 0) RELATIVE origin
-
-COMPONENT pre_samp_arm = Arm(
-    ) AT (0, 0, 10.475) RELATIVE source
+// Source, slit and arm_sample of Test_inhomogeneous_absorption
+%include "Tests_union/Test_inhomogeneous_absorption/Test_inhomogeneous_absorption.instr"
 
 COMPONENT pre_samp_det = PSD_monitor(
     nx = 200,
@@ -209,19 +195,13 @@ COMPONENT pre_samp_det = PSD_monitor(
     xwidth = 0.01,
     yheight = 0.01,
     restore_neutron = 1
-) AT (0, 0, -thick) RELATIVE pre_samp_arm
+) AT (0, 0, -thick) RELATIVE arm_sample
 
 
-COMPONENT unrot_sample_arm = Arm(
+COMPONENT rot_sample_arm = Arm(
 
-)
-AT (0,0,0.025) RELATIVE pre_samp_arm
-
-
-COMPONENT arm_sample = Arm(
-    
-) AT (0, 0, 0) RELATIVE unrot_sample_arm
-ROTATED (0, rot_samples, 0) RELATIVE unrot_sample_arm
+) AT (0, 0, 0) RELATIVE arm_sample
+ROTATED (0, rot_samples, 0) RELATIVE arm_sample
 
 //==============================================================================
 //=========================== START SAMPLE
@@ -237,26 +217,26 @@ COMPONENT box_sample = Incoherent(
     Etrans = Etrans_thin,
     deltaE = deltaE_thin
 ) WHEN (is_thin)
-AT (0, 0, 0) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+AT (0, 0, 0) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 
 COMPONENT init = Union_init()
-AT (0, 0, 0) RELATIVE arm_sample
-ROTATED (0.0, 0.0, 0.0) RELATIVE arm_sample
+AT (0, 0, 0) RELATIVE rot_sample_arm
+ROTATED (0.0, 0.0, 0.0) RELATIVE rot_sample_arm
 
 // =================== Incoherent process constant
 
 COMPONENT inc_proc = Incoherent_process(
   sigma = 5.08, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box = Union_box(
   priority = 10,
@@ -265,8 +245,8 @@ COMPONENT inc_box = Union_box(
   zdepth = thick,
   material_string = "Inco",
   number_of_activations = activate_inc
-) AT (0,0, 0) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, 0) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 
 // =================== Inhomogeneous_incoherent_process constant
@@ -275,13 +255,13 @@ COMPONENT inho_proc = Inhomogeneous_incoherent_process(
   sigma_expr = "5.08", unit_cell_volume = 13.827,
   Etrans_expr = etrans_inho
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inho_inco = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inho_proc"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inho_box = Union_box(
   priority = 10,
@@ -290,8 +270,8 @@ COMPONENT inho_box = Union_box(
   zdepth = thick,
   material_string = "inho_inco",
   number_of_activations = activate_inho
-) AT (0,0, 0) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, 0) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 // =================== Incoherent_process Linear
 // Linear means a gradient from 1.503 (Al) to 82 (H) over the thickness of the box,
@@ -299,13 +279,13 @@ ROTATED (0, 0, 0) RELATIVE arm_sample
 COMPONENT inc_proc_0 = Incoherent_process(
   sigma = 1.503, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco_0 = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc_0"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box_0 = Union_box(
   priority = 100,
@@ -314,19 +294,19 @@ COMPONENT inc_box_0 = Union_box(
   zdepth = thick/10 - eps,
   material_string ="Inco_0",
   number_of_activations = activate_inc_linear
-) AT (0,0, -thick/2 + thick/20) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, -thick/2 + thick/20) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 COMPONENT inc_proc_1 = Incoherent_process(
   sigma = 1.503 + 80.497/9, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco_1 = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc_1"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box_1 = Union_box(
   priority = 101,
@@ -335,20 +315,20 @@ COMPONENT inc_box_1 = Union_box(
   zdepth = thick/10 - eps,
   material_string = "Inco_1",
   number_of_activations = activate_inc_linear
-) AT (0,0, -thick/2 + thick/20 + thick/10*1) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, -thick/2 + thick/20 + thick/10*1) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 
 COMPONENT inc_proc_2 = Incoherent_process(
   sigma = 1.503 + 80.497/9*2, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco_2 = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc_2"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box_2 = Union_box(
   priority = 102,
@@ -357,19 +337,19 @@ COMPONENT inc_box_2 = Union_box(
   zdepth = thick/10 - eps,
   material_string = "Inco_2",
   number_of_activations = activate_inc_linear
-) AT (0,0, -thick/2 + thick/20 + thick/10*2) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, -thick/2 + thick/20 + thick/10*2) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 COMPONENT inc_proc_3 = Incoherent_process(
   sigma = 1.503 + 80.497/9*3, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco_3 = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc_3"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box_3 = Union_box(
   priority = 103,
@@ -378,19 +358,19 @@ COMPONENT inc_box_3 = Union_box(
   zdepth = thick/10 - eps,
   material_string = "Inco_3",
   number_of_activations = activate_inc_linear
-) AT (0,0, -thick/2 + thick/20 + thick/10*3) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, -thick/2 + thick/20 + thick/10*3) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 COMPONENT inc_proc_4 = Incoherent_process(
   sigma = 1.503 + 80.497/9*4, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco_4 = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc_4"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box_4 = Union_box(
   priority = 104,
@@ -399,19 +379,19 @@ COMPONENT inc_box_4 = Union_box(
   zdepth = thick/10 - eps,
   material_string = "Inco_4",
   number_of_activations = activate_inc_linear
-) AT (0,0,-thick/2 + thick/20 + thick/10*4 ) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0,-thick/2 + thick/20 + thick/10*4 ) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 COMPONENT inc_proc_5 = Incoherent_process(
   sigma = 1.503 + 80.497/9*5, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco_5 = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc_5"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box_5 = Union_box(
   priority = 105,
@@ -420,20 +400,20 @@ COMPONENT inc_box_5 = Union_box(
   zdepth = thick/10 - eps,
   material_string = "Inco_5",
   number_of_activations = activate_inc_linear
-) AT (0,0, -thick/2 + thick/20 + thick/10*5) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, -thick/2 + thick/20 + thick/10*5) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 
 COMPONENT inc_proc_6 = Incoherent_process(
   sigma = 1.503 + 80.497/9*6, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco_6 = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc_6"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box_6 = Union_box(
   priority = 106,
@@ -442,19 +422,19 @@ COMPONENT inc_box_6 = Union_box(
   zdepth = thick/10 - eps,
   material_string = "Inco_6",
   number_of_activations = activate_inc_linear
-) AT (0,0, -thick/2 + thick/20 + thick/10*6) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, -thick/2 + thick/20 + thick/10*6) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 COMPONENT inc_proc_7 = Incoherent_process(
   sigma = 1.503 + 80.497/9*7, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco_7 = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc_7"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box_7 = Union_box(
   priority = 107,
@@ -463,20 +443,20 @@ COMPONENT inc_box_7 = Union_box(
   zdepth = thick/10 - eps,
   material_string = "Inco_7",
   number_of_activations = activate_inc_linear
-) AT (0,0, -thick/2 + thick/20 + thick/10*7) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, -thick/2 + thick/20 + thick/10*7) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 
 COMPONENT inc_proc_8 = Incoherent_process(
   sigma = 1.503 + 80.497/9*8, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco_8 = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc_8"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box_8 = Union_box(
   priority = 108,
@@ -485,19 +465,19 @@ COMPONENT inc_box_8 = Union_box(
   zdepth = thick/10 - eps,
   material_string = "Inco_8",
   number_of_activations = activate_inc_linear
-) AT (0,0, -thick/2 + thick/20 + thick/10*8) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, -thick/2 + thick/20 + thick/10*8) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 COMPONENT inc_proc_9 = Incoherent_process(
   sigma = 1.503 + 80.497/9*9, unit_cell_volume = 13.827
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inco_9 = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inc_proc_9"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_box_9 = Union_box(
   priority = 109,
@@ -506,8 +486,8 @@ COMPONENT inc_box_9 = Union_box(
   zdepth = thick/10 - eps,
   material_string = "Inco_9",
   number_of_activations = activate_inc_linear
-) AT (0,0, -thick/2 + thick/20 + thick/10*9) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, -thick/2 + thick/20 + thick/10*9) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 
 
@@ -517,13 +497,13 @@ COMPONENT inho_lin_proc = Inhomogeneous_incoherent_process(
   // verbose=1,
   number_of_sample_points = 10
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inho_lin = Union_make_material(
     my_absorption =  100*5.08/13.827, 
     process_string="inho_lin_proc"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inho_lin_box = Union_box(
   priority = 10,
@@ -532,8 +512,8 @@ COMPONENT inho_lin_box = Union_box(
   zdepth = thick,
   material_string = "Inho_lin",
   number_of_activations = activate_inho_linear
-) AT (0,0, 0) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, 0) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 
 // =================== Inhomogeneous_incoherent_process steps
@@ -543,13 +523,13 @@ COMPONENT inho_hvs_proc = Inhomogeneous_incoherent_process(
   unit_cell_volume = 13.827,
   number_of_sample_points = 100
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Inho_hvs = Union_make_material(
     my_absorption =  100*5.08/13.827,
     process_string="inho_hvs_proc"
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inho_hvs_box = Union_box(
   priority = 10,
@@ -558,8 +538,8 @@ COMPONENT inho_hvs_box = Union_box(
   zdepth = thick,
   material_string = "Inho_hvs",
   number_of_activations = activate_inho_hvs
-) AT (0,0, 0) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, 0) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 
 // ============================ Inhomogeneous + homogenous
@@ -574,7 +554,7 @@ COMPONENT only_inho_proc = Inhomogeneous_incoherent_process(
   // verbose=1,
   number_of_sample_points = 10
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT inc_and_inho = Union_make_material(
     my_absorption = 100 * 5.08 / 13.827,
@@ -589,8 +569,8 @@ COMPONENT inho_and_inc_box = Union_box(
   zdepth = thick,
   material_string = "inc_and_inho",
   number_of_activations = activate_inc_and_inho_linear
-) AT (0,0, 0) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, 0) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 // ============================ Inhomogeneous + homogenous + phononsimple process
 COMPONENT inho_phonon_proc= Inhomogeneous_incoherent_process(
@@ -598,14 +578,14 @@ COMPONENT inho_phonon_proc= Inhomogeneous_incoherent_process(
   // verbose=1,
   number_of_sample_points = 2
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 
 
 COMPONENT phonon_proc = PhononSimple_process(
 
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 
 
@@ -622,8 +602,8 @@ COMPONENT phonon_box = Union_box(
   zdepth = thick,
   material_string = "phonon_mat",
   number_of_activations = activate_phonon
-) AT (0,0, 0) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, 0) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 // ============================ Inhomogeneous as a gaussian and heavy side
 
@@ -632,7 +612,7 @@ COMPONENT gauss = Inhomogeneous_incoherent_process(
   // verbose=1,
   number_of_sample_points = 10
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT gauss_mat = Union_make_material(
     my_absorption = 100 * 5.08 / 13.827,
@@ -647,8 +627,8 @@ COMPONENT  gauss_box = Union_box(
   zdepth = thick,
   material_string = "gauss_mat",
   number_of_activations = activate_gauss
-) AT (0,0, 0) RELATIVE arm_sample
-ROTATED (0, 0, 0) RELATIVE arm_sample
+) AT (0,0, 0) RELATIVE rot_sample_arm
+ROTATED (0, 0, 0) RELATIVE rot_sample_arm
 
 
 
@@ -663,24 +643,24 @@ COMPONENT space_logger = Union_logger_2D_space(
   n2 = 360,
   order_total = 1
 )
-AT (0,0,0) RELATIVE arm_sample
+AT (0,0,0) RELATIVE rot_sample_arm
 
 COMPONENT Sample_environment = Union_master(
  verbal = 0)
-AT (0, 0, 0) RELATIVE arm_sample
-ROTATED (0.0, 0.0, 0.0) RELATIVE arm_sample
+AT (0, 0, 0) RELATIVE rot_sample_arm
+ROTATED (0.0, 0.0, 0.0) RELATIVE rot_sample_arm
 
 COMPONENT stop = Union_stop()
-AT (0, 0, 0) RELATIVE arm_sample
-ROTATED (0.0, 0.0, 0.0) RELATIVE arm_sample
+AT (0, 0, 0) RELATIVE rot_sample_arm
+ROTATED (0.0, 0.0, 0.0) RELATIVE rot_sample_arm
 
 //==============================================================================
 //===========================  END SAMPLE
 //==============================================================================
 
 COMPONENT arm_det = Arm(
-) AT (0, 0, 0) RELATIVE unrot_sample_arm
-ROTATED (0,90 - rot_samples,0) RELATIVE unrot_sample_arm
+) AT (0, 0, 0) RELATIVE arm_sample
+ROTATED (0,90 - rot_samples,0) RELATIVE arm_sample
 
 
 

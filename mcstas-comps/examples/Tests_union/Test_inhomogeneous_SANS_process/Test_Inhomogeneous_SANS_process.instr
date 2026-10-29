@@ -12,9 +12,10 @@
 * Compares Inhomogeneous_SANS_process with SANS_process for dilute hard spheres
 *
 * %Description
-* A small SANS instrument with a 10x10x1 mm sample of dilute hard spheres (volume
-* fraction 1e-2, excess scattering length density 5 fm/AA^3). The scale of each
-* sphere radius R is Phi * Delta_rho^2 * 4 pi / 3 * R^3.
+* A 10x10x1 mm sample of dilute hard spheres (volume fraction 1e-2, excess scattering
+* length density 5 fm/AA^3), in the beam of Test_inhomogeneous_absorption: the source,
+* the slit, arm_sample, E_i = 25.3 meV and sample_choice come from that instrument
+* through %include. The scale of each sphere radius R is Phi * Delta_rho^2 * 4 pi / 3 * R^3.
 *
 * Homogeneous references (SANS_process):
 *   sample_choice=0: R = 100 AA
@@ -40,26 +41,24 @@
 * The detectors count rays scattered exactly once. psd_det_early and psd_det_late
 * split them by the time the ray reached the sample.
 *
-* %Example: sample_choice=0 Detector: psd_det_single_I=1.00167e+07
-* %Example: sample_choice=1 Detector: psd_det_single_I=9.88376e+06
-* %Example: sample_choice=2 Detector: psd_det_single_I=9.86618e+06
-* %Example: sample_choice=3 Detector: psd_det_single_I=9.52607e+06
-* %Example: sample_choice=4 Detector: psd_det_single_I=9.79733e+06
-* %Example: sample_choice=6 Detector: psd_det_early_I=3.21564e+06
-* %Example: sample_choice=7 Detector: psd_det_late_I=4.7804e+06
-* %Example: sample_choice=8 Detector: psd_det_early_I=3.61441e+06
-* %Example: sample_choice=8 Detector: psd_det_late_I=5.2007e+06
+* %Example: sample_choice=0 Detector: psd_det_single_I=0.0023315
+* %Example: sample_choice=1 Detector: psd_det_single_I=0.00232201
+* %Example: sample_choice=2 Detector: psd_det_single_I=0.00230921
+* %Example: sample_choice=3 Detector: psd_det_single_I=0.00216763
+* %Example: sample_choice=4 Detector: psd_det_single_I=0.0022765
+* %Example: sample_choice=6 Detector: psd_det_early_I=0.000628515
+* %Example: sample_choice=7 Detector: psd_det_late_I=0.00165294
+* %Example: sample_choice=8 Detector: psd_det_early_I=0.000650585
+* %Example: sample_choice=8 Detector: psd_det_late_I=0.0015262
 *
 * %Parameters
-* E_i: [meV] Energy of the simulated neutrons.
-* sample_choice: [1] Sample to use, see the description.
-* flux_mult: [1] Factor multiplied onto the source flux.
+* sample_choice: [1] Sample to use, see the description (from Test_inhomogeneous_absorption).
 *
 * %Link
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_Inhomogeneous_SANS_process(E_i=5, int sample_choice=0, flux_mult=0.5512)
+DEFINE INSTRUMENT Test_Inhomogeneous_SANS_process()
 
 DECLARE
 %{
@@ -112,41 +111,19 @@ INITIALIZE
 
 TRACE
 
-COMPONENT Origin = Progress_bar()
-  AT (0,0,0) ABSOLUTE
+// Source, slit and arm_sample of Test_inhomogeneous_absorption
+%include "Tests_union/Test_inhomogeneous_absorption/Test_inhomogeneous_absorption.instr"
+
+COMPONENT at_sample = Arm(
+) AT (0, 0, 0) RELATIVE arm_sample
 EXTEND %{
   scattered = 0;
+  // Time at the plane of arm_sample; the ray is still where the slit left it
+  t_sample = t - z / vz;
 %}
 
 COMPONENT init = Union_init()
   AT (0,0,0) ABSOLUTE
-
-COMPONENT source = Source_simple(
-    radius = 0.05,
-    dist = 10.495,
-    focus_xw = samp_w,
-    focus_yh = samp_h,
-    E0 = E_i,
-    dE = 0.475,
-    flux = 1e14*flux_mult
-) AT (0, 0, 0) RELATIVE Origin
-
-COMPONENT post_source_slit = Slit(
-    radius = 0.005
-) AT (0, 0, 0.025) RELATIVE source
-
-COMPONENT pre_samp_arm = Arm(
-) AT (0, 0, 10.495) RELATIVE source
-
-COMPONENT pre_samp_slit = Slit(
-    radius = 0.005
-) AT (0, 0, 0) RELATIVE pre_samp_arm
-
-COMPONENT arm_sample = Arm(
-) AT (0, 0, 0.005) RELATIVE pre_samp_arm
-EXTEND %{
-  t_sample = t;
-%}
 
 // Homogeneous sample, sample_choice 0, 6, 7
 
@@ -219,7 +196,7 @@ COMPONENT inh_proc = Inhomogeneous_SANS_process(
     p1 = (sample_choice == 1 || sample_choice == 2) ? 100 : R_small,
     p2 = R_large, p3 = scale_per_R3, p4 = t0,
     n_x = 21, n_t = 41,
-    t_min = t0 * 0.9, t_max = t0 * 1.1,
+    t_min = t0 * 0.997, t_max = t0 * 1.003,
     direct = direct_flag
 ) AT (0, 0, 0) RELATIVE arm_sample
 

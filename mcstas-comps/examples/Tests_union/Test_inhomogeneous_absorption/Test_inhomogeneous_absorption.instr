@@ -36,6 +36,13 @@
 * center, so 2 transmits about 5e-5 more than 3. The steps of 4 lie on the boundaries of
 * its 0.1 mm sampling segments, so 4 reproduces the absorption of 1 along z as well.
 *
+* The source, the slit and arm_sample, with E_i = 25.3 meV, are shared by the
+* inhomogeneous tests, which include this instrument with
+*   %include "Tests_union/Test_inhomogeneous_absorption/Test_inhomogeneous_absorption.instr"
+* at the start of their TRACE. The sample and the detectors here are REMOVABLE, so they
+* are left out there; the tests also get the parameter sample_choice and the variables
+* declared here, E_i and the abs_ ones.
+*
 * %Test: sample_choice=0 Detector: abs_zx_I=0.0845871
 * %Test: sample_choice=1 Detector: abs_zx_I=0.0845873
 * %Test: sample_choice=2 Detector: trans_x_I=0.119781
@@ -53,33 +60,31 @@ DEFINE INSTRUMENT Test_inhomogeneous_absorption(int sample_choice=0)
 
 DECLARE
 %{
-  double thick;
-  double width;
-  double height;
-  double eps;
-  int z_expr;
-  int z_boxes;
-  int x_expr;
-  int x_boxes;
-  int z_steps;
+  double E_i;
+  double abs_thick;
+  double abs_width;
+  double abs_height;
+  double abs_eps;
+  int abs_z_expr;
+  int abs_z_boxes;
+  int abs_x_expr;
+  int abs_x_boxes;
+  int abs_z_steps;
 %}
 
 INITIALIZE
 %{
-  thick = 0.01;
-  width = 0.03;
-  height = 0.03;
-  eps = 1e-9;
+  E_i = 25.3;
+  abs_thick = 0.01;
+  abs_width = 0.03;
+  abs_height = 0.03;
+  abs_eps = 1e-9;
 
-  z_expr = sample_choice == 0;
-  z_boxes = sample_choice == 1;
-  x_expr = sample_choice == 2;
-  x_boxes = sample_choice == 3;
-  z_steps = sample_choice == 4;
-  if (sample_choice < 0 || sample_choice > 4) {
-    fprintf (stderr, "Unsupported instrument parameter value sample_choice=%d.\n", sample_choice);
-    exit (-1);
-  }
+  abs_z_expr = sample_choice == 0;
+  abs_z_boxes = sample_choice == 1;
+  abs_x_expr = sample_choice == 2;
+  abs_x_boxes = sample_choice == 3;
+  abs_z_steps = sample_choice == 4;
 %}
 
 TRACE
@@ -93,7 +98,7 @@ COMPONENT source = Source_simple(
     dist = 10.475,
     focus_xw = 0.03,
     focus_yh = 0.03,
-    E0 = 25.3,
+    E0 = E_i,
     dE = 0.1,
     flux = 1e4
 ) AT (0, 0, 0) RELATIVE Origin
@@ -106,358 +111,366 @@ COMPONENT slit = Slit(
 COMPONENT arm_sample = Arm(
 ) AT (0, 0, 0.025) RELATIVE slit
 
-// =================== Absorption along z, mu_absorption_expr
-// 10 /m at z = -thick/2 + thick/20 rising by 10 /m every thick/10, as the boxes below
+// Unused material, not REMOVABLE. The code generator embeds union-lib in the SHARE of the
+// first Union component it reads, also when that component is REMOVABLE; this one puts it
+// ahead of the Union components of the instruments that include this one.
+COMPONENT union_lib_first = Union_make_material(
+    absorber = 1,
+    my_absorption = 1
+) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_expr_mat = Union_make_material(
+// =================== Absorption along z, mu_absorption_expr
+// 10 /m at z = -abs_thick/2 + abs_thick/20 rising by 10 /m every abs_thick/10, as the boxes below
+
+REMOVABLE COMPONENT z_expr_mat = Union_make_material(
     absorber = 1,
     mu_absorption_expr = "10 + 10*((z + 0.0045)/0.001)",
     absorption_sampling_points = 100
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_expr_box = Union_box(
+REMOVABLE COMPONENT z_expr_box = Union_box(
     priority = 10,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "z_expr_mat",
-    number_of_activations = z_expr
+    number_of_activations = abs_z_expr
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 // =================== Absorption along z, mu_absorption_expr with steps
 // The steps of the 10 boxes below, at their boundaries
 
-COMPONENT z_steps_mat = Union_make_material(
+REMOVABLE COMPONENT z_steps_mat = Union_make_material(
     absorber = 1,
     mu_absorption_expr = "10 + 10*(hvs(z,-0.004,1,0) + hvs(z,-0.003,1,0) + hvs(z,-0.002,1,0) + hvs(z,-0.001,1,0) + hvs(z,0,1,0) + hvs(z,0.001,1,0) + hvs(z,0.002,1,0) + hvs(z,0.003,1,0) + hvs(z,0.004,1,0))",
     absorption_sampling_points = 100
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_steps_box = Union_box(
+REMOVABLE COMPONENT z_steps_box = Union_box(
     priority = 12,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "z_steps_mat",
-    number_of_activations = z_steps
+    number_of_activations = abs_z_steps
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 // =================== Absorption along z, 10 boxes
-// Neighbouring boxes are eps apart, so no faces coincide
+// Neighbouring boxes are abs_eps apart, so no faces coincide
 
-COMPONENT z_mat_0 = Union_make_material(
+REMOVABLE COMPONENT z_mat_0 = Union_make_material(
     absorber = 1,
     my_absorption = 10
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_box_0 = Union_box(
+REMOVABLE COMPONENT z_box_0 = Union_box(
     priority = 20,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick/10 - eps,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick/10 - abs_eps,
     material_string = "z_mat_0",
-    number_of_activations = z_boxes
-) AT (0, 0, -thick/2 + thick/20 + thick/10*0) RELATIVE arm_sample
+    number_of_activations = abs_z_boxes
+) AT (0, 0, -abs_thick/2 + abs_thick/20 + abs_thick/10*0) RELATIVE arm_sample
 
-COMPONENT z_mat_1 = Union_make_material(
+REMOVABLE COMPONENT z_mat_1 = Union_make_material(
     absorber = 1,
     my_absorption = 20
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_box_1 = Union_box(
+REMOVABLE COMPONENT z_box_1 = Union_box(
     priority = 21,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick/10 - eps,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick/10 - abs_eps,
     material_string = "z_mat_1",
-    number_of_activations = z_boxes
-) AT (0, 0, -thick/2 + thick/20 + thick/10*1) RELATIVE arm_sample
+    number_of_activations = abs_z_boxes
+) AT (0, 0, -abs_thick/2 + abs_thick/20 + abs_thick/10*1) RELATIVE arm_sample
 
-COMPONENT z_mat_2 = Union_make_material(
+REMOVABLE COMPONENT z_mat_2 = Union_make_material(
     absorber = 1,
     my_absorption = 30
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_box_2 = Union_box(
+REMOVABLE COMPONENT z_box_2 = Union_box(
     priority = 22,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick/10 - eps,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick/10 - abs_eps,
     material_string = "z_mat_2",
-    number_of_activations = z_boxes
-) AT (0, 0, -thick/2 + thick/20 + thick/10*2) RELATIVE arm_sample
+    number_of_activations = abs_z_boxes
+) AT (0, 0, -abs_thick/2 + abs_thick/20 + abs_thick/10*2) RELATIVE arm_sample
 
-COMPONENT z_mat_3 = Union_make_material(
+REMOVABLE COMPONENT z_mat_3 = Union_make_material(
     absorber = 1,
     my_absorption = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_box_3 = Union_box(
+REMOVABLE COMPONENT z_box_3 = Union_box(
     priority = 23,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick/10 - eps,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick/10 - abs_eps,
     material_string = "z_mat_3",
-    number_of_activations = z_boxes
-) AT (0, 0, -thick/2 + thick/20 + thick/10*3) RELATIVE arm_sample
+    number_of_activations = abs_z_boxes
+) AT (0, 0, -abs_thick/2 + abs_thick/20 + abs_thick/10*3) RELATIVE arm_sample
 
-COMPONENT z_mat_4 = Union_make_material(
+REMOVABLE COMPONENT z_mat_4 = Union_make_material(
     absorber = 1,
     my_absorption = 50
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_box_4 = Union_box(
+REMOVABLE COMPONENT z_box_4 = Union_box(
     priority = 24,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick/10 - eps,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick/10 - abs_eps,
     material_string = "z_mat_4",
-    number_of_activations = z_boxes
-) AT (0, 0, -thick/2 + thick/20 + thick/10*4) RELATIVE arm_sample
+    number_of_activations = abs_z_boxes
+) AT (0, 0, -abs_thick/2 + abs_thick/20 + abs_thick/10*4) RELATIVE arm_sample
 
-COMPONENT z_mat_5 = Union_make_material(
+REMOVABLE COMPONENT z_mat_5 = Union_make_material(
     absorber = 1,
     my_absorption = 60
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_box_5 = Union_box(
+REMOVABLE COMPONENT z_box_5 = Union_box(
     priority = 25,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick/10 - eps,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick/10 - abs_eps,
     material_string = "z_mat_5",
-    number_of_activations = z_boxes
-) AT (0, 0, -thick/2 + thick/20 + thick/10*5) RELATIVE arm_sample
+    number_of_activations = abs_z_boxes
+) AT (0, 0, -abs_thick/2 + abs_thick/20 + abs_thick/10*5) RELATIVE arm_sample
 
-COMPONENT z_mat_6 = Union_make_material(
+REMOVABLE COMPONENT z_mat_6 = Union_make_material(
     absorber = 1,
     my_absorption = 70
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_box_6 = Union_box(
+REMOVABLE COMPONENT z_box_6 = Union_box(
     priority = 26,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick/10 - eps,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick/10 - abs_eps,
     material_string = "z_mat_6",
-    number_of_activations = z_boxes
-) AT (0, 0, -thick/2 + thick/20 + thick/10*6) RELATIVE arm_sample
+    number_of_activations = abs_z_boxes
+) AT (0, 0, -abs_thick/2 + abs_thick/20 + abs_thick/10*6) RELATIVE arm_sample
 
-COMPONENT z_mat_7 = Union_make_material(
+REMOVABLE COMPONENT z_mat_7 = Union_make_material(
     absorber = 1,
     my_absorption = 80
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_box_7 = Union_box(
+REMOVABLE COMPONENT z_box_7 = Union_box(
     priority = 27,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick/10 - eps,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick/10 - abs_eps,
     material_string = "z_mat_7",
-    number_of_activations = z_boxes
-) AT (0, 0, -thick/2 + thick/20 + thick/10*7) RELATIVE arm_sample
+    number_of_activations = abs_z_boxes
+) AT (0, 0, -abs_thick/2 + abs_thick/20 + abs_thick/10*7) RELATIVE arm_sample
 
-COMPONENT z_mat_8 = Union_make_material(
+REMOVABLE COMPONENT z_mat_8 = Union_make_material(
     absorber = 1,
     my_absorption = 90
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_box_8 = Union_box(
+REMOVABLE COMPONENT z_box_8 = Union_box(
     priority = 28,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick/10 - eps,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick/10 - abs_eps,
     material_string = "z_mat_8",
-    number_of_activations = z_boxes
-) AT (0, 0, -thick/2 + thick/20 + thick/10*8) RELATIVE arm_sample
+    number_of_activations = abs_z_boxes
+) AT (0, 0, -abs_thick/2 + abs_thick/20 + abs_thick/10*8) RELATIVE arm_sample
 
-COMPONENT z_mat_9 = Union_make_material(
+REMOVABLE COMPONENT z_mat_9 = Union_make_material(
     absorber = 1,
     my_absorption = 100
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT z_box_9 = Union_box(
+REMOVABLE COMPONENT z_box_9 = Union_box(
     priority = 29,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick/10 - eps,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick/10 - abs_eps,
     material_string = "z_mat_9",
-    number_of_activations = z_boxes
-) AT (0, 0, -thick/2 + thick/20 + thick/10*9) RELATIVE arm_sample
+    number_of_activations = abs_z_boxes
+) AT (0, 0, -abs_thick/2 + abs_thick/20 + abs_thick/10*9) RELATIVE arm_sample
 
 // =================== Absorption along x, mu_absorption_expr
-// 10 /m at x = -width/2 + width/20 rising by 10 /m every width/10, as the boxes below
+// 10 /m at x = -abs_width/2 + abs_width/20 rising by 10 /m every abs_width/10, as the boxes below
 
-COMPONENT x_expr_mat = Union_make_material(
+REMOVABLE COMPONENT x_expr_mat = Union_make_material(
     absorber = 1,
     mu_absorption_expr = "10 + 10*((x + 0.0135)/0.003)",
     absorption_sampling_points = 100
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_expr_box = Union_box(
+REMOVABLE COMPONENT x_expr_box = Union_box(
     priority = 11,
-    xwidth = width,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_expr_mat",
-    number_of_activations = x_expr
+    number_of_activations = abs_x_expr
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 // =================== Absorption along x, 10 boxes
-// Neighbouring boxes are eps apart, so no faces coincide
+// Neighbouring boxes are abs_eps apart, so no faces coincide
 
-COMPONENT x_mat_0 = Union_make_material(
+REMOVABLE COMPONENT x_mat_0 = Union_make_material(
     absorber = 1,
     my_absorption = 10
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_box_0 = Union_box(
+REMOVABLE COMPONENT x_box_0 = Union_box(
     priority = 30,
-    xwidth = width/10 - eps,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width/10 - abs_eps,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_mat_0",
-    number_of_activations = x_boxes
-) AT (-width/2 + width/20 + width/10*0, 0, 0) RELATIVE arm_sample
+    number_of_activations = abs_x_boxes
+) AT (-abs_width/2 + abs_width/20 + abs_width/10*0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_mat_1 = Union_make_material(
+REMOVABLE COMPONENT x_mat_1 = Union_make_material(
     absorber = 1,
     my_absorption = 20
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_box_1 = Union_box(
+REMOVABLE COMPONENT x_box_1 = Union_box(
     priority = 31,
-    xwidth = width/10 - eps,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width/10 - abs_eps,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_mat_1",
-    number_of_activations = x_boxes
-) AT (-width/2 + width/20 + width/10*1, 0, 0) RELATIVE arm_sample
+    number_of_activations = abs_x_boxes
+) AT (-abs_width/2 + abs_width/20 + abs_width/10*1, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_mat_2 = Union_make_material(
+REMOVABLE COMPONENT x_mat_2 = Union_make_material(
     absorber = 1,
     my_absorption = 30
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_box_2 = Union_box(
+REMOVABLE COMPONENT x_box_2 = Union_box(
     priority = 32,
-    xwidth = width/10 - eps,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width/10 - abs_eps,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_mat_2",
-    number_of_activations = x_boxes
-) AT (-width/2 + width/20 + width/10*2, 0, 0) RELATIVE arm_sample
+    number_of_activations = abs_x_boxes
+) AT (-abs_width/2 + abs_width/20 + abs_width/10*2, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_mat_3 = Union_make_material(
+REMOVABLE COMPONENT x_mat_3 = Union_make_material(
     absorber = 1,
     my_absorption = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_box_3 = Union_box(
+REMOVABLE COMPONENT x_box_3 = Union_box(
     priority = 33,
-    xwidth = width/10 - eps,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width/10 - abs_eps,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_mat_3",
-    number_of_activations = x_boxes
-) AT (-width/2 + width/20 + width/10*3, 0, 0) RELATIVE arm_sample
+    number_of_activations = abs_x_boxes
+) AT (-abs_width/2 + abs_width/20 + abs_width/10*3, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_mat_4 = Union_make_material(
+REMOVABLE COMPONENT x_mat_4 = Union_make_material(
     absorber = 1,
     my_absorption = 50
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_box_4 = Union_box(
+REMOVABLE COMPONENT x_box_4 = Union_box(
     priority = 34,
-    xwidth = width/10 - eps,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width/10 - abs_eps,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_mat_4",
-    number_of_activations = x_boxes
-) AT (-width/2 + width/20 + width/10*4, 0, 0) RELATIVE arm_sample
+    number_of_activations = abs_x_boxes
+) AT (-abs_width/2 + abs_width/20 + abs_width/10*4, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_mat_5 = Union_make_material(
+REMOVABLE COMPONENT x_mat_5 = Union_make_material(
     absorber = 1,
     my_absorption = 60
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_box_5 = Union_box(
+REMOVABLE COMPONENT x_box_5 = Union_box(
     priority = 35,
-    xwidth = width/10 - eps,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width/10 - abs_eps,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_mat_5",
-    number_of_activations = x_boxes
-) AT (-width/2 + width/20 + width/10*5, 0, 0) RELATIVE arm_sample
+    number_of_activations = abs_x_boxes
+) AT (-abs_width/2 + abs_width/20 + abs_width/10*5, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_mat_6 = Union_make_material(
+REMOVABLE COMPONENT x_mat_6 = Union_make_material(
     absorber = 1,
     my_absorption = 70
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_box_6 = Union_box(
+REMOVABLE COMPONENT x_box_6 = Union_box(
     priority = 36,
-    xwidth = width/10 - eps,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width/10 - abs_eps,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_mat_6",
-    number_of_activations = x_boxes
-) AT (-width/2 + width/20 + width/10*6, 0, 0) RELATIVE arm_sample
+    number_of_activations = abs_x_boxes
+) AT (-abs_width/2 + abs_width/20 + abs_width/10*6, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_mat_7 = Union_make_material(
+REMOVABLE COMPONENT x_mat_7 = Union_make_material(
     absorber = 1,
     my_absorption = 80
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_box_7 = Union_box(
+REMOVABLE COMPONENT x_box_7 = Union_box(
     priority = 37,
-    xwidth = width/10 - eps,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width/10 - abs_eps,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_mat_7",
-    number_of_activations = x_boxes
-) AT (-width/2 + width/20 + width/10*7, 0, 0) RELATIVE arm_sample
+    number_of_activations = abs_x_boxes
+) AT (-abs_width/2 + abs_width/20 + abs_width/10*7, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_mat_8 = Union_make_material(
+REMOVABLE COMPONENT x_mat_8 = Union_make_material(
     absorber = 1,
     my_absorption = 90
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_box_8 = Union_box(
+REMOVABLE COMPONENT x_box_8 = Union_box(
     priority = 38,
-    xwidth = width/10 - eps,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width/10 - abs_eps,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_mat_8",
-    number_of_activations = x_boxes
-) AT (-width/2 + width/20 + width/10*8, 0, 0) RELATIVE arm_sample
+    number_of_activations = abs_x_boxes
+) AT (-abs_width/2 + abs_width/20 + abs_width/10*8, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_mat_9 = Union_make_material(
+REMOVABLE COMPONENT x_mat_9 = Union_make_material(
     absorber = 1,
     my_absorption = 100
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT x_box_9 = Union_box(
+REMOVABLE COMPONENT x_box_9 = Union_box(
     priority = 39,
-    xwidth = width/10 - eps,
-    yheight = height,
-    zdepth = thick,
+    xwidth = abs_width/10 - abs_eps,
+    yheight = abs_height,
+    zdepth = abs_thick,
     material_string = "x_mat_9",
-    number_of_activations = x_boxes
-) AT (-width/2 + width/20 + width/10*9, 0, 0) RELATIVE arm_sample
+    number_of_activations = abs_x_boxes
+) AT (-abs_width/2 + abs_width/20 + abs_width/10*9, 0, 0) RELATIVE arm_sample
 
 // =================== Detectors
 
-COMPONENT abs_zx = Union_abs_logger_2D_space(
-    D_direction_1 = "z", D1_min = -thick/2, D1_max = thick/2, n1 = 200,
-      D_direction_2 = "x", D2_min = -width/2, D2_max = width/2, n2 = 200,
+REMOVABLE COMPONENT abs_zx = Union_abs_logger_2D_space(
+    D_direction_1 = "z", D1_min = -abs_thick/2, D1_max = abs_thick/2, n1 = 200,
+      D_direction_2 = "x", D2_min = -abs_width/2, D2_max = abs_width/2, n2 = 200,
     filename = "abs_zx"
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT Sample_environment = Union_master(
+REMOVABLE COMPONENT Sample_environment = Union_master(
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-COMPONENT trans_x = PSD_monitor(
+REMOVABLE COMPONENT trans_x = PSD_monitor(
     nx = 300,
     ny = 1,
     xwidth = 0.03,
