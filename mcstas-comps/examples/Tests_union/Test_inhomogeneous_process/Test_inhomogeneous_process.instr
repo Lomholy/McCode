@@ -58,20 +58,20 @@
 *
 *
 *
-* %Test: sample=thin Detector: lin_det_I=0.007387
-* %Test: sample=union_inc Detector: lin_det_I=0.007387
-* %Test: sample=union_inho Detector: lin_det_I=0.007387
-* %Test: sample=inc_linear Detector: lin_det_I=0.0185229
-* %Test: sample=inho_linear Detector: lin_det_I=0.0185641
-* %Test: sample=inc_and_inho Detector: lin_det_I=0.018585
-* %Test: sample=phonon thick=0.001 Detector: lin_det_I=0.00505839
-* %Test: sample=inc_trans Detector: lin_det_I=0.0785055
-* %Test: sample=inho_trans Detector: lin_det_I=0.0791337
-* %Test: sample=gauss_heavy Detector: lin_det_I=0.0985658
-* %Test: sample=inho_hvs Detector: lin_det_I=0.0185066
-* %Test: sample=inho_hvs_trans Detector: lin_det_I=0.0784756
-* %Test: sample=thin_etrans Detector: E_det_I=0.00723534
-* %Test: sample=union_inho_etrans Detector: E_det_I=0.00721415
+* %Test: sample=thin Detector: lin_det_I=8.13638e-05
+* %Test: sample=union_inc Detector: lin_det_I=8.12544e-05
+* %Test: sample=union_inho Detector: lin_det_I=8.09275e-05
+* %Test: sample=inc_linear Detector: lin_det_I=0.000203737
+* %Test: sample=inho_linear Detector: lin_det_I=0.00020518
+* %Test: sample=inc_and_inho Detector: lin_det_I=0.000204497
+* %Test: sample=phonon thick=0.001 Detector: lin_det_I=5.55326e-05
+* %Test: sample=inc_trans Detector: lin_det_I=0.000868321
+* %Test: sample=inho_trans Detector: lin_det_I=0.000874878
+* %Test: sample=gauss_heavy Detector: lin_det_I=0.00109083
+* %Test: sample=inho_hvs Detector: lin_det_I=0.00020348
+* %Test: sample=inho_hvs_trans Detector: lin_det_I=0.000867614
+* %Test: sample=thin_etrans Detector: E_det_I=7.9796e-05
+* %Test: sample=union_inho_etrans Detector: E_det_I=7.93586e-05
 *
 *
 *
@@ -191,7 +191,7 @@ COMPONENT origin = Progress_bar()
 COMPONENT source = Source_simple(
     yheight = 0.035,
     xwidth = 0.035,
-    dist = 10.5,
+    dist = 100,
     focus_xw = .03,
     focus_yh = .03,
     E0 = E_i,
@@ -200,7 +200,7 @@ COMPONENT source = Source_simple(
 ROTATED (0, 0, 0) RELATIVE origin
 
 COMPONENT pre_samp_arm = Arm(
-    ) AT (0, 0, 10.475) RELATIVE source
+    ) AT (0, 0, 99.975) RELATIVE source
 
 COMPONENT pre_samp_det = PSD_monitor(
     nx = 200,
