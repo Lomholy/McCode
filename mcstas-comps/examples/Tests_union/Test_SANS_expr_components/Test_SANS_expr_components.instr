@@ -1,7 +1,7 @@
 /*******************************************************************************
 *         McStas instrument definition URL=http://www.mcstas.org
 *
-* Instrument: Test_SANS_components
+* Instrument: Test_SANS_expr_components
 *
 * %Identification
 * Written by: Daniel Lomholt Christensen
@@ -59,7 +59,7 @@
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_SANS_components(int sample_choice=0)
+DEFINE INSTRUMENT Test_SANS_expr_components(int sample_choice=0)
 
 DECLARE
 %{
