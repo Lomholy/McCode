@@ -16,7 +16,9 @@
 * The beam of Test_inhomogeneous_absorption: a 3.5 x 3.5 cm^2 Source_simple with
 * neutrons of 25.3 +- 0.1 meV, a 3 x 3 cm^2 slit 2.5 cm before the sample, and the
 * sample 100 m from the source. A 1 x 1 m^2 PSD with 1 x 1 mm^2 bins, 5 m after the
-* sample, counts the rays scattered exactly once.
+* sample, counts the rays scattered exactly once. q_det, a Monitor_nD disk of radius
+* 0.5 m at the same place, bins the same rays azimuthally in kxy = |q| perpendicular to
+* the beam.
 *
 * Hard spheres, R = 100 AA, volume fraction 1e-2, excess scattering length density
 * 5 fm/AA^3, in a cylinder of radius 0.5 mm and height 3 cm:
@@ -362,6 +364,15 @@ COMPONENT psd_det = PSD_monitor(
     filename = "psd_det",
     xwidth = 1,
     yheight = 1,
+    restore_neutron = 1
+) WHEN (scattered == 1)
+AT (0, 0, 5) RELATIVE arm_sample
+
+COMPONENT q_det = Monitor_nD(
+    xwidth = 1,
+    yheight = 1,
+    options = "disk, kxy limits=[0 0.35] bins=60",
+    filename = "q_det",
     restore_neutron = 1
 ) WHEN (scattered == 1)
 AT (0, 0, 5) RELATIVE arm_sample
