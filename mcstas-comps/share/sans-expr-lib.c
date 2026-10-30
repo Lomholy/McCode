@@ -175,10 +175,10 @@ sans_expr_node (struct sans_expr_table *t, int ilam, int it, int ip) {
     Coords khat = coords_set (sin (theta) * cos (phi), sin (theta) * sin (phi), cos (theta));
     Coords e1 = coords_set (cos (theta) * cos (phi), cos (theta) * sin (phi), -sin (theta));
     Coords e2 = coords_set (-sin (phi), cos (phi), 0);
-    t->I[index] = sans_expr_Idsdw (t, 2.0 * PI / ilam, khat, e1, e2);
+    t->node_I[index] = sans_expr_Idsdw (t, 2.0 * PI / ilam, khat, e1, e2);
     t->filled[index] = 1;
   }
-  return t->I[index];
+  return t->node_I[index];
 }
 
 /* int q dq <dSigma/dOmega>_phi at wavelength ilam [AA] for k_i along (kx, ky, kz),
@@ -202,16 +202,16 @@ sans_expr_Idsdw_at (struct sans_expr_table *t, int ilam, double kx, double ky, d
   ip %= t->n_azim;
   int ip2 = (ip + 1) % t->n_azim;
   // Nodes with zero weight are not computed
-  double I = 0;
+  double integral = 0;
   if ((1 - ft) * (1 - fp) > 0)
-    I += (1 - ft) * (1 - fp) * sans_expr_node (t, ilam, it, ip);
+    integral += (1 - ft) * (1 - fp) * sans_expr_node (t, ilam, it, ip);
   if ((1 - ft) * fp > 0)
-    I += (1 - ft) * fp * sans_expr_node (t, ilam, it, ip2);
+    integral += (1 - ft) * fp * sans_expr_node (t, ilam, it, ip2);
   if (ft * (1 - fp) > 0)
-    I += ft * (1 - fp) * sans_expr_node (t, ilam, it + 1, ip);
+    integral += ft * (1 - fp) * sans_expr_node (t, ilam, it + 1, ip);
   if (ft * fp > 0)
-    I += ft * fp * sans_expr_node (t, ilam, it + 1, ip2);
-  return I;
+    integral += ft * fp * sans_expr_node (t, ilam, it + 1, ip2);
+  return integral;
 }
 
 /* Total scattering cross-section [m^-1] for k_i = (kx, ky, kz) [AA^-1] in the local frame,
@@ -220,19 +220,19 @@ double
 sans_expr_sigma_s (struct sans_expr_table *t, double kx, double ky, double kz) {
   double k0 = sqrt (kx * kx + ky * ky + kz * kz);
   double lambda = 2.0 * PI / k0;
-  double I;
+  double integral;
   if (lambda <= 1.0)
-    I = sans_expr_Idsdw_at (t, 1, kx, ky, kz);
+    integral = sans_expr_Idsdw_at (t, 1, kx, ky, kz);
   else if (lambda >= 30.0)
-    I = sans_expr_Idsdw_at (t, 30, kx, ky, kz);
+    integral = sans_expr_Idsdw_at (t, 30, kx, ky, kz);
   else {
     int Ilam = (int)floor (lambda);
     double w = lambda - Ilam;
-    I = (1 - w) * sans_expr_Idsdw_at (t, Ilam, kx, ky, kz);
+    integral = (1 - w) * sans_expr_Idsdw_at (t, Ilam, kx, ky, kz);
     if (w > 0)
-      I += w * sans_expr_Idsdw_at (t, Ilam + 1, kx, ky, kz);
+      integral += w * sans_expr_Idsdw_at (t, Ilam + 1, kx, ky, kz);
   }
-  return 2 * PI * I / (k0 * k0);
+  return 2 * PI * integral / (k0 * k0);
 }
 
 double
@@ -261,7 +261,7 @@ sans_expr_table_init (struct sans_expr_table *t, te_expr *Fexpr, te_expr *Sexpr,
   t->Nphi = q_only ? 1 : n_phi;
   t->n_polar = n_dir_theta;
   t->n_azim = n_dir_phi;
-  t->I = NULL;
+  t->node_I = NULL;
   t->filled = NULL;
   if (q_only) {
     // Expressions in q only: the integrals do not depend on the direction of k
@@ -272,18 +272,18 @@ sans_expr_table_init (struct sans_expr_table *t, te_expr *Fexpr, te_expr *Sexpr,
     if (n_dir_theta < 2 || n_dir_phi < 1)
       exit (fprintf (stderr, "%s: %s: n_dir_theta must be at least 2 and n_dir_phi at least 1.\n", component, comp_name));
     long n_nodes = 31L * n_dir_theta * n_dir_phi;
-    t->I = malloc (n_nodes * sizeof (double));
+    t->node_I = malloc (n_nodes * sizeof (double));
     t->filled = calloc (n_nodes, 1);
-    if (!t->I || !t->filled)
+    if (!t->node_I || !t->filled)
       exit (fprintf (stderr, "%s: %s: could not allocate the Sigma_s table.\n", component, comp_name));
   }
 }
 
 void
 sans_expr_table_free (struct sans_expr_table *t) {
-  free (t->I);
+  free (t->node_I);
   free (t->filled);
-  t->I = NULL;
+  t->node_I = NULL;
   t->filled = NULL;
 }
 

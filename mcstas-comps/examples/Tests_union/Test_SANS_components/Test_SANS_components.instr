@@ -1,0 +1,369 @@
+/*******************************************************************************
+*         McStas instrument definition URL=http://www.mcstas.org
+*
+* Instrument: Test_SANS_components
+*
+* %Identification
+* Written by: Daniel Lomholt Christensen
+* Date: 29/10/2026
+* Origin: Niels Bohr Institute @ UCPH
+* %INSTRUMENT_SITE: Tests_union
+*
+* Tests Sans_expr, SANS_process and Inhomogeneous_SANS_process against Sans_spheres,
+* SasView_ellipsoid_aniso and SANS_process
+*
+* %Description
+* The beam of Test_inhomogeneous_absorption: a 3.5 x 3.5 cm^2 Source_simple with
+* neutrons of 25.3 +- 0.1 meV, a 3 x 3 cm^2 slit 2.5 cm before the sample, and the
+* sample 100 m from the source. A 1 x 1 m^2 PSD with 1 x 1 mm^2 bins, 5 m after the
+* sample, counts the rays scattered exactly once.
+*
+* Hard spheres, R = 100 AA, volume fraction 1e-2, excess scattering length density
+* 5 fm/AA^3, in a cylinder of radius 0.5 mm and height 3 cm:
+*   sample_choice=0: Sans_spheres
+*   sample_choice=1: Sans_expr
+*   sample_choice=2: SANS_process in a Union_cylinder
+*
+* Ellipsoids with the polar radius 200 AA along x and the equatorial radius 50 AA,
+* volume fraction 1e-2, excess scattering length density 0.1 fm/AA^3 (1e-6 AA^-2),
+* in the same cylinder; the pattern on the detector is anisotropic:
+*   sample_choice=3: SasView_ellipsoid_aniso, theta = 90 deg, phi = 0 deg
+*   sample_choice=4: Sans_expr, with the ellipsoid form factor in qx, qy, qz
+*   sample_choice=5: SANS_process in a Union_cylinder
+* SasView_ellipsoid_aniso weights by solid_angle / (4 pi) and uses no volume, so its
+* model_scale is 4 pi Phi / V; it uses qx and qy only and leaves out the attenuation by
+* scattering, which this weak contrast makes negligible.
+*
+* Hard spheres whose radius rises linearly from 100 AA to 200 AA along x, in a
+* 3 x 3 cm^2, 1 mm deep box:
+*   sample_choice=6: Inhomogeneous_SANS_process
+*   sample_choice=7: SANS_process in 10 boxes of 3 mm along x, with the radius at their
+*                    centres (105, 115, ..., 195 AA)
+*
+* 0, 1 and 2 must agree, as must 3, 4 and 5, and 6 and 7. The cylinders scatter only a
+* few percent of the rays, so the Union_cylinder geometries set p_interact = 0.5.
+*
+* %Test: sample_choice=0 Detector: psd_det_I=6.32982e-06
+* %Test: sample_choice=1 Detector: psd_det_I=6.33008e-06
+* %Test: sample_choice=2 Detector: psd_det_I=6.23903e-06
+* %Test: sample_choice=3 Detector: psd_det_I=1.39457e-09
+* %Test: sample_choice=4 Detector: psd_det_I=1.39449e-09
+* %Test: sample_choice=5 Detector: psd_det_I=1.45145e-09
+* %Test: sample_choice=6 Detector: psd_det_I=0.000325541
+* %Test: sample_choice=7 Detector: psd_det_I=0.000336964
+*
+* %Parameters
+* sample_choice: [1] Sample to use, see the description.
+*
+* %Link
+*
+* %End
+*******************************************************************************/
+DEFINE INSTRUMENT Test_SANS_components(int sample_choice=0)
+
+DECLARE
+%{
+  double cyl_r;
+  double cyl_h;
+  double box_w;
+  double box_h;
+  double box_d;
+  double eps;
+  double sphere_R;
+  double sphere_phi;
+  double sphere_drho;
+  double scale_per_R3;
+  double ell_Rp;
+  double ell_Re;
+  double ell_phi;
+  double ell_drho;
+  double ell_V;
+  double ell_scale;
+  double sasview_scale;
+  int union_cyl_spheres;
+  int union_cyl_ellipsoid;
+  int union_inhomogeneous;
+  int union_boxes;
+  int scattered;
+%}
+
+INITIALIZE
+%{
+  cyl_r = 0.0005;
+  cyl_h = 0.03;
+  box_w = 0.03;
+  box_h = 0.03;
+  box_d = 0.001;
+  eps = 1e-9;
+
+  sphere_R = 100;
+  sphere_phi = 1e-2;
+  sphere_drho = 5;
+  /* Phi * Delta_rho^2 * 4 pi / 3, so that scale = scale_per_R3 * R^3 in m^-1 */
+  scale_per_R3 = sphere_phi * sphere_drho * sphere_drho * 4.0 * PI / 3.0;
+
+  ell_Rp = 200;
+  ell_Re = 50;
+  ell_phi = 1e-2;
+  ell_drho = 0.1;
+  ell_V = 4.0 * PI / 3.0 * ell_Rp * ell_Re * ell_Re;
+  ell_scale = ell_phi * ell_drho * ell_drho * ell_V;
+  sasview_scale = 4.0 * PI * ell_phi / ell_V;
+
+  union_cyl_spheres = sample_choice == 2;
+  union_cyl_ellipsoid = sample_choice == 5;
+  union_inhomogeneous = sample_choice == 6;
+  union_boxes = sample_choice == 7;
+  if (sample_choice < 0 || sample_choice > 7) {
+    fprintf (stderr, "Unsupported instrument parameter value sample_choice=%d.\n", sample_choice);
+    exit (-1);
+  }
+%}
+
+TRACE
+
+COMPONENT Origin = Progress_bar()
+  AT (0,0,0) ABSOLUTE
+EXTEND %{
+  scattered = 0;
+%}
+
+COMPONENT source = Source_simple(
+    yheight = 0.035,
+    xwidth = 0.035,
+    dist = 99.975,
+    focus_xw = 0.03,
+    focus_yh = 0.03,
+    E0 = 25.3,
+    dE = 0.1,
+    flux = 1e4
+) AT (0, 0, 0) RELATIVE Origin
+
+COMPONENT slit = Slit(
+    xwidth = 0.03,
+    yheight = 0.03
+) AT (0, 0, 99.975) RELATIVE source
+
+COMPONENT arm_sample = Arm(
+) AT (0, 0, 0.025) RELATIVE slit
+
+// =================== Standalone samples, sample_choice 0, 1, 3, 4
+
+COMPONENT sans_spheres = Sans_spheres(
+    R = sphere_R, Phi = sphere_phi, Delta_rho = sphere_drho, sigma_abs = 0,
+    radius = cyl_r, yheight = cyl_h,
+    focus_xw = 1, focus_yh = 1, target_x = 0, target_y = 0, target_z = 5
+) WHEN (sample_choice == 0)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  if (SCATTERED)
+    scattered = 1;
+%}
+
+COMPONENT sans_expr_spheres = Sans_expr(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3",
+    p1 = sphere_R, scale = scale_per_R3 * sphere_R * sphere_R * sphere_R, sigma_abs = 0,
+    radius = cyl_r, yheight = cyl_h,
+    focus_xw = 1, focus_yh = 1, target_x = 0, target_y = 0, target_z = 5
+) WHEN (sample_choice == 1)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  if (SCATTERED)
+    scattered = 1;
+%}
+
+COMPONENT sasview_ellipsoid = SasView_ellipsoid_aniso(
+    sld = 2, sld_solvent = 1, radius_polar = ell_Rp, radius_equatorial = ell_Re,
+    theta = 90, phi = 0, model_scale = sasview_scale, model_abs = 0,
+    xwidth = 0, yheight = cyl_h, zdepth = 0, R = cyl_r,
+    target_index = 0, target_x = 0, target_y = 0, target_z = 5, focus_xw = 1, focus_yh = 1
+) WHEN (sample_choice == 3)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  if (SCATTERED)
+    scattered = 1;
+%}
+
+// Ellipsoid form factor 3 j1(u)/u with u = sqrt((Rp qx)^2 + (Re qy)^2 + (Re qz)^2)
+COMPONENT sans_expr_ellipsoid = Sans_expr(
+    form_factor = "3*(sin(sqrt((p1*qx)^2+(p2*qy)^2+(p2*qz)^2))-sqrt((p1*qx)^2+(p2*qy)^2+(p2*qz)^2)*cos(sqrt((p1*qx)^2+(p2*qy)^2+(p2*qz)^2)))/sqrt((p1*qx)^2+(p2*qy)^2+(p2*qz)^2)^3",
+    p1 = ell_Rp, p2 = ell_Re, scale = ell_scale, sigma_abs = 0,
+    radius = cyl_r, yheight = cyl_h,
+    focus_xw = 1, focus_yh = 1, target_x = 0, target_y = 0, target_z = 5
+) WHEN (sample_choice == 4)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  if (SCATTERED)
+    scattered = 1;
+%}
+
+// =================== Union samples, sample_choice 2, 5, 6, 7
+
+COMPONENT spheres_proc = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3",
+    p1 = sphere_R, scale = scale_per_R3 * sphere_R * sphere_R * sphere_R
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT spheres_mat = Union_make_material(
+    my_absorption = 0, process_string = "spheres_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT spheres_cyl = Union_cylinder(
+    radius = cyl_r, yheight = cyl_h, priority = 1, material_string = "spheres_mat", p_interact = 0.5,
+    focus_xw = 1, focus_xh = 1, target_z = 5,
+    number_of_activations = union_cyl_spheres
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT ellipsoid_proc = SANS_process(
+    form_factor = "3*(sin(sqrt((p1*qx)^2+(p2*qy)^2+(p2*qz)^2))-sqrt((p1*qx)^2+(p2*qy)^2+(p2*qz)^2)*cos(sqrt((p1*qx)^2+(p2*qy)^2+(p2*qz)^2)))/sqrt((p1*qx)^2+(p2*qy)^2+(p2*qz)^2)^3",
+    p1 = ell_Rp, p2 = ell_Re, scale = ell_scale
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT ellipsoid_mat = Union_make_material(
+    my_absorption = 0, process_string = "ellipsoid_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT ellipsoid_cyl = Union_cylinder(
+    radius = cyl_r, yheight = cyl_h, priority = 2, material_string = "ellipsoid_mat", p_interact = 0.5,
+    focus_xw = 1, focus_xh = 1, target_z = 5,
+    number_of_activations = union_cyl_ellipsoid
+) AT (0, 0, 0) RELATIVE arm_sample
+
+// Radius 100 AA at x = -box_w/2 rising to 200 AA at x = box_w/2
+COMPONENT inh_proc = Inhomogeneous_SANS_process(
+    form_factor = "3*(sin(q*(p1+p2*x))-q*(p1+p2*x)*cos(q*(p1+p2*x)))/(q*(p1+p2*x))^3",
+    scale_expr = "p3*(p1+p2*x)^3",
+    p1 = 150, p2 = 100 / 0.03, p3 = scale_per_R3, n_x = 21
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_mat = Union_make_material(
+    my_absorption = 0, process_string = "inh_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT inh_box = Union_box(
+    xwidth = box_w, yheight = box_h, zdepth = box_d, priority = 3, material_string = "inh_mat",
+    focus_xw = 1, focus_xh = 1, target_z = 5,
+    number_of_activations = union_inhomogeneous
+) AT (0, 0, 0) RELATIVE arm_sample
+
+// 10 boxes along x with the radius at their centres; neighbours are eps apart
+COMPONENT box_proc_0 = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 105, scale = scale_per_R3 * 105 * 105 * 105
+) AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_mat_0 = Union_make_material(my_absorption = 0, process_string = "box_proc_0") AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_0 = Union_box(
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 10, material_string = "box_mat_0",
+    focus_xw = 1, focus_xh = 1, target_x = -(-box_w/2 + box_w/20 + box_w/10*0), target_z = 5,
+    number_of_activations = union_boxes
+) AT (-box_w/2 + box_w/20 + box_w/10*0, 0, 0) RELATIVE arm_sample
+
+COMPONENT box_proc_1 = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 115, scale = scale_per_R3 * 115 * 115 * 115
+) AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_mat_1 = Union_make_material(my_absorption = 0, process_string = "box_proc_1") AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_1 = Union_box(
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 11, material_string = "box_mat_1",
+    focus_xw = 1, focus_xh = 1, target_x = -(-box_w/2 + box_w/20 + box_w/10*1), target_z = 5,
+    number_of_activations = union_boxes
+) AT (-box_w/2 + box_w/20 + box_w/10*1, 0, 0) RELATIVE arm_sample
+
+COMPONENT box_proc_2 = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 125, scale = scale_per_R3 * 125 * 125 * 125
+) AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_mat_2 = Union_make_material(my_absorption = 0, process_string = "box_proc_2") AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_2 = Union_box(
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 12, material_string = "box_mat_2",
+    focus_xw = 1, focus_xh = 1, target_x = -(-box_w/2 + box_w/20 + box_w/10*2), target_z = 5,
+    number_of_activations = union_boxes
+) AT (-box_w/2 + box_w/20 + box_w/10*2, 0, 0) RELATIVE arm_sample
+
+COMPONENT box_proc_3 = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 135, scale = scale_per_R3 * 135 * 135 * 135
+) AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_mat_3 = Union_make_material(my_absorption = 0, process_string = "box_proc_3") AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_3 = Union_box(
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 13, material_string = "box_mat_3",
+    focus_xw = 1, focus_xh = 1, target_x = -(-box_w/2 + box_w/20 + box_w/10*3), target_z = 5,
+    number_of_activations = union_boxes
+) AT (-box_w/2 + box_w/20 + box_w/10*3, 0, 0) RELATIVE arm_sample
+
+COMPONENT box_proc_4 = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 145, scale = scale_per_R3 * 145 * 145 * 145
+) AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_mat_4 = Union_make_material(my_absorption = 0, process_string = "box_proc_4") AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_4 = Union_box(
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 14, material_string = "box_mat_4",
+    focus_xw = 1, focus_xh = 1, target_x = -(-box_w/2 + box_w/20 + box_w/10*4), target_z = 5,
+    number_of_activations = union_boxes
+) AT (-box_w/2 + box_w/20 + box_w/10*4, 0, 0) RELATIVE arm_sample
+
+COMPONENT box_proc_5 = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 155, scale = scale_per_R3 * 155 * 155 * 155
+) AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_mat_5 = Union_make_material(my_absorption = 0, process_string = "box_proc_5") AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_5 = Union_box(
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 15, material_string = "box_mat_5",
+    focus_xw = 1, focus_xh = 1, target_x = -(-box_w/2 + box_w/20 + box_w/10*5), target_z = 5,
+    number_of_activations = union_boxes
+) AT (-box_w/2 + box_w/20 + box_w/10*5, 0, 0) RELATIVE arm_sample
+
+COMPONENT box_proc_6 = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 165, scale = scale_per_R3 * 165 * 165 * 165
+) AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_mat_6 = Union_make_material(my_absorption = 0, process_string = "box_proc_6") AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_6 = Union_box(
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 16, material_string = "box_mat_6",
+    focus_xw = 1, focus_xh = 1, target_x = -(-box_w/2 + box_w/20 + box_w/10*6), target_z = 5,
+    number_of_activations = union_boxes
+) AT (-box_w/2 + box_w/20 + box_w/10*6, 0, 0) RELATIVE arm_sample
+
+COMPONENT box_proc_7 = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 175, scale = scale_per_R3 * 175 * 175 * 175
+) AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_mat_7 = Union_make_material(my_absorption = 0, process_string = "box_proc_7") AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_7 = Union_box(
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 17, material_string = "box_mat_7",
+    focus_xw = 1, focus_xh = 1, target_x = -(-box_w/2 + box_w/20 + box_w/10*7), target_z = 5,
+    number_of_activations = union_boxes
+) AT (-box_w/2 + box_w/20 + box_w/10*7, 0, 0) RELATIVE arm_sample
+
+COMPONENT box_proc_8 = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 185, scale = scale_per_R3 * 185 * 185 * 185
+) AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_mat_8 = Union_make_material(my_absorption = 0, process_string = "box_proc_8") AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_8 = Union_box(
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 18, material_string = "box_mat_8",
+    focus_xw = 1, focus_xh = 1, target_x = -(-box_w/2 + box_w/20 + box_w/10*8), target_z = 5,
+    number_of_activations = union_boxes
+) AT (-box_w/2 + box_w/20 + box_w/10*8, 0, 0) RELATIVE arm_sample
+
+COMPONENT box_proc_9 = SANS_process(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 195, scale = scale_per_R3 * 195 * 195 * 195
+) AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_mat_9 = Union_make_material(my_absorption = 0, process_string = "box_proc_9") AT (0, 0, 0) RELATIVE arm_sample
+COMPONENT box_9 = Union_box(
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 19, material_string = "box_mat_9",
+    focus_xw = 1, focus_xh = 1, target_x = -(-box_w/2 + box_w/20 + box_w/10*9), target_z = 5,
+    number_of_activations = union_boxes
+) AT (-box_w/2 + box_w/20 + box_w/10*9, 0, 0) RELATIVE arm_sample
+
+COMPONENT union_master = Union_master(
+) WHEN (sample_choice == 2 || sample_choice == 5 || sample_choice == 6 || sample_choice == 7)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+%}
+
+// =================== Detector
+
+COMPONENT psd_det = PSD_monitor(
+    nx = 1000,
+    ny = 1000,
+    filename = "psd_det",
+    xwidth = 1,
+    yheight = 1,
+    restore_neutron = 1
+) WHEN (scattered == 1)
+AT (0, 0, 5) RELATIVE arm_sample
+
+END
