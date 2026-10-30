@@ -43,14 +43,14 @@
 * 0, 1 and 2 must agree, as must 3, 4 and 5, and 6 and 7. The cylinders scatter only a
 * few percent of the rays, so the Union_cylinder geometries set p_interact = 0.5.
 *
-* %Example: sample_choice=0 Detector: psd_det_I=6.32982e-06
-* %Example: sample_choice=1 Detector: psd_det_I=6.33008e-06
-* %Example: sample_choice=2 Detector: psd_det_I=6.23903e-06
-* %Example: sample_choice=3 Detector: psd_det_I=1.39457e-09
-* %Example: sample_choice=4 Detector: psd_det_I=1.39449e-09
-* %Example: sample_choice=5 Detector: psd_det_I=1.45145e-09
-* %Example: sample_choice=6 Detector: psd_det_I=0.000325541
-* %Example: sample_choice=7 Detector: psd_det_I=0.000336964
+* %Test: sample_choice=0 Detector: psd_det_I=6.32982e-06
+* %Test: sample_choice=1 Detector: psd_det_I=6.33008e-06
+* %Test: sample_choice=2 Detector: psd_det_I=6.23903e-06
+* %Test: sample_choice=3 Detector: psd_det_I=1.39457e-09
+* %Test: sample_choice=4 Detector: psd_det_I=1.39449e-09
+* %Test: sample_choice=5 Detector: psd_det_I=1.45145e-09
+* %Test: sample_choice=6 Detector: psd_det_I=0.000325541
+* %Test: sample_choice=7 Detector: psd_det_I=0.000336964
 *
 * %Parameters
 * sample_choice: [1] Sample to use, see the description.
