@@ -67,8 +67,8 @@
 * %Test: sample_choice=6 Detector: psd_det_I=0.000395878
 * %Test: sample_choice=7 Detector: psd_det_I=0.000338272
 * %Test: sample_choice=8 Detector: psd_det_I=2.80466e-09
-* %Test: sample_choice=9 Detector: psd_det_I=0.000835499
-* %Test: sample_choice=10 Detector: psd_det_I=0.000834437
+* %Test: sample_choice=9 Detector: psd_det_I=0.000835319
+* %Test: sample_choice=10 Detector: psd_det_I=0.000834307
 *
 * %Parameters
 * sample_choice: [1] Sample to use, see the description.
@@ -385,7 +385,7 @@ COMPONENT box_9 = Union_box(
 
 COMPONENT tilted_proc = SANS_process(
     form_factor = "exp(-((qx*p1)^2+(qy*p2)^2+(qz*p3)^2)/2)",
-    p1 = 20, p2 = 10, p3 = 10, scale = 3e5, n_phi = 16
+    p1 = 20, p2 = 10, p3 = 10, scale = 3e5, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 ROTATED (0, 45, 0) RELATIVE arm_sample
 
@@ -400,7 +400,7 @@ COMPONENT tilted_box = Union_box(
 
 COMPONENT tilted_inh_proc = Inhomogeneous_SANS_process(
     form_factor = "exp(-((qx*p1)^2+(qy*p2)^2+(qz*p3)^2)/2)",
-    p1 = 20, p2 = 10, p3 = 10, scale = 3e5, n_phi = 16
+    p1 = 20, p2 = 10, p3 = 10, scale = 3e5, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 ROTATED (0, 45, 0) RELATIVE arm_sample
 
