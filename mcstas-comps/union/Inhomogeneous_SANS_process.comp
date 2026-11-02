@@ -45,7 +45,9 @@
 * the first time it is needed, and is interpolated multilinearly between nodes and
 * linearly in wavelength. The integral is the one of share/sans-expr-lib, over the Ewald
 * sphere with |q| <= q_max, with an n_phi point average over the azimuthal angle when
-* F or S use qx, qy, qz. It assumes k_i along the process z axis.
+* F or S use qx, qy, qz. In that case I also depends on the direction of k_i in the frame
+* of this process, so each node and wavelength stores it for n_dir_theta polar angles and
+* n_dir_phi azimuths, filled when first needed and interpolated linearly in direction.
 *
 * The component is for small-angle scattering: only |q| <= q_max scatters. INITIALIZE warns
 * if F^2 S at |q| > q_max exceeds 1e-3 of its largest value below (see share/sans-expr-lib).
@@ -97,6 +99,8 @@
 * t_min: [s]                 Lower t of the cache, required if the cache has a t axis
 * t_max: [s]                 Upper t of the cache
 * n_phi: [1]                 Azimuthal points in the integral when F or S use qx, qy, qz
+* n_dir_theta: [1]          Polar angles of k, from 0 to 180 deg, in the cache when F or S use qx, qy, qz
+* n_dir_phi: [1]            Azimuths of k in the cache when F or S use qx, qy, qz
 * prefill: [0/1]             Fill the whole cache at the first lookup instead of node by node
 * direct: [0/1]              Integrate at every point instead of using the cache (for testing)
 * max_cache_mb: [MB]         Largest allowed cache
@@ -122,7 +126,7 @@ p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
 scale=1, background=0, int number_of_sample_points=20,
 int n_x=20, int n_y=20, int n_z=20, int n_t=20,
 x_min=0, x_max=0, y_min=0, y_max=0, z_min=0, z_max=0, t_min=0, t_max=0,
-int n_phi=16, q_max=0.5,
+int n_phi=16, int n_dir_theta=91, int n_dir_phi=72, q_max=0.5,
 int prefill=0, int direct=0, max_cache_mb=1000,
 interact_fraction=-1, string init="")
 
@@ -157,13 +161,15 @@ SHARE
     int c_prefill;
     double c_max_bytes;
 
+    int n_polar;       // polar angles of k in the cache, 1 for expressions in q only
+    int n_azim;        // azimuths of k in the cache, 1 for expressions in q only
     int n_dims;        // number of cache axes
     int dim_var[4];    // variable of each axis, 0..3 = x, y, z, t
     int n_nodes_dim[4];
     double lo[4], hi[4]; // range of each variable x, y, z, t
     int range_set[4];
     long n_nodes;
-    double* table;     // I for each node and wavelength, n_nodes * ISANS_NLAM
+    double* table;     // I for each node, wavelength and direction, n_nodes * ISANS_NLAM * n_polar * n_azim
     char* filled;
     long n_filled;
     long n_clamped;
@@ -192,16 +198,19 @@ SHARE
     s->vars[7] = pt;
   };
 
-  /* I = int q dq <F^2 S>_phi over |q| <= q_limit for wavelength il AA and k_i along z,
-   * at the point set in vars[4..7]; scale * I if scale_cached */
+  /* I = int q dq <F^2 S>_phi over |q| <= q_limit for wavelength il AA and k_i along the polar
+   * angle theta and azimuth phi, at the point set in vars[4..7]; scale * I if scale_cached */
   double
-  ISANS_integral (struct Inhomogeneous_SANS_physics_storage_struct* s, int il) {
-    double integral = sans_expr_Idsdw (&s->expr, 2.0 * PI / il, coords_set (0, 0, 1), coords_set (1, 0, 0), coords_set (0, 1, 0));
+  ISANS_integral (struct Inhomogeneous_SANS_physics_storage_struct* s, int il, double theta, double phi) {
+    Coords khat = coords_set (sin (theta) * cos (phi), sin (theta) * sin (phi), cos (theta));
+    Coords e1 = coords_set (cos (theta) * cos (phi), cos (theta) * sin (phi), -sin (theta));
+    Coords e2 = coords_set (-sin (phi), cos (phi), 0);
+    double integral = sans_expr_Idsdw (&s->expr, 2.0 * PI / il, khat, e1, e2);
     return s->scale_cached ? integral * te_eval (s->scale_te) : integral;
   };
 
   void
-  ISANS_fill (struct Inhomogeneous_SANS_physics_storage_struct* s, long node, int il) {
+  ISANS_fill (struct Inhomogeneous_SANS_physics_storage_struct* s, long node, int il, int it, int ip) {
     double saved[4] = { s->vars[4], s->vars[5], s->vars[6], s->vars[7] };
     long rest = node;
     for (int a = s->n_dims - 1; a >= 0; a--) {
@@ -211,8 +220,10 @@ SHARE
       rest /= n;
       s->vars[4 + v] = (n > 1) ? s->lo[v] + i * (s->hi[v] - s->lo[v]) / (n - 1) : 0.5 * (s->lo[v] + s->hi[v]);
     }
-    s->table[node * ISANS_NLAM + il] = ISANS_integral (s, il);
-    s->filled[node * ISANS_NLAM + il] = 1;
+    long index = ((node * ISANS_NLAM + il) * s->n_polar + it) * s->n_azim + ip;
+    double theta = (s->n_polar > 1) ? PI * it / (s->n_polar - 1) : 0;
+    s->table[index] = ISANS_integral (s, il, theta, 2.0 * PI * ip / s->n_azim);
+    s->filled[index] = 1;
     s->n_filled++;
     for (int v = 0; v < 4; v++)
       s->vars[4 + v] = saved[v];
@@ -230,25 +241,41 @@ SHARE
                        v < 3 ? ", or use a geometry with shell points" : ""));
       s->n_nodes *= s->n_nodes_dim[a];
     }
-    double bytes = (double)s->n_nodes * ISANS_NLAM * (sizeof (double) + 1);
+    long n_entries = s->n_nodes * ISANS_NLAM * s->n_polar * s->n_azim;
+    double bytes = (double)n_entries * (sizeof (double) + 1);
     if (bytes > s->c_max_bytes)
       exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: cache of %ld nodes needs %.0f MB, above max_cache_mb = %.0f.\n", s->comp_name, s->n_nodes,
                      bytes / 1e6, s->c_max_bytes / 1e6));
-    s->table = calloc (s->n_nodes * ISANS_NLAM, sizeof (double));
-    s->filled = calloc (s->n_nodes * ISANS_NLAM, 1);
+    s->table = calloc (n_entries, sizeof (double));
+    s->filled = calloc (n_entries, 1);
     if (!s->table || !s->filled)
       exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: could not allocate the cache.\n", s->comp_name));
     if (s->c_prefill)
       for (long node = 0; node < s->n_nodes; node++)
         for (int il = 1; il < ISANS_NLAM; il++)
-          ISANS_fill (s, node, il);
+          for (int it = 0; it < s->n_polar; it++)
+            for (int ip = 0; ip < s->n_azim; ip++)
+              ISANS_fill (s, node, il, it, ip);
   };
 
-  /* I at the point in vars[4..7] for wavelength il, from the cache */
+  /* Cached I of a node for wavelength il and direction it, ip */
   double
-  ISANS_cached (struct Inhomogeneous_SANS_physics_storage_struct* s, int il) {
+  ISANS_entry (struct Inhomogeneous_SANS_physics_storage_struct* s, long node, int il, int it, int ip) {
+    long index = ((node * ISANS_NLAM + il) * s->n_polar + it) * s->n_azim + ip;
+    if (!s->filled[index])
+      ISANS_fill (s, node, il, it, ip);
+    return s->table[index];
+  };
+
+  /* I at the point in vars[4..7] for wavelength il and k_i along (kx, ky, kz), from the cache */
+  double
+  ISANS_cached (struct Inhomogeneous_SANS_physics_storage_struct* s, int il, double kx, double ky, double kz) {
+    double theta = acos (fmax (-1.0, fmin (1.0, kz / sqrt (kx * kx + ky * ky + kz * kz))));
+    double phi = atan2 (ky, kx);
+    if (phi < 0)
+      phi += 2.0 * PI;
     if (s->c_direct)
-      return ISANS_integral (s, il);
+      return ISANS_integral (s, il, theta, phi);
     if (!s->table)
       ISANS_allocate (s);
     int i0[4];
@@ -272,6 +299,20 @@ SHARE
       w[a] = u - i0[a];
     }
     s->n_clamped += clamped;
+    int it = 0, ip = 0, ip2 = 0;
+    double ft = 0, fp = 0;
+    if (s->n_polar > 1) {
+      ft = theta / PI * (s->n_polar - 1);
+      it = (int)floor (ft);
+      if (it > s->n_polar - 2)
+        it = s->n_polar - 2;
+      ft -= it;
+      fp = phi / (2.0 * PI) * s->n_azim;
+      ip = (int)floor (fp);
+      fp -= ip;
+      ip %= s->n_azim;
+      ip2 = (ip + 1) % s->n_azim;
+    }
     double result = 0;
     for (int corner = 0; corner < (1 << s->n_dims); corner++) {
       double weight = 1;
@@ -283,9 +324,15 @@ SHARE
       }
       if (weight == 0)
         continue;
-      if (!s->filled[node * ISANS_NLAM + il])
-        ISANS_fill (s, node, il);
-      result += weight * s->table[node * ISANS_NLAM + il];
+      // Directions with zero weight are not computed
+      if ((1 - ft) * (1 - fp) > 0)
+        result += weight * (1 - ft) * (1 - fp) * ISANS_entry (s, node, il, it, ip);
+      if ((1 - ft) * fp > 0)
+        result += weight * (1 - ft) * fp * ISANS_entry (s, node, il, it, ip2);
+      if (ft * (1 - fp) > 0)
+        result += weight * ft * (1 - fp) * ISANS_entry (s, node, il, it + 1, ip);
+      if (ft * fp > 0)
+        result += weight * ft * fp * ISANS_entry (s, node, il, it + 1, ip2);
     }
     return result;
   };
@@ -300,21 +347,22 @@ SHARE
     return s->bg_te ? te_eval (s->bg_te) : s->c_background;
   };
 
-  /* Total scattering cross-section [m^-1] at the point in vars[4..7], for wavevector length k [AA^-1] */
+  /* Total scattering cross-section [m^-1] at the point in vars[4..7], for k_i = (kx, ky, kz) [AA^-1] in the frame of this process */
   double
-  ISANS_mu (struct Inhomogeneous_SANS_physics_storage_struct* s, double k) {
+  ISANS_mu (struct Inhomogeneous_SANS_physics_storage_struct* s, double kx, double ky, double kz) {
+    double k = sqrt (kx * kx + ky * ky + kz * kz);
     double lambda = 2.0 * PI / k;
     double integral, Q2;
     if (lambda <= 1.0) {
-      integral = ISANS_cached (s, 1);
+      integral = ISANS_cached (s, 1, kx, ky, kz);
       Q2 = s->qmax2_half[1];
     } else if (lambda >= 30.0) {
-      integral = ISANS_cached (s, 30);
+      integral = ISANS_cached (s, 30, kx, ky, kz);
       Q2 = s->qmax2_half[30];
     } else {
       int Ilam = (int)floor (lambda);
       int Ilam2 = Ilam + 1;
-      integral = (Ilam2 - lambda) * ISANS_cached (s, Ilam) + (lambda - Ilam) * ISANS_cached (s, Ilam2);
+      integral = (Ilam2 - lambda) * ISANS_cached (s, Ilam, kx, ky, kz) + (lambda - Ilam) * ISANS_cached (s, Ilam2, kx, ky, kz);
       Q2 = (Ilam2 - lambda) * s->qmax2_half[Ilam] + (lambda - Ilam) * s->qmax2_half[Ilam2];
     }
     return 2.0 * PI / (k * k) * ((s->scale_cached ? 1 : ISANS_scale (s)) * integral + ISANS_background (s) * Q2);
@@ -344,9 +392,8 @@ SHARE
   Inhomogeneous_SANS_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data,
                                  _class_particle* _particle) {
     struct Inhomogeneous_SANS_physics_storage_struct* s = data_transfer.pointer_to_a_Inhomogeneous_SANS_physics_storage_struct;
-    double k = sqrt (k_initial[0] * k_initial[0] + k_initial[1] * k_initial[1] + k_initial[2] * k_initial[2]);
     ISANS_set_point (s, _particle->x, _particle->y, _particle->z, _particle->t);
-    *my = ISANS_mu (s, k);
+    *my = ISANS_mu (s, k_initial[0], k_initial[1], k_initial[2]);
     return 1;
   };
 
@@ -447,6 +494,10 @@ INITIALIZE
   s->expr.dsdo_scale = 1;
   s->expr.q_only = !anisotropic;
   s->expr.Nphi = anisotropic ? n_phi : 1;
+  if (anisotropic && (n_dir_theta < 2 || n_dir_phi < 1))
+    exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: n_dir_theta must be at least 2 and n_dir_phi at least 1.\n", NAME_CURRENT_COMP));
+  s->n_polar = anisotropic ? n_dir_theta : 1;
+  s->n_azim = anisotropic ? n_dir_phi : 1;
 
   // The large-q check uses F and S at x = y = z = 0 and, if t_min < t_max, the middle of the t range
   if (t_min < t_max)
@@ -523,7 +574,7 @@ FINALLY
   struct Inhomogeneous_SANS_physics_storage_struct* s = &ISANS_storage;
   if (!direct)
     printf ("Inhomogeneous_SANS_process: %s: %ld of %ld cache entries filled, %ld lookups outside the cache range\n", NAME_CURRENT_COMP, s->n_filled,
-            s->n_nodes * (ISANS_NLAM - 1), s->n_clamped);
+            s->n_nodes * (ISANS_NLAM - 1) * s->n_polar * s->n_azim, s->n_clamped);
   te_free (s->expr.Fexpr);
   te_free (s->expr.Sexpr);
   if (s->scale_te)
