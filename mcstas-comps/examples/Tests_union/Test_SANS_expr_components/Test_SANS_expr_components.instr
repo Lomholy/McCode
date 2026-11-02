@@ -10,7 +10,7 @@
 * %INSTRUMENT_SITE: Tests_union
 *
 * Tests Sans_expr, SANS_process and Inhomogeneous_SANS_process against Sans_spheres,
-* SasView_ellipsoid_aniso and SANS_process
+* SasView_sphere, SasView_ellipsoid_aniso and SANS_process
 *
 * %Description
 * The beam of Test_inhomogeneous_absorption: a 3.5 x 3.5 cm^2 Source_simple with
@@ -26,6 +26,11 @@
 *   sample_choice=1: Sans_expr
 *   sample_choice=2: SANS_process in a Union_cylinder
 *
+* The same spheres with excess scattering length density 0.1 fm/AA^3 (1e-6 AA^-2), in
+* the same cylinder:
+*   sample_choice=8: SasView_sphere
+*   sample_choice=9: Sans_expr
+*
 * Ellipsoids with the polar radius 200 AA along x and the equatorial radius 50 AA,
 * volume fraction 1e-2, excess scattering length density 0.1 fm/AA^3 (1e-6 AA^-2),
 * in the same cylinder; the pattern on the detector is anisotropic:
@@ -34,7 +39,9 @@
 *   sample_choice=5: SANS_process in a Union_cylinder
 * SasView_ellipsoid_aniso weights by solid_angle / (4 pi) and uses no volume, so its
 * model_scale is 4 pi Phi / V; it uses qx and qy only and leaves out the attenuation by
-* scattering, which this weak contrast makes negligible.
+* scattering, which this weak contrast makes negligible. SasView_sphere has the same
+* model_scale and also leaves out the attenuation by scattering, which lowers Sans_expr
+* by about 10 % at 5 fm/AA^3, so it is compared at the weak contrast.
 *
 * Hard spheres whose radius rises linearly from 100 AA to 200 AA along x, in a
 * 3 x 3 cm^2, 1 mm deep box:
@@ -42,7 +49,7 @@
 *   sample_choice=7: SANS_process in 10 boxes of 3 mm along x, with the radius at their
 *                    centres (105, 115, ..., 195 AA)
 *
-* 0, 1 and 2 must agree, as must 3, 4 and 5, and 6 and 7. The cylinders scatter only a
+* 0, 1 and 2 must agree, as must 3, 4 and 5, 6 and 7, and 8 and 9. The cylinders scatter only a
 * few percent of the rays, so the Union_cylinder geometries set p_interact = 0.5.
 *
 * %Test: sample_choice=0 Detector: psd_det_I=6.32982e-06
@@ -53,6 +60,8 @@
 * %Test: sample_choice=5 Detector: psd_det_I=1.45145e-09
 * %Test: sample_choice=6 Detector: psd_det_I=0.000325541
 * %Test: sample_choice=7 Detector: psd_det_I=0.000336964
+* %Test: sample_choice=8 Detector: psd_det_I=2.80466e-09
+* %Test: sample_choice=9 Detector: psd_det_I=2.80455e-09
 *
 * %Parameters
 * sample_choice: [1] Sample to use, see the description.
@@ -75,6 +84,9 @@ DECLARE
   double sphere_phi;
   double sphere_drho;
   double scale_per_R3;
+  double weak_drho;
+  double sphere_V;
+  double sasview_sphere_scale;
   double ell_Rp;
   double ell_Re;
   double ell_phi;
@@ -104,6 +116,10 @@ INITIALIZE
   /* Phi * Delta_rho^2 * 4 pi / 3, so that scale = scale_per_R3 * R^3 in m^-1 */
   scale_per_R3 = sphere_phi * sphere_drho * sphere_drho * 4.0 * PI / 3.0;
 
+  weak_drho = 0.1;
+  sphere_V = 4.0 * PI / 3.0 * sphere_R * sphere_R * sphere_R;
+  sasview_sphere_scale = 4.0 * PI * sphere_phi / sphere_V;
+
   ell_Rp = 200;
   ell_Re = 50;
   ell_phi = 1e-2;
@@ -116,7 +132,7 @@ INITIALIZE
   union_cyl_ellipsoid = sample_choice == 5;
   union_inhomogeneous = sample_choice == 6;
   union_boxes = sample_choice == 7;
-  if (sample_choice < 0 || sample_choice > 7) {
+  if (sample_choice < 0 || sample_choice > 9) {
     fprintf (stderr, "Unsupported instrument parameter value sample_choice=%d.\n", sample_choice);
     exit (-1);
   }
@@ -149,7 +165,7 @@ COMPONENT slit = Slit(
 COMPONENT arm_sample = Arm(
 ) AT (0, 0, 0.025) RELATIVE slit
 
-// =================== Standalone samples, sample_choice 0, 1, 3, 4
+// =================== Standalone samples, sample_choice 0, 1, 3, 4, 8, 9
 
 COMPONENT sans_spheres = Sans_spheres(
     R = sphere_R, Phi = sphere_phi, Delta_rho = sphere_drho, sigma_abs = 0,
@@ -168,6 +184,29 @@ COMPONENT sans_expr_spheres = Sans_expr(
     radius = cyl_r, yheight = cyl_h,
     focus_xw = 1, focus_yh = 1, target_x = 0, target_y = 0, target_z = 5
 ) WHEN (sample_choice == 1)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  if (SCATTERED)
+    scattered = 1;
+%}
+
+COMPONENT sasview_sphere = SasView_sphere(
+    sld = 2, sld_solvent = 1, radius = sphere_R, model_scale = sasview_sphere_scale, model_abs = 0,
+    xwidth = 0, yheight = cyl_h, zdepth = 0, R = cyl_r,
+    target_index = 0, target_x = 0, target_y = 0, target_z = 5, focus_xw = 1, focus_yh = 1
+) WHEN (sample_choice == 8)
+AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  if (SCATTERED)
+    scattered = 1;
+%}
+
+COMPONENT sans_expr_weak_spheres = Sans_expr(
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3",
+    p1 = sphere_R, scale = sphere_phi * weak_drho * weak_drho * sphere_V, sigma_abs = 0,
+    radius = cyl_r, yheight = cyl_h,
+    focus_xw = 1, focus_yh = 1, target_x = 0, target_y = 0, target_z = 5
+) WHEN (sample_choice == 9)
 AT (0, 0, 0) RELATIVE arm_sample
 EXTEND %{
   if (SCATTERED)
