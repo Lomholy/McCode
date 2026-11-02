@@ -16,9 +16,11 @@
 * The beam of Test_inhomogeneous_absorption: a 3.5 x 3.5 cm^2 Source_simple with
 * neutrons of 25.3 +- 0.1 meV, a 3 x 3 cm^2 slit 2.5 cm before the sample, and the
 * sample 100 m from the source. A 1 x 1 m^2 PSD with 1 x 1 mm^2 bins, 5 m after the
-* sample, counts the rays scattered exactly once. q_det, a Monitor_nD disk of radius
-* 0.5 m at the same place, bins the same rays in |q| = |k_i - k_f|, kept in the user
-* variable q_abs.
+* sample, counts the rays scattered at least once. q_det, a Monitor_nD disk of radius
+* 0.5 m at the same place, bins them in |q| from the position (x, y) on the detector
+* plane, with k_i along z and scattering at the sample centre:
+* |q| = 2 k sin(theta / 2), tan(theta) = sqrt(x^2 + y^2) / L, L = 5 m, kept in the user
+* variable q_abs. The size of the sample smears |q|.
 *
 * Hard spheres, R = 100 AA, volume fraction 1e-2, excess scattering length density
 * 0.1 fm/AA^3 (1e-6 AA^-2), in a cylinder of radius 0.5 mm and height 3 cm:
@@ -52,12 +54,12 @@
 *
 * %Test: sample_choice=0 Detector: psd_det_I=2.80455e-09
 * %Test: sample_choice=1 Detector: psd_det_I=2.80455e-09
-* %Test: sample_choice=2 Detector: psd_det_I=2.55304e-09
+* %Test: sample_choice=2 Detector: psd_det_I=2.55316e-09
 * %Test: sample_choice=3 Detector: psd_det_I=1.39457e-09
 * %Test: sample_choice=4 Detector: psd_det_I=1.39449e-09
-* %Test: sample_choice=5 Detector: psd_det_I=1.23542e-09
-* %Test: sample_choice=6 Detector: psd_det_I=0.000337601
-* %Test: sample_choice=7 Detector: psd_det_I=0.000335491
+* %Test: sample_choice=5 Detector: psd_det_I=1.23544e-09
+* %Test: sample_choice=6 Detector: psd_det_I=0.000395878
+* %Test: sample_choice=7 Detector: psd_det_I=0.000338272
 * %Test: sample_choice=8 Detector: psd_det_I=2.80466e-09
 *
 * %Parameters
@@ -96,19 +98,18 @@ DECLARE
   int union_cyl_ellipsoid;
   int union_inhomogeneous;
   int union_boxes;
+  double det_dist;
   int scattered;
 %}
 
 USERVARS
 %{
-  double vx_i;
-  double vy_i;
-  double vz_i;
   double q_abs;
 %}
 
 INITIALIZE
 %{
+  det_dist = 5;
   cyl_r = 0.0005;
   cyl_h = 0.03;
   box_w = 0.03;
@@ -171,11 +172,6 @@ COMPONENT slit = Slit(
 
 COMPONENT arm_sample = Arm(
 ) AT (0, 0, 0.025) RELATIVE slit
-EXTEND %{
-  vx_i = vx;
-  vy_i = vy;
-  vz_i = vz;
-%}
 
 // =================== Standalone samples, sample_choice 0, 1, 3, 4, 8
 
@@ -385,9 +381,10 @@ EXTEND %{
 // =================== Detector
 
 COMPONENT arm_q = Arm(
-) AT (0, 0, 0) RELATIVE arm_sample
+) AT (0, 0, det_dist) RELATIVE arm_sample
 EXTEND %{
-  q_abs = V2K * sqrt ((vx_i - vx) * (vx_i - vx) + (vy_i - vy) * (vy_i - vy) + (vz_i - vz) * (vz_i - vz));
+  PROP_Z0;
+  q_abs = 2 * V2K * sqrt (vx * vx + vy * vy + vz * vz) * sin (0.5 * atan2 (sqrt (x * x + y * y), det_dist));
 %}
 
 COMPONENT psd_det = PSD_monitor(
@@ -397,8 +394,8 @@ COMPONENT psd_det = PSD_monitor(
     xwidth = 1,
     yheight = 1,
     restore_neutron = 1
-) WHEN (scattered == 1)
-AT (0, 0, 5) RELATIVE arm_sample
+) WHEN (scattered >= 1)
+AT (0, 0, det_dist) RELATIVE arm_sample
 
 COMPONENT q_det = Monitor_nD(
     xwidth = 1,
@@ -408,7 +405,7 @@ COMPONENT q_det = Monitor_nD(
     username1 = "|q| [AA^-1]",
     filename = "q_det",
     restore_neutron = 1
-) WHEN (scattered == 1)
-AT (0, 0, 5) RELATIVE arm_sample
+) WHEN (scattered >= 1)
+AT (0, 0, det_dist) RELATIVE arm_sample
 
 END
