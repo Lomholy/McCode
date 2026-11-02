@@ -803,125 +803,43 @@ SHARE
 
   void
   readFourierCoef (char* filename, struct fourier_coef* c) {
-    int nread, nlines, lmax, i, l, m, n, np, smn, sg;
-    double x1, x2, x3, x4, x5, rmax, fmn;
-    struct fourier_coef* ctemp;
-    char str[100];
-    FILE* filep;
+    int i, lmax, np, l, m, n, smn, sg;
+    double x1, x2, x3, x4, x5, rmax;
+    t_Table table;
 
     // Note: if the coeeficients have been obtained from mtex
     // with l2-normalization option, they have to be multiplied
     // by sqrt(2*l+1)
 
-
-    filep = fopen (filename, "r");
-    if (!filep) {
-      printf ("readFourierCoef: fourier coefficient file\n");
-      printf ("%s\n", filename);
-      printf ("not found. Exiting...\n");
+    Table_Read (&table, filename, 1);
+    if (table.rows < 1 || table.columns != 5) {
+      fprintf (stderr, "Texture_process: %s must have five columns: l m n Real(Clmn) Imag(Clmn). Exit!\n", filename);
       exit (-1);
     }
 
-    str[0] = 0;
-    while (strcmp (str, "#COEFFICIENTS:") != 0) {
-      nread = fscanf (filep, "%s", str);
-      if (nread == EOF) {
-        break;
-      }
-    }
-    lmax = -1;
-    nlines = 0;
-    while (1) {
-      nread = fscanf (filep, "%lf %lf %lf %lf %lf", &x1, &x2, &x3, &x4, &x5);
-      if (nread != 5) {
-        break;
-      }
-      nlines++;
-      lmax = (int)round (x1);
-    }
-
-
-    if (lmax < 0) {
-      printf ("readCoef: lmax < 0.\n");
-      printf ("lmax = %d\n", lmax);
-      printf ("Probably coef file\n  %s\nis wrong\n", filename);
-      printf ("Check if the line\n");
-      printf ("#COEFFICIENTS:\n");
-      printf ("with no spaces or other characters) is exactly");
-      printf (" present just above the data\n");
-      printf ("Exiting...\n");
+    lmax = (int)round (Table_Index (table, table.rows - 1, 0));
+    np = (lmax + 1) * (2 * lmax + 1) * (2 * lmax + 3) / 3;
+    if (lmax < 0 || np != table.rows) {
+      fprintf (stderr, "Texture_process: %s has %ld rows, but lmax = %d needs %d. Exit!\n", filename, table.rows, lmax, np);
       exit (-1);
     }
 
-    np = 0;
-    for (l = 0; l <= lmax; l++) {
-      np += (2 * l + 1) * (2 * l + 1);
-    }
-
-    if (np != nlines) {
-      printf ("readCoef: number of lines in coef file\n   %s\n", filename);
-      printf ("different than expected\n");
-      printf ("lmax: %d  np: %d  nlines: %d\n", lmax, np, nlines);
-      printf ("Exiting...\n");
-      exit (-1);
-    }
-
-
-    if (c->lmax >= 0) {
-      if (lmax > c->lmax) {
-        lmax = c->lmax;
-      } else {
-      }
+    if (c->lmax >= 0 && lmax > c->lmax) {
+      lmax = c->lmax;
     }
 
     allocateFourierCoef (lmax, c);
 
-
-    np = 0;
-    for (l = 0; l <= lmax; l++) {
-      np += (2 * l + 1) * (2 * l + 1);
+    np = (lmax + 1) * (2 * lmax + 1) * (2 * lmax + 3) / 3;
+    for (i = 0; i < np; i++) {
+      l = (int)round (Table_Index (table, i, 0));
+      n = (int)round (Table_Index (table, i, 1)); // TRANSPOSEE
+      m = (int)round (Table_Index (table, i, 2)); // TRANSPOSEE
+      smn = ((m < 0 ? -m : 0) + (n < 0 ? -n : 0)) % 2 ? -1 : 1;
+      (c->cr)[l][l + m][l + n] = smn * Table_Index (table, i, 3);
+      (c->ci)[l][l + m][l + n] = smn * -Table_Index (table, i, 4); // conjugate
     }
-
-    rewind (filep);
-    str[0] = 0;
-    while (strcmp (str, "#COEFFICIENTS:") != 0) {
-      nread = fscanf (filep, "%s", str);
-      if (nread == EOF) {
-        break;
-      }
-    }
-    for (i = 1; i <= np; i++) {
-      nread = fscanf (filep, "%lf %lf %lf %lf %lf", &x1, &x2, &x3, &x4, &x5);
-      l = (int)round (x1);
-      n = (int)round (x2); // TRANSPOSEE
-      m = (int)round (x3); // TRANSPOSEE
-      x5 = -x5;            // conjugate
-      if (m >= 0 && n >= 0) {
-        smn = 1;
-      } else if (m >= 0 && n < 0) {
-        if ((-n) % 2) {
-          smn = -1;
-        } else {
-          smn = 1;
-        }
-      } else if (m < 0 && n >= 0) {
-        if ((-m) % 2) {
-          smn = -1;
-        } else {
-          smn = 1;
-        }
-      } else {
-        if ((-m - n) % 2) {
-          smn = -1;
-        } else {
-          smn = 1;
-        }
-      }
-      fmn = smn; // without l2-normalization
-      (c->cr)[l][l + m][l + n] = fmn * x4;
-      (c->ci)[l][l + m][l + n] = fmn * x5;
-    }
-    fclose (filep);
+    Table_Free (&table);
 
     // check reality of ODF
     rmax = 0;
@@ -945,50 +863,17 @@ SHARE
     }
 
     if (rmax > 1.0e-6) {
-      printf ("Fourier coefficients do not satisfy the reality condition of ODF\n");
-      printf ("with sufficient accuracy: %.6e\n", rmax);
-      printf ("Imposing it\n");
-
-      ctemp = (struct fourier_coef*)malloc (sizeof (struct fourier_coef));
-      allocateFourierCoef (lmax, ctemp);
+      printf ("Texture_process: %s does not satisfy the reality condition of the ODF (%.6e). Imposing it.\n", filename, rmax);
       for (l = 0; l <= lmax; l++) {
-        for (m = -l; m <= l; m++) {
-          for (n = -l; n <= l; n++) {
-            (ctemp->cr)[l][l + m][l + n] = -sqrt (-1.0);
-            (ctemp->ci)[l][l + m][l + n] = -sqrt (-1.0);
+        (c->ci)[l][l][l] = 0;
+        for (m = 0; m <= l; m++) {
+          for (n = (m ? -l : 1); n <= l; n++) {
+            sg = abs (m - n) % 2 ? -1 : 1;
+            (c->cr)[l][l - m][l - n] = sg * (c->cr)[l][l + m][l + n];
+            (c->ci)[l][l - m][l - n] = -sg * (c->ci)[l][l + m][l + n];
           }
         }
       }
-      for (l = 0; l <= lmax; l++) {
-        for (m = l; m >= -l; m--) {
-          for (n = l; n >= -l; n--) {
-            if (isnan ((ctemp->cr)[l][l + m][l + n])) {
-              (ctemp->cr)[l][l + m][l + n] = (c->cr)[l][l + m][l + n];
-              (ctemp->ci)[l][l + m][l + n] = (c->ci)[l][l + m][l + n];
-              if (abs (m - n) % 2) {
-                sg = -1;
-              } else {
-                sg = 1;
-              }
-              (ctemp->cr)[l][l - m][l - n] = sg * (ctemp->cr)[l][l + m][l + n];
-              (ctemp->ci)[l][l - m][l - n] = -sg * (ctemp->ci)[l][l + m][l + n];
-            }
-          }
-        }
-      }
-      for (l = 0; l <= lmax; l++) {
-        for (m = -l; m <= l; m++) {
-          for (n = -l; n <= l; n++) {
-            (c->cr)[l][l + m][l + n] = (ctemp->cr)[l][l + m][l + n];
-            (c->ci)[l][l + m][l + n] = (ctemp->ci)[l][l + m][l + n];
-            if (m == 0 && n == 0) {
-              (c->ci)[l][l + m][l + n] = 0;
-            } // this has to be real
-          }
-        }
-      }
-      freeFourierCoef (ctemp);
-      free (ctemp);
     }
   } // readFourierCoef
 
