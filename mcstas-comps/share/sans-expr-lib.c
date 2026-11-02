@@ -87,23 +87,20 @@ sans_expr_largest (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale
   return largest;
 }
 
-/* Stops the simulation if scale F^2 S at |q| > SANS_EXPR_Q_MAX (up to 4 pi AA^-1, backscattering
- * at 1 AA) exceeds 1e-3 of its largest magnitude at |q| <= SANS_EXPR_Q_MAX: the total
- * cross-section only includes |q| <= SANS_EXPR_Q_MAX */
+/* Warns if scale F^2 S at |q| > q_limit (up to 4 pi AA^-1, backscattering at 1 AA) exceeds
+ * 1e-3 of its largest magnitude at |q| <= q_limit: scattering beyond q_limit is left out */
 void
-sans_expr_check_large_q (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, const char* component, const char* comp_name) {
-  double q_limit = SANS_EXPR_Q_MAX;
+sans_expr_check_large_q (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, double q_limit, const char* component, const char* comp_name) {
   double fraction = 1e-3;
   double at_low[4], at_high[4];
   double low = sans_expr_largest (Fexpr, Sexpr, qv, dsdo_scale, q_only, 1e-4, q_limit, 200, at_low);
   double high = sans_expr_largest (Fexpr, Sexpr, qv, dsdo_scale, q_only, q_limit * 1.0001, 4.0 * PI, 400, at_high);
   if (fabs (high) > fraction * fabs (low))
-    exit (fprintf (stderr,
-                   "%s: %s: ERROR: scale*F^2*S at |q| > %g AA^-1 reaches %g m^-1 sr^-1 at |q| = %g AA^-1 "
+    fprintf (stderr,
+                   "%s: %s: WARNING: scale*F^2*S at |q| > %g AA^-1 reaches %g m^-1 sr^-1 at |q| = %g AA^-1 "
                    "(qx, qy, qz = %g, %g, %g), more than %g of its largest value %g m^-1 sr^-1 at |q| <= %g AA^-1. "
-                   "The component is for small-angle scattering, and its total cross-section only includes "
-                   "|q| <= %g AA^-1; give expressions that decay at large q, also along qx, qy and qz.\n",
-                   component, comp_name, q_limit, high, at_high[0], at_high[1], at_high[2], at_high[3], fraction, low, q_limit, q_limit));
+                   "Scattering at |q| > %g AA^-1 is left out.\n",
+                   component, comp_name, q_limit, high, at_high[0], at_high[1], at_high[2], at_high[3], fraction, low, q_limit, q_limit);
 }
 
 /* int q dq <dSigma/dOmega>_phi for k_i = k khat [AA^-1], with
@@ -111,11 +108,11 @@ sans_expr_check_large_q (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo
  * where e1, e2 are the theta and phi unit vectors of khat (x and y for khat along z). */
 double
 sans_expr_Idsdw (struct sans_expr_table *t, double k, Coords khat, Coords e1, Coords e2) {
-  // Only |q| <= SANS_EXPR_Q_MAX contributes (see sans_expr_check_large_q). Log grids from
+  // Only |q| <= q_limit contributes. Log grids from
   // both ends of the Ewald sphere resolve features near forward and near backward
   // scattering: u = q from 0 to sqrt(2) k, and u = Q = sqrt(4k^2 - q^2) from 0 to sqrt(2) k,
-  // with q dq = Q dQ; the backward half is used only where |q| <= SANS_EXPR_Q_MAX reaches it.
-  double q_end = fmin (SANS_EXPR_Q_MAX, 2.0 * k);
+  // with q dq = Q dQ; the backward half is used only where |q| <= q_limit reaches it.
+  double q_end = fmin (t->q_limit, 2.0 * k);
   double q_split = sqrt (2.0) * k;
   double Qminl = log10 (0.0000001);
   double Qmidl = log10 (q_split);
@@ -245,16 +242,35 @@ sans_expr_dSigdOmega (struct sans_expr_table *t, double q, double qx, double qy,
   return t->dsdo_scale * F * F * te_eval (t->Sexpr) + t->dsdo_background;
 }
 
+/* Unit vector (dx, dy, dz) drawn uniformly over the directions of k_f with |k_f - k_i| <= q_limit
+ * for elastic scattering of k_i = (kx, ky, kz), and their solid angle; u1 and u2 are random in 0..1 */
+void
+sans_expr_random_direction (double *dx, double *dy, double *dz, double *solid_angle, double kx, double ky, double kz, double q_limit, double u1, double u2) {
+  double k = sqrt (kx * kx + ky * ky + kz * kz);
+  double cos_max = fmax (-1.0, 1.0 - q_limit * q_limit / (2.0 * k * k));
+  double cos_theta = 1.0 - u1 * (1.0 - cos_max);
+  double sin_theta = sqrt (fmax (0.0, 1.0 - cos_theta * cos_theta));
+  double phi = 2.0 * PI * u2;
+  double ax = kx / k, ay = ky / k, az = kz / k, e1x, e1y, e1z, e2x, e2y, e2z;
+  normal_vec (&e1x, &e1y, &e1z, ax, ay, az);
+  vec_prod (e2x, e2y, e2z, ax, ay, az, e1x, e1y, e1z);
+  *dx = cos_theta * ax + sin_theta * (cos (phi) * e1x + sin (phi) * e2x);
+  *dy = cos_theta * ay + sin_theta * (cos (phi) * e1y + sin (phi) * e2y);
+  *dz = cos_theta * az + sin_theta * (cos (phi) * e1z + sin (phi) * e2z);
+  *solid_angle = 2.0 * PI * (1.0 - cos_max);
+}
+
 /* Sets up the table for the compiled expressions, and computes it in full for expressions in
  * q only; for expressions in qx, qy, qz the direction nodes are computed when first needed */
 void
 sans_expr_table_init (struct sans_expr_table *t, te_expr *Fexpr, te_expr *Sexpr, double *qv, double dsdo_scale, double dsdo_background,
-                      int q_only, int n_phi, int n_dir_theta, int n_dir_phi, const char *component, const char *comp_name) {
+                      int q_only, double q_limit, int n_phi, int n_dir_theta, int n_dir_phi, const char *component, const char *comp_name) {
   if (n_phi < 1)
     exit (fprintf (stderr, "%s: %s: n_phi must be at least 1.\n", component, comp_name));
   t->Fexpr = Fexpr;
   t->Sexpr = Sexpr;
   t->qv = qv;
+  t->q_limit = q_limit;
   t->dsdo_scale = dsdo_scale;
   t->dsdo_background = dsdo_background;
   t->q_only = q_only;

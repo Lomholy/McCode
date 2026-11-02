@@ -48,16 +48,18 @@
 * also over the direction of k in the local frame (n_dir_theta polar angles and
 * n_dir_phi azimuths), each node computed the first time a ray needs it, and
 * interpolated linearly in wavelength and direction. The q integral runs over
-* |q| <= 0.5 AA^-1, with log grids from both ends of the Ewald sphere (q from 0, and
+* |q| <= q_max, with log grids from both ends of the Ewald sphere (q from 0, and
 * sqrt(4k^2 - q^2) from 0, up to q = sqrt(2) k) where that range reaches them. The
 * attenuation uses Sigma_s
 * of the incoming direction on the way in and of the outgoing direction on the
 * way out, so a tilted or rotated anisotropic sample is attenuated correctly.
 * The expressions, cross-sections and tables are handled by share/sans-expr-lib.
 *
-* The component is for small-angle scattering: only |q| <= 0.5 AA^-1 enters the total
-* cross-section, and INITIALIZE stops the simulation if scale*F^2*S at |q| > 0.5 AA^-1
-* exceeds 1e-3 of its largest value at |q| <= 0.5 AA^-1. It samples |q| and, for
+* The component is for small-angle scattering: only |q| <= q_max enters the total
+* cross-section and scatters. Without focusing the outgoing direction is drawn within the
+* cone of |q| <= q_max; with focusing, rays drawn outside it are absorbed. INITIALIZE warns
+* if scale*F^2*S at |q| > q_max exceeds 1e-3 of its largest value at |q| <= q_max. It
+* samples |q| and, for
 * expressions in qx, qy, qz, 206 directions, so narrow features away from the axes
 * can be missed.
 *
@@ -97,6 +99,7 @@
 * p4: [1]            Generic numeric constant, meaning defined by the user's expressions
 * p5: [1]            Generic numeric constant, meaning defined by the user's expressions
 * p6: [1]            Generic numeric constant, meaning defined by the user's expressions
+* q_max: [AA^-1]     Largest |q| that scatters
 * scale: [m^-1 sr^-1] Prefactor multiplying F^2*S
 * background: [m^-1 sr^-1] Flat background added to the cross-section
 * n_phi: [1]         Number of azimuthal points around k_i in the integral of Sigma_s for anisotropic expressions
@@ -133,7 +136,7 @@ DEFINE COMPONENT Sans_expr
 
 SETTING PARAMETERS (string form_factor="1", string structure_factor="1",
 p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
-scale=1, background=0, int n_phi=64, int n_dir_theta=91, int n_dir_phi=72, sigma_abs=0,
+scale=1, background=0, int n_phi=64, int n_dir_theta=91, int n_dir_phi=72, q_max=0.5, sigma_abs=0,
 xwidth=0, yheight=0, zdepth=0, radius=0,
 target_x = 0, target_y = 0, target_z = 6, int target_index=0,
 focus_xw=0, focus_yh=0, focus_aw=0, focus_ah=0,  focus_r=0)
@@ -168,6 +171,8 @@ INITIALIZE
                    "ERROR     Please check parameter values.\n",
                    NAME_CURRENT_COMP));
 
+  if (q_max <= 0)
+    exit (fprintf (stderr, "Sans_expr: %s: q_max must be positive.\n", NAME_CURRENT_COMP));
   if (!form_factor || !strcmp (form_factor, ""))
     exit (fprintf (stderr, "Sans_expr: %s: form_factor expression is empty.\n", NAME_CURRENT_COMP));
   if (!structure_factor || !strcmp (structure_factor, ""))
@@ -204,8 +209,8 @@ INITIALIZE
   F_expr = sans_expr_compile (form_factor, q_vars, pars, "Sans_expr", NAME_CURRENT_COMP, "form_factor");
   S_expr = sans_expr_compile (structure_factor, q_vars, pars, "Sans_expr", NAME_CURRENT_COMP, "structure_factor");
   int q_only = sans_expr_is_isotropic (form_factor, q_vars, pars) && sans_expr_is_isotropic (structure_factor, q_vars, pars);
-  sans_expr_check_large_q (F_expr, S_expr, q_vars, scale, q_only, "Sans_expr", NAME_CURRENT_COMP);
-  sans_expr_table_init (&table, F_expr, S_expr, q_vars, scale, background, q_only, n_phi, n_dir_theta, n_dir_phi, "Sans_expr",
+  sans_expr_check_large_q (F_expr, S_expr, q_vars, scale, q_only, q_max, "Sans_expr", NAME_CURRENT_COMP);
+  sans_expr_table_init (&table, F_expr, S_expr, q_vars, scale, background, q_only, q_max, n_phi, n_dir_theta, n_dir_phi, "Sans_expr",
                         NAME_CURRENT_COMP);
 %}
 TRACE
@@ -242,7 +247,9 @@ TRACE
       aim_y = target_y - y;
       aim_z = target_z - z;
     }
-    if (focus_aw && focus_ah) {
+    if (!(focus_aw && focus_ah) && !(focus_xw && focus_yh) && !focus_r) {
+      sans_expr_random_direction (&vx, &vy, &vz, &solid_angle, V2K * vx_i, V2K * vy_i, V2K * vz_i, q_max, rand01 (), rand01 ());
+    } else if (focus_aw && focus_ah) {
       randvec_target_rect_angular (&vx, &vy, &vz, &solid_angle, aim_x, aim_y, aim_z, focus_aw, focus_ah, ROT_A_CURRENT_COMP);
     } else if (focus_xw && focus_yh) {
       randvec_target_rect (&vx, &vy, &vz, &solid_angle, aim_x, aim_y, aim_z, focus_xw, focus_yh, ROT_A_CURRENT_COMP);
@@ -257,6 +264,8 @@ TRACE
     qy = V2K * (vy_i - vy);
     qz = V2K * (vz_i - vz);
     q = sqrt (qx * qx + qy * qy + qz * qz);
+    if (q > q_max)
+      ABSORB;
     if (shape == 0)
       intersect = cylinder_intersect (&t0, &t1, x, y, z, vx, vy, vz, radius, yheight);
     else if (shape == 1)

@@ -51,17 +51,20 @@
 * polar angles and n_dir_phi azimuths), each node computed the first time a ray
 * needs it, and interpolated linearly in wavelength and direction, so a tilted or
 * rotated anisotropic sample has the right mu along every path. The q integral runs
-* over |q| <= 0.5 AA^-1, with log grids from both ends of the Ewald sphere (q from 0,
+* over |q| <= q_max, with log grids from both ends of the Ewald sphere (q from 0,
 * and sqrt(4k^2 - q^2) from 0, up to q = sqrt(2) k) where that range reaches them.
 * The expressions, cross-sections and tables are handled by share/sans-expr-lib.
 *
 * In a scattering event the outgoing direction is drawn uniformly within the
-* focusing solid angle dOmega of the geometry, and the weight is multiplied by
+* focusing solid angle dOmega of the geometry, or the cone of |q| <= q_max without
+* focusing, and the weight is multiplied by
 * dOmega * dSigma/dOmega(q) / mu(k).
 *
-* The component is for small-angle scattering: only |q| <= 0.5 AA^-1 enters the total
-* cross-section, and INITIALIZE stops the simulation if scale*F^2*S at |q| > 0.5 AA^-1
-* exceeds 1e-3 of its largest value at |q| <= 0.5 AA^-1. It samples |q| and, for
+* The component is for small-angle scattering: only |q| <= q_max enters the total
+* cross-section and scatters. Without focusing the outgoing direction is drawn within the
+* cone of |q| <= q_max; with focusing, rays drawn outside it are absorbed. INITIALIZE warns
+* if scale*F^2*S at |q| > q_max exceeds 1e-3 of its largest value at |q| <= q_max. It
+* samples |q| and, for
 * expressions in qx, qy, qz, 206 directions, so narrow features away from the axes
 * can be missed.
 *
@@ -95,6 +98,7 @@
 * n_phi: [1]                Number of azimuthal points around k in the integral of mu for anisotropic expressions
 * n_dir_theta: [1]          Number of polar angles of k, from 0 to 180 deg, in the mu table for anisotropic expressions
 * n_dir_phi: [1]            Number of azimuths of k in the mu table for anisotropic expressions
+* q_max: [AA^-1]             Largest |q| that scatters
 * interact_fraction: [1]    How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
 *
 * CALCULATED PARAMETERS:
@@ -111,7 +115,7 @@ DEFINE COMPONENT SANS_process
 
 SETTING PARAMETERS(string form_factor="1", string structure_factor="1",
 p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
-scale=1, background=0, int n_phi=64, int n_dir_theta=91, int n_dir_phi=72, interact_fraction=-1)
+scale=1, background=0, int n_phi=64, int n_dir_theta=91, int n_dir_phi=72, q_max=0.5, interact_fraction=-1)
 
 
 SHARE
@@ -140,7 +144,10 @@ SHARE
 
     Coords k_out;
     double solid_angle;
-    focus_data->focusing_function (&k_out, &solid_angle, focus_data);
+    if (focus_data->focusing_function == &randvec_target_circle_union && focus_data->spatial_focus_radius == 0)
+      sans_expr_random_direction (&k_out.x, &k_out.y, &k_out.z, &solid_angle, k_initial[0], k_initial[1], k_initial[2], s->table.q_limit, rand01 (), rand01 ());
+    else
+      focus_data->focusing_function (&k_out, &solid_angle, focus_data);
     NORM (k_out.x, k_out.y, k_out.z);
     k_final[0] = k_out.x * k_length;
     k_final[1] = k_out.y * k_length;
@@ -150,6 +157,8 @@ SHARE
     double qy = k_initial[1] - k_final[1];
     double qz = k_initial[2] - k_final[2];
     double q = sqrt (qx * qx + qy * qy + qz * qz);
+    if (q > s->table.q_limit)
+      return 0;
 
     double mu = sans_expr_sigma_s (&s->table, k_initial[0], k_initial[1], k_initial[2]);
     if (mu <= 0)
@@ -189,6 +198,9 @@ INITIALIZE
   if (!structure_factor || !strcmp (structure_factor, ""))
     exit (fprintf (stderr, "SANS_process: %s: structure_factor expression is empty.\n", NAME_CURRENT_COMP));
 
+  if (q_max <= 0)
+    exit (fprintf (stderr, "SANS_process: %s: q_max must be positive.\n", NAME_CURRENT_COMP));
+
   SANS_storage.pars[0] = p1;
   SANS_storage.pars[1] = p2;
   SANS_storage.pars[2] = p3;
@@ -199,8 +211,8 @@ INITIALIZE
   te_expr* S_expr = sans_expr_compile (structure_factor, SANS_storage.q_vars, SANS_storage.pars, "SANS_process", NAME_CURRENT_COMP, "structure_factor");
   int q_only = sans_expr_is_isotropic (form_factor, SANS_storage.q_vars, SANS_storage.pars)
                && sans_expr_is_isotropic (structure_factor, SANS_storage.q_vars, SANS_storage.pars);
-  sans_expr_check_large_q (F_expr, S_expr, SANS_storage.q_vars, scale, q_only, "SANS_process", NAME_CURRENT_COMP);
-  sans_expr_table_init (&SANS_storage.table, F_expr, S_expr, SANS_storage.q_vars, scale, background, q_only, n_phi, n_dir_theta, n_dir_phi,
+  sans_expr_check_large_q (F_expr, S_expr, SANS_storage.q_vars, scale, q_only, q_max, "SANS_process", NAME_CURRENT_COMP);
+  sans_expr_table_init (&SANS_storage.table, F_expr, S_expr, SANS_storage.q_vars, scale, background, q_only, q_max, n_phi, n_dir_theta, n_dir_phi,
                         "SANS_process", NAME_CURRENT_COMP);
 
   scattering_process_struct_init (&This_process);

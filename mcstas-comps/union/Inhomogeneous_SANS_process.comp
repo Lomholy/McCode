@@ -33,7 +33,7 @@
 * along each path through a geometry. mu is the total scattering cross-section,
 *
 *   mu(k; r, t) = 2 pi / k^2 * ( scale(r, t) * I(k; r, t) + background(r, t) * qmax^2 / 2 )
-*   I(k; r, t)  = int_0^qmax q dq < F^2 S >_phi,   qmax = min(0.5 AA^-1, 2k)
+*   I(k; r, t)  = int_0^qmax q dq < F^2 S >_phi,   qmax = min(q_max, 2k)
 *
 * I is too expensive to integrate at every point, so it is cached on a grid and
 * interpolated. The grid only has axes along the variables among x, y, z, t that F or S
@@ -44,11 +44,11 @@
 * I (or scale * I) for the wavelengths 1..30 AA, is filled
 * the first time it is needed, and is interpolated multilinearly between nodes and
 * linearly in wavelength. The integral is the one of share/sans-expr-lib, over the Ewald
-* sphere with |q| <= 0.5 AA^-1, with an n_phi point average over the azimuthal angle when
+* sphere with |q| <= q_max, with an n_phi point average over the azimuthal angle when
 * F or S use qx, qy, qz. It assumes k_i along the process z axis.
 *
-* The component is for small-angle scattering: INITIALIZE stops the simulation if F^2 S
-* at |q| > 0.5 AA^-1 exceeds 1e-3 of its largest value below (see share/sans-expr-lib).
+* The component is for small-angle scattering: only |q| <= q_max scatters. INITIALIZE warns
+* if F^2 S at |q| > q_max exceeds 1e-3 of its largest value below (see share/sans-expr-lib).
 * The check uses x = y = z = 0 and, if t_min < t_max, the middle of the t range.
 *
 * The spatial range of the grid is the bounding box of the geometries using the process,
@@ -57,7 +57,8 @@
 * and the number of such lookups is printed at the end.
 *
 * In a scattering event the outgoing direction is drawn within the focusing solid angle
-* dOmega, and the weight is multiplied by dOmega * dSigma/dOmega(q; r, t) / mu, where mu
+* dOmega, or the cone of |q| <= q_max without focusing, and rays drawn outside it are
+* absorbed, and the weight is multiplied by dOmega * dSigma/dOmega(q; r, t) / mu, where mu
 * is the value Union_master used when choosing the scattering point.
 *
 * Example (radius growing linearly along x):
@@ -99,6 +100,7 @@
 * prefill: [0/1]             Fill the whole cache at the first lookup instead of node by node
 * direct: [0/1]              Integrate at every point instead of using the cache (for testing)
 * max_cache_mb: [MB]         Largest allowed cache
+* q_max: [AA^-1]             Largest |q| that scatters
 * interact_fraction: [1]     How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
 * init: [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
 *
@@ -120,7 +122,7 @@ p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
 scale=1, background=0, int number_of_sample_points=20,
 int n_x=20, int n_y=20, int n_z=20, int n_t=20,
 x_min=0, x_max=0, y_min=0, y_max=0, z_min=0, z_max=0, t_min=0, t_max=0,
-int n_phi=16,
+int n_phi=16, q_max=0.5,
 int prefill=0, int direct=0, max_cache_mb=1000,
 interact_fraction=-1, string init="")
 
@@ -190,7 +192,7 @@ SHARE
     s->vars[7] = pt;
   };
 
-  /* I = int q dq <F^2 S>_phi over |q| <= SANS_EXPR_Q_MAX for wavelength il AA and k_i along z,
+  /* I = int q dq <F^2 S>_phi over |q| <= q_limit for wavelength il AA and k_i along z,
    * at the point set in vars[4..7]; scale * I if scale_cached */
   double
   ISANS_integral (struct Inhomogeneous_SANS_physics_storage_struct* s, int il) {
@@ -356,7 +358,10 @@ SHARE
 
     Coords k_out;
     double solid_angle;
-    focus_data->focusing_function (&k_out, &solid_angle, focus_data);
+    if (focus_data->focusing_function == &randvec_target_circle_union && focus_data->spatial_focus_radius == 0)
+      sans_expr_random_direction (&k_out.x, &k_out.y, &k_out.z, &solid_angle, k_initial[0], k_initial[1], k_initial[2], s->expr.q_limit, rand01 (), rand01 ());
+    else
+      focus_data->focusing_function (&k_out, &solid_angle, focus_data);
     NORM (k_out.x, k_out.y, k_out.z);
     k_final[0] = k_out.x * k_length;
     k_final[1] = k_out.y * k_length;
@@ -366,6 +371,8 @@ SHARE
     double qy = k_initial[1] - k_final[1];
     double qz = k_initial[2] - k_final[2];
     double q = sqrt (qx * qx + qy * qy + qz * qz);
+    if (q > s->expr.q_limit)
+      return 0;
 
     if (selected_mu <= 0)
       return 0;
@@ -409,6 +416,8 @@ INITIALIZE
     exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: form_factor expression is empty.\n", NAME_CURRENT_COMP));
   if (!structure_factor || !strcmp (structure_factor, ""))
     exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: structure_factor expression is empty.\n", NAME_CURRENT_COMP));
+  if (q_max <= 0)
+    exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: q_max must be positive.\n", NAME_CURRENT_COMP));
   if (n_phi < 1 || number_of_sample_points < 1)
     exit (fprintf (stderr, "Inhomogeneous_SANS_process: %s: n_phi and number_of_sample_points must be positive.\n", NAME_CURRENT_COMP));
 
@@ -434,6 +443,7 @@ INITIALIZE
   for (int v = ISANS_QX; v <= ISANS_QZ; v++)
     anisotropic |= ISANS_depends (s, form_factor, v) || ISANS_depends (s, structure_factor, v);
   s->expr.qv = s->vars;
+  s->expr.q_limit = q_max;
   s->expr.dsdo_scale = 1;
   s->expr.q_only = !anisotropic;
   s->expr.Nphi = anisotropic ? n_phi : 1;
@@ -441,7 +451,7 @@ INITIALIZE
   // The large-q check uses F and S at x = y = z = 0 and, if t_min < t_max, the middle of the t range
   if (t_min < t_max)
     s->vars[7] = 0.5 * (t_min + t_max);
-  sans_expr_check_large_q (s->expr.Fexpr, s->expr.Sexpr, s->vars, 1, !anisotropic, "Inhomogeneous_SANS_process", NAME_CURRENT_COMP);
+  sans_expr_check_large_q (s->expr.Fexpr, s->expr.Sexpr, s->vars, 1, !anisotropic, q_max, "Inhomogeneous_SANS_process", NAME_CURRENT_COMP);
   s->vars[7] = 0;
 
   const char* dim_names[4] = { "x", "y", "z", "t" };
@@ -473,7 +483,7 @@ INITIALIZE
   }
 
   for (int il = 1; il < ISANS_NLAM; il++) {
-    double qmax = fmin (SANS_EXPR_Q_MAX, 4.0 * PI / il);
+    double qmax = fmin (q_max, 4.0 * PI / il);
     s->qmax2_half[il] = 0.5 * qmax * qmax;
   }
 
