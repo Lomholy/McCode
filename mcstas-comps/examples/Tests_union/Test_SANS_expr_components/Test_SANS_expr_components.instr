@@ -49,7 +49,13 @@
 * The Union geometries have no focusing, so SANS_process and Inhomogeneous_SANS_process
 * scatter within |q| <= q_max, which is 0.5 AA^-1 by default.
 *
-* 0, 1, 2 and 8 must agree, as must 3, 4 and 5, and 6 and 7. The cylinders scatter only a
+* An anisotropic Gaussian form factor with correlation lengths 20, 10 and 10 AA along the
+* process x, y and z axes, in the 3 x 3 cm^2, 1 mm deep box, with the process rotated 45 deg
+* around y. The rays are strongly attenuated and k_i is not along the process z axis:
+*   sample_choice=9: SANS_process
+*   sample_choice=10: Inhomogeneous_SANS_process
+*
+* 0, 1, 2 and 8 must agree, as must 3, 4 and 5, 6 and 7, and 9 and 10. The cylinders scatter only a
 * few percent of the rays, so the Union_cylinder geometries set p_interact = 0.5.
 *
 * %Test: sample_choice=0 Detector: psd_det_I=2.80455e-09
@@ -61,6 +67,8 @@
 * %Test: sample_choice=6 Detector: psd_det_I=0.000395878
 * %Test: sample_choice=7 Detector: psd_det_I=0.000338272
 * %Test: sample_choice=8 Detector: psd_det_I=2.80466e-09
+* %Test: sample_choice=9 Detector: psd_det_I=0.000835499
+* %Test: sample_choice=10 Detector: psd_det_I=0.000834437
 *
 * %Parameters
 * sample_choice: [1] Sample to use, see the description.
@@ -98,6 +106,8 @@ DECLARE
   int union_cyl_ellipsoid;
   int union_inhomogeneous;
   int union_boxes;
+  int union_tilted_process;
+  int union_tilted_inhomogeneous;
   double det_dist;
   int scattered;
 %}
@@ -140,7 +150,9 @@ INITIALIZE
   union_cyl_ellipsoid = sample_choice == 5;
   union_inhomogeneous = sample_choice == 6;
   union_boxes = sample_choice == 7;
-  if (sample_choice < 0 || sample_choice > 8) {
+  union_tilted_process = sample_choice == 9;
+  union_tilted_inhomogeneous = sample_choice == 10;
+  if (sample_choice < 0 || sample_choice > 10) {
     fprintf (stderr, "Unsupported instrument parameter value sample_choice=%d.\n", sample_choice);
     exit (-1);
   }
@@ -234,7 +246,7 @@ EXTEND %{
     scattered = 1;
 %}
 
-// =================== Union samples, sample_choice 2, 5, 6, 7
+// =================== Union samples, sample_choice 2, 5, 6, 7, 9, 10
 
 COMPONENT spheres_proc = SANS_process(
     form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3",
@@ -371,8 +383,38 @@ COMPONENT box_9 = Union_box(
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*9, 0, 0) RELATIVE arm_sample
 
+COMPONENT tilted_proc = SANS_process(
+    form_factor = "exp(-((qx*p1)^2+(qy*p2)^2+(qz*p3)^2)/2)",
+    p1 = 20, p2 = 10, p3 = 10, scale = 3e5, n_phi = 16
+) AT (0, 0, 0) RELATIVE arm_sample
+ROTATED (0, 45, 0) RELATIVE arm_sample
+
+COMPONENT tilted_mat = Union_make_material(
+    my_absorption = 0, process_string = "tilted_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT tilted_box = Union_box(
+    xwidth = box_w, yheight = box_h, zdepth = box_d, priority = 4, material_string = "tilted_mat",
+    number_of_activations = union_tilted_process
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT tilted_inh_proc = Inhomogeneous_SANS_process(
+    form_factor = "exp(-((qx*p1)^2+(qy*p2)^2+(qz*p3)^2)/2)",
+    p1 = 20, p2 = 10, p3 = 10, scale = 3e5, n_phi = 16
+) AT (0, 0, 0) RELATIVE arm_sample
+ROTATED (0, 45, 0) RELATIVE arm_sample
+
+COMPONENT tilted_inh_mat = Union_make_material(
+    my_absorption = 0, process_string = "tilted_inh_proc"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT tilted_inh_box = Union_box(
+    xwidth = box_w, yheight = box_h, zdepth = box_d, priority = 5, material_string = "tilted_inh_mat",
+    number_of_activations = union_tilted_inhomogeneous
+) AT (0, 0, 0) RELATIVE arm_sample
+
 COMPONENT union_master = Union_master(
-) WHEN (sample_choice == 2 || sample_choice == 5 || sample_choice == 6 || sample_choice == 7)
+) WHEN (sample_choice == 2 || sample_choice == 5 || sample_choice == 6 || sample_choice == 7 || sample_choice == 9 || sample_choice == 10)
 AT (0, 0, 0) RELATIVE arm_sample
 EXTEND %{
   scattered = number_of_scattering_events;
