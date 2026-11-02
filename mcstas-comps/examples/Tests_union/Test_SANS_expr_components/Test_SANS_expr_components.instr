@@ -17,8 +17,8 @@
 * neutrons of 25.3 +- 0.1 meV, a 3 x 3 cm^2 slit 2.5 cm before the sample, and the
 * sample 100 m from the source. A 1 x 1 m^2 PSD with 1 x 1 mm^2 bins, 5 m after the
 * sample, counts the rays scattered exactly once. q_det, a Monitor_nD disk of radius
-* 0.5 m at the same place, bins the same rays azimuthally in kxy = |q| perpendicular to
-* the beam.
+* 0.5 m at the same place, bins the same rays in |q| = |k_i - k_f|, kept in the user
+* variable q_abs.
 *
 * Hard spheres, R = 100 AA, volume fraction 1e-2, excess scattering length density
 * 0.1 fm/AA^3 (1e-6 AA^-2), in a cylinder of radius 0.5 mm and height 3 cm:
@@ -96,6 +96,14 @@ DECLARE
   int scattered;
 %}
 
+USERVARS
+%{
+  double vx_i;
+  double vy_i;
+  double vz_i;
+  double q_abs;
+%}
+
 INITIALIZE
 %{
   cyl_r = 0.0005;
@@ -160,6 +168,11 @@ COMPONENT slit = Slit(
 
 COMPONENT arm_sample = Arm(
 ) AT (0, 0, 0.025) RELATIVE slit
+EXTEND %{
+  vx_i = vx;
+  vy_i = vy;
+  vz_i = vz;
+%}
 
 // =================== Standalone samples, sample_choice 0, 1, 3, 4, 8
 
@@ -381,6 +394,12 @@ EXTEND %{
 
 // =================== Detector
 
+COMPONENT arm_q = Arm(
+) AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  q_abs = V2K * sqrt ((vx_i - vx) * (vx_i - vx) + (vy_i - vy) * (vy_i - vy) + (vz_i - vz) * (vz_i - vz));
+%}
+
 COMPONENT psd_det = PSD_monitor(
     nx = 1000,
     ny = 1000,
@@ -394,7 +413,9 @@ AT (0, 0, 5) RELATIVE arm_sample
 COMPONENT q_det = Monitor_nD(
     xwidth = 1,
     yheight = 1,
-    options = "disk, kxy limits=[0 0.35] bins=60",
+    options = "disk, user1 limits=[0 0.35] bins=300",
+    user1 = "q_abs",
+    username1 = "|q| [AA^-1]",
     filename = "q_det",
     restore_neutron = 1
 ) WHEN (scattered == 1)
