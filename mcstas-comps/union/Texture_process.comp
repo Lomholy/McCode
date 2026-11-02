@@ -25,6 +25,14 @@
 * ODF and another one with crystallographic and physical information.
 *
 *
+* CIF and NCrystal inputs can give hundreds of reflections, and the tables use about 1 MB per l for
+* each reflection, so set lambda_min, or dcutoff in the NCrystal cfg-string, to what the instrument reaches.
+* An NCrystal material must have one crystalline phase and no orientation, as that is given by the
+* placement of the component. CIF files are converted with ncrystal_cif2ncmat, which needs the Python
+* modules gemmi and spglib and uses a Debye temperature of 300 K when it has no other atomic dynamics. Run
+* ncrystal_cif2ncmat directly and use the resulting NCMAT file to set this. Each family of reflections is described by one of its members, so the
+* ODF must have the crystal symmetry applied.
+*
 * Algorithm:
 * Described elsewhere, see e.g. <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>
 *
@@ -32,10 +40,11 @@
 * INPUT PARAMETERS:
 * packing_factor:    [1]      How dense is the material compared to optimal 0-1
 * interact_fraction: [1]      How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
-* crystal_fn:        [s]      Path to a file (.laz) containing crystallographic and physical information
+* crystal_fn:        [s]      Crystallographic information: a reflection file (LAZ, LAU), a CIF file, or an NCrystal cfg-string (containing ".ncmat" or "::")
 * fcoef_fn:          [s]      Path to a text file containing the Fourier coefficients of the ODF. It must have five columns: l m n Real(Clmn) Imag(Clmn)
 * lmax_user:         [1]      Cut-off for the Fourier series. If negative, the program uses all the coefficients provided in the file fcoef_fn
-* barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files
+* barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for CIF files and NCrystal cfg-strings
+* lambda_min:        [AA]     Reflections that only scatter below this wavelength are not used, which saves one table per l for each of them. 0 keeps all reflections
 * init:              [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
 *
 * %L
@@ -47,15 +56,18 @@
 DEFINE COMPONENT Texture_process // Remember to change the name of process here
 
 SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, int lmax_user=-1,
-            barns = 0, interact_fraction = -1, packing_factor = 1,
+            barns = 0, interact_fraction = -1, packing_factor = 1, lambda_min = 0,
 	        string init="")
 
+
+DEPENDENCY "@NCRYSTALFLAGS@"
 
 SHARE
 %{
   %include "union-lib"
 
   %include "read_table-lib"
+  %include "mccode-ncrystal-lib"
 
   #ifndef TEXTURE_PROCESS_DECL
   #define TEXTURE_PROCESS_DECL
@@ -119,7 +131,9 @@ SHARE
     struct legendre* lgdr;         // structure with precomputed spherical harmonics
     int lmax;                      // cut-off for the Fourier expansion
 
-    double V0; // Unit cell volume (AA**3)
+    double V0;             // Unit cell volume (AA**3)
+    int flag_barns;        // |F|^2 is in barns whatever the barns parameter is
+    double wavelength_min; // Reflections only scattering below this wavelength are not used
 
     // precomputed factors
     double xs2mu; // cross section to mu (in m^-1)
@@ -512,6 +526,90 @@ SHARE
   //// Input - Output      //
   ///////////////////////////
 
+  // Converts a CIF file to a temporary NCMAT file with ncrystal_cif2ncmat, and returns its name
+  char*
+  cif2ncmat_texture (char* infile) {
+    char cmd[3200];
+    char inpath[1024];
+    FILE* file = Open_File (infile, "r", inpath);
+    char* outfile = (char*)malloc (1024);
+
+    if (!file || !outfile) {
+      fprintf (stderr, "Texture: Error: Could not open %s\n", infile);
+      return NULL;
+    }
+    fclose (file);
+
+    snprintf (outfile, 1024, "%s.ncmat", tmpnam (NULL));
+    snprintf (cmd, sizeof (cmd), "ncrystal_cif2ncmat \"%s\" --output \"%s\" --quiet", inpath, outfile);
+    if (system (cmd) != 0) {
+      fprintf (stderr, "Texture: Error: Could not convert %s with ncrystal_cif2ncmat, which needs the Python modules gemmi and spglib\n", infile);
+      free (outfile);
+      return NULL;
+    }
+    return outfile;
+  }
+
+  // Fills a table with one row per family of reflections of an NCrystal material
+  // and the header of a reflection file: h, k, l, |F|^2 in barns, multiplicity
+  void
+  read_hkl_table_ncrystal_texture (const char* cfgstr, t_Table* table) {
+    unsigned spacegroup, n_atoms;
+    double lattice_a, lattice_b, lattice_c, alpha, beta, gamma, cell_volume, dsp, fsq, F2_scale;
+    int idx, h, k, l, mult, nhkl, nonoriented;
+    ncrystal_scatter_t scat;
+    ncrystal_info_t ncobj;
+
+    mccode_setup_ncrystal_search_paths ();
+    scat = ncrystal_create_scatter (cfgstr);
+    nonoriented = ncrystal_isnonoriented (ncrystal_cast_scat2proc (scat));
+    ncrystal_unref (&scat);
+    if (!nonoriented) {
+      fprintf (stderr, "Texture_process: The NCrystal cfg-string \"%s\" must not specify a crystal orientation. Exit!\n", cfgstr);
+      exit (-1);
+    }
+
+    ncobj = ncrystal_create_info (cfgstr);
+    nhkl = ncrystal_info_nphases (ncobj) > 0 ? 0 : ncrystal_info_nhkl (ncobj);
+    if (nhkl <= 0 || !ncrystal_info_getstructure (ncobj, &spacegroup, &lattice_a, &lattice_b, &lattice_c, &alpha, &beta, &gamma, &cell_volume, &n_atoms)) {
+      fprintf (stderr, "Texture_process: The NCrystal material \"%s\" must have one crystalline phase with reflections. Exit!\n", cfgstr);
+      exit (-1);
+    }
+
+    // The cross sections assume the density implied by the unit cell
+    F2_scale = ncrystal_info_getnumberdensity (ncobj) * cell_volume / n_atoms;
+
+    if (!Table_Init (table, nhkl, 5)) {
+      fprintf (stderr, "Texture_process: Could not allocate reflection table for \"%s\". Exit!\n", cfgstr);
+      exit (-1);
+    }
+    for (idx = 0; idx < nhkl; idx++) {
+      ncrystal_info_gethkl (ncobj, idx, &h, &k, &l, &mult, &dsp, &fsq);
+      if (h == 0 && k == 0 && l == 0) {
+        fprintf (stderr, "Texture_process: The NCrystal material \"%s\" does not provide hkl indices. Exit!\n", cfgstr);
+        exit (-1);
+      }
+      table->data[idx * 5 + 0] = h;
+      table->data[idx * 5 + 1] = k;
+      table->data[idx * 5 + 2] = l;
+      table->data[idx * 5 + 3] = fsq * F2_scale;
+      table->data[idx * 5 + 4] = mult;
+    }
+
+    table->header = (char*)malloc (1024);
+    if (!table->header) {
+      fprintf (stderr, "Texture_process: Failed malloc() reading \"%s\". Exit!\n", cfgstr);
+      exit (-1);
+    }
+    snprintf (table->header, 1024,
+              "# lattice_a %.17g\n# lattice_b %.17g\n# lattice_c %.17g\n"
+              "# lattice_aa %.17g\n# lattice_bb %.17g\n# lattice_cc %.17g\n"
+              "# column_h 1\n# column_k 2\n# column_l 3\n# column_F2 4\n# column_j 5\n",
+              lattice_a, lattice_b, lattice_c, alpha, beta, gamma);
+
+    ncrystal_unref (&ncobj);
+  }
+
   int
   read_hkl_data_texture (char* SC_file, struct hkl_info_struct_texture* info) {
     struct hkl_data_texture* list = NULL;
@@ -533,6 +631,8 @@ SHARE
     double asx, asy, asz;                // First reciprocal lattice axis (1/AA)
     double bsx, bsy, bsz;                // Second reciprocal lattice axis
     double csx, csy, csz;                // Third reciprocal lattice axis
+    char* filename;
+    char* ext;
 
     if (!SC_file || !strlen (SC_file) || !strcmp (SC_file, "NULL") || !strcmp (SC_file, "0")) {
       info->num_hkl = 0;
@@ -541,7 +641,23 @@ SHARE
 
     // Read the table
 
-    Table_Read (&sTable, SC_file, 1); // read 1st block data from SC_file into sTable
+    ext = strrchr (SC_file, '.');
+    if (ext && !strcasecmp (ext, ".cif")) {
+      filename = cif2ncmat_texture (SC_file);
+      if (!filename) {
+        return 0;
+      }
+      read_hkl_table_ncrystal_texture (filename, &sTable);
+      remove (filename);
+      free (filename);
+      info->flag_barns = 1;
+    } else if (strstr (SC_file, ".ncmat") != NULL || strstr (SC_file, "::") != NULL) {
+      read_hkl_table_ncrystal_texture (SC_file, &sTable);
+      info->flag_barns = 1;
+    } else if (Table_Read (&sTable, SC_file, 1) <= 0) { // read 1st block data from SC_file into sTable
+      fprintf (stderr, "Texture: Error: Could not read reflections from %s\n", SC_file);
+      return 0;
+    }
     if (sTable.columns < 5) {
       fprintf (stderr, "Texture: Error: The number of columns in %s should be", SC_file);
       fprintf (stderr, " at least %d for [h,k,l,F2,j]\n", 5);
@@ -604,6 +720,10 @@ SHARE
     }
     if (!m_cc) {
       m_cc = m_bb;
+    }
+
+    if (fabs (m_a - m_b) > 1e-6 || fabs (m_aa - 90) > 1e-6 || fabs (m_bb - 90) > 1e-6) {
+      fprintf (stderr, "Texture: WARNING: %s has a != b or alpha, beta != 90, which the crystal axes do not take into account\n", SC_file);
     }
 
     m_ax = m_a * sin (0.5 * m_cc * DEG2RAD);
@@ -674,6 +794,11 @@ SHARE
 
     // sort the list with increasing G
     qsort (list, i, sizeof (struct hkl_data_texture), SX_list_compare_texture);
+
+    // Reflections with G > 2k cannot scatter
+    while (info->wavelength_min > 0 && i > 0 && list[i - 1].G > 4 * PI / info->wavelength_min) {
+      i--;
+    }
 
     info->list = list;
     info->num_hkl = i;
@@ -1159,6 +1284,9 @@ INITIALIZE
   struct union_state_struct* union_state_p = union_acquire ();
   // Texture initialize
 
+  hkl_info_texture.flag_barns = 0;
+  hkl_info_texture.wavelength_min = lambda_min;
+
   // cut-off for l. If negative, take the cut-off provided in the Fourier coeff file
   hkl_info_texture.lmax = lmax_user;
 
@@ -1173,7 +1301,7 @@ INITIALIZE
   // Cross-sections are in barns = 10**-28 m**2, and unit cell volumes are
   // in AA**3 = 10**-30 m**3. Hence a factor of 100 is used to convert
   // scattering lengths to m**-1
-  if (barns) {
+  if (barns || hkl_info_texture.flag_barns) {
     hkl_info_texture.xs2mu *= 100;
   }
 
