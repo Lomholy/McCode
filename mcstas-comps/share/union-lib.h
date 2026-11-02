@@ -54,9 +54,7 @@ enum process {
   MCViNE,
   SANS,
   Inhomogeneous_SANS,
-  Inhomogeneous_PowderN,
   Inhomogeneous_NCrystal,
-  Inhomogeneous_single_crystal,
   Template
 };
 
@@ -93,9 +91,7 @@ enum surface {
 #define UNION_CASE_PHYSICS_MY_MCVINE(out, ...)
 #define UNION_CASE_PHYSICS_MY_SANS(out, ...)
 #define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SANS(out, ...)
-#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_POWDERN(out, ...)
 #define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_NCRYSTAL(out, ...)
-#define UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SINGLE_CRYSTAL(out, ...)
 #define UNION_CASE_PHYSICS_MY_TEMPLATE(out, ...)
 
 #define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_INCOHERENT(out, ...)
@@ -111,9 +107,7 @@ enum surface {
 #define UNION_CASE_PHYSICS_SCATTERING_MCVINE(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_SANS(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SANS(out, ...)
-#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_POWDERN(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_NCRYSTAL(out, ...)
-#define UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SINGLE_CRYSTAL(out, ...)
 #define UNION_CASE_PHYSICS_SCATTERING_TEMPLATE(out, ...)
 
 #define UNION_CASE_PHYSICS_SURFACE_MIRROR(out, ...)
@@ -133,9 +127,7 @@ enum surface {
   UNION_CASE_PHYSICS_MY_MCVINE(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_SANS(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SANS(out, __VA_ARGS__) \
-  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_POWDERN(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_NCRYSTAL(out, __VA_ARGS__) \
-  UNION_CASE_PHYSICS_MY_INHOMOGENEOUS_SINGLE_CRYSTAL(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_MY_TEMPLATE(out, __VA_ARGS__)
 
 #define UNION_CASES_PHYSICS_SCATTERING(out, ...) \
@@ -152,9 +144,7 @@ enum surface {
   UNION_CASE_PHYSICS_SCATTERING_MCVINE(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_SANS(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SANS(out, __VA_ARGS__) \
-  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_POWDERN(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_NCRYSTAL(out, __VA_ARGS__) \
-  UNION_CASE_PHYSICS_SCATTERING_INHOMOGENEOUS_SINGLE_CRYSTAL(out, __VA_ARGS__) \
   UNION_CASE_PHYSICS_SCATTERING_TEMPLATE(out, __VA_ARGS__)
 
 #define UNION_CASES_PHYSICS_SURFACE(out, ...) \
@@ -666,9 +656,7 @@ union data_transfer_union{
     struct MCViNE_physics_storage_struct *pointer_to_a_MCViNE_physics_storage_struct;
     struct SANS_physics_storage_struct *pointer_to_a_SANS_physics_storage_struct;
     struct Inhomogeneous_SANS_physics_storage_struct *pointer_to_a_Inhomogeneous_SANS_physics_storage_struct;
-    struct Inhomogeneous_PowderN_physics_storage_struct *pointer_to_a_Inhomogeneous_PowderN_physics_storage_struct;
     struct Inhomogeneous_NCrystal_physics_storage_struct *pointer_to_a_Inhomogeneous_NCrystal_physics_storage_struct;
-    struct Inhomogeneous_single_crystal_physics_storage_struct *pointer_to_a_Inhomogeneous_single_crystal_physics_storage_struct;
     struct Template_physics_storage_struct *pointer_to_a_Template_physics_storage_struct;
     // possible to add as many structs as wanted, without increasing memory footprint.
 };
