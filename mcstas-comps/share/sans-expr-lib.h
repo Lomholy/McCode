@@ -21,15 +21,15 @@
 *
 *   Sigma_s(k) = 2 pi / k^2 int_0^min(q_max, 2k) q dq <dSigma/dOmega(q(q,phi))>_phi
 *
-* is integrated over the part of the Ewald sphere of k with |q| <= SANS_EXPR_Q_MAX,
+* is integrated over the part of the Ewald sphere of k with |q| <= q_limit,
 * and tabulated for wavelengths 1..30 AA. For expressions in q only it does not
 * depend on the direction of k; otherwise it is tabulated also over the direction of
 * k (n_dir_theta polar angles and n_dir_phi azimuths), each node computed the first
 * time it is needed, and interpolated linearly in wavelength and direction.
 *
-* Expressions are meant for small-angle scattering: sans_expr_check_large_q stops
-* the simulation if scale*F^2*S at |q| > SANS_EXPR_Q_MAX exceeds 1e-3 of its largest
-* value below.
+* Scattering is limited to |q| <= q_limit. sans_expr_check_large_q warns if scale*F^2*S
+* at |q| > q_limit exceeds 1e-3 of its largest value below, and sans_expr_random_direction
+* draws directions within the limit.
 *
 * Usage: %include "sans-expr-lib" in the SHARE section of the component.
 *
@@ -43,11 +43,6 @@
 // Number of variables of the expressions: q, qx, qy, qz, p1..p6
 #define SANS_EXPR_NVARS 10
 
-// Largest |q| [AA^-1] of the small-angle scattering
-#ifndef SANS_EXPR_Q_MAX
-#define SANS_EXPR_Q_MAX 0.5
-#endif
-
 // Tables of int q dq <dSigma/dOmega>_phi over the Ewald sphere, for wavelengths 1..30 AA:
 // iso for expressions in q only, otherwise I over directions of k in the frame of the
 // component (n_polar polar angles from 0 to 180 deg, n_azim azimuths), computed when first needed
@@ -55,6 +50,7 @@ struct sans_expr_table {
   te_expr* Fexpr;
   te_expr* Sexpr;
   double* qv; // q, qx, qy, qz bound in the expressions
+  double q_limit; // Largest |q| [AA^-1] that scatters
   double dsdo_scale;
   double dsdo_background;
   int Nphi;   // azimuths around k in the integral
@@ -71,14 +67,16 @@ int sans_expr_is_isotropic (const char* expr_str, double* qv, double* pars);
 double sans_expr_dSigdOmega (struct sans_expr_table* t, double q, double qx, double qy, double qz);
 double sans_expr_largest (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, double q_low, double q_high, int n_q,
                           double* at_q);
-void sans_expr_check_large_q (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, const char* component,
+void sans_expr_check_large_q (te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, int q_only, double q_limit, const char* component,
                               const char* comp_name);
 void sans_expr_table_init (struct sans_expr_table* t, te_expr* Fexpr, te_expr* Sexpr, double* qv, double dsdo_scale, double dsdo_background,
-                           int q_only, int n_phi, int n_dir_theta, int n_dir_phi, const char* component, const char* comp_name);
+                           int q_only, double q_limit, int n_phi, int n_dir_theta, int n_dir_phi, const char* component, const char* comp_name);
 void sans_expr_table_free (struct sans_expr_table* t);
 double sans_expr_Idsdw (struct sans_expr_table* t, double k, Coords khat, Coords e1, Coords e2);
 double sans_expr_node (struct sans_expr_table* t, int ilam, int it, int ip);
 double sans_expr_Idsdw_at (struct sans_expr_table* t, int ilam, double kx, double ky, double kz);
 double sans_expr_sigma_s (struct sans_expr_table* t, double kx, double ky, double kz);
+void sans_expr_random_direction (double* dx, double* dy, double* dz, double* solid_angle, double kx, double ky, double kz, double q_limit, double u1,
+                                 double u2);
 
 #endif
