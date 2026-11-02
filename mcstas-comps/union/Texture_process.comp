@@ -61,6 +61,8 @@ SHARE
   #define TEXTURE_PROCESS_DECL
 
   #define nSamplingPoints 120
+  #define nPoleCt 201
+  #define nPolePhi 601
   #define maxIterReject 3000
   #define tolTexture 1.0e-6
 
@@ -86,6 +88,9 @@ SHARE
     int* nplm;
     double** x;
     double** Plm;
+    // axes of the pole density tables, uniform in cos(theta) and phi
+    double* ctAxis;
+    double* phiAxis;
   };
 
   struct hkl_data_texture {
@@ -95,16 +100,14 @@ SHARE
     double G, Gct, Gphi;  // polar coordinates of G [Gct=cos(theta)]
     // to interpolate the total cross section
     int lmax;
-    int *nctk_l, *nphik_l;
-    double **ctk_l, **phik_l, ***Upsilon_l;
+    t_Table* Upsilon_l;
     // To obtain cross sections
     int numV;
     int *lv, *mv;
     double *RV, *phiV;
     // to sample kprime
     // precomputed Q distribution
-    int nctq, nphiq;
-    double *ctq, *phiq, **probQ;
+    t_Table probQ;
     // number of negative cross sections from the truncated series
     double numNegativeXS;
     // computed cross sections
@@ -148,7 +151,7 @@ SHARE
   // sampling
   int sampleKprime_hkl (double* kf, double* ki, struct hkl_data_texture* L, struct legendre* lgdr);
   double poleSeries (double ct, double phi, int lsel, struct hkl_data_texture* L, struct legendre* lgdr);
-  void fillPoleTable (int nct, int nphi, double** ctp, double** phip, double*** tablep, int lsel, struct hkl_data_texture* L, struct legendre* lgdr);
+  void fillPoleTable (t_Table* table, int lsel, struct hkl_data_texture* L, struct legendre* lgdr);
   // Input - Output
   int read_hkl_data_texture (char* SC_file, struct hkl_info_struct_texture* info);
   void readFourierCoef (char* filename, struct fourier_coef* c);
@@ -157,7 +160,7 @@ SHARE
   // auxiliary
   int SX_list_compare_texture (void const* a, void const* b);
   double interp (double x, int n, double* xp, double* yp);
-  double interp2D (double x, double y, int nx, int ny, double* xp, double* yp, double** fp);
+  double interp2D (double x, double y, struct legendre* lgdr, t_Table* table);
   // free texture memory
   int free_texture (struct hkl_info_struct_texture* hkl_info);
   int free_hkl_data_texture (struct hkl_data_texture* list);
@@ -269,6 +272,23 @@ SHARE
       }
     }
 
+    lgdr->ctAxis = (double*)malloc (nPoleCt * sizeof (double));
+    lgdr->phiAxis = (double*)malloc (nPolePhi * sizeof (double));
+    if (!lgdr->ctAxis || !lgdr->phiAxis) {
+      fprintf (stderr, "Texture_process: Failed malloc() in initLegendre. Exit!\n");
+      exit (-1);
+    }
+    dx = 2.0 / (nPoleCt - 1);
+    for (j = 0; j < nPoleCt - 1; j++) {
+      lgdr->ctAxis[j] = -1.0 + j * dx;
+    }
+    lgdr->ctAxis[nPoleCt - 1] = 1.0;
+    dx = (2.0 * PI) / (nPolePhi - 1);
+    for (j = 0; j < nPolePhi - 1; j++) {
+      lgdr->phiAxis[j] = -PI + j * dx;
+    }
+    lgdr->phiAxis[nPolePhi - 1] = PI;
+
     return lgdr;
   }
 
@@ -294,7 +314,7 @@ SHARE
       // l-th legendre polynomial evaluated at x, Pl(x)
       id = (lgdr->index)[l][l];
       pl = interp (x, lgdr->nplm[id], lgdr->x[id], lgdr->Plm[id]);
-      Ul = interp2D (kct, kphi, (L->nctk_l)[l], (L->nphik_l)[l], (L->ctk_l)[l], (L->phik_l)[l], (L->Upsilon_l)[l]);
+      Ul = interp2D (kct, kphi, lgdr, L->Upsilon_l + l);
       XS += pl * Ul;
     }
 
@@ -315,18 +335,11 @@ SHARE
   int
   precomputeUpsilon_l (struct hkl_data_texture* L, struct legendre* lgdr) {
     int l;
-    int lmax = L->lmax;
 
-    L->nctk_l = (int*)malloc ((lmax + 1) * sizeof (int));
-    L->nphik_l = (int*)malloc ((lmax + 1) * sizeof (int));
-    L->ctk_l = (double**)malloc ((lmax + 1) * sizeof (double*));
-    L->phik_l = (double**)malloc ((lmax + 1) * sizeof (double*));
-    L->Upsilon_l = (double***)malloc ((lmax + 1) * sizeof (double**));
+    L->Upsilon_l = (t_Table*)malloc ((L->lmax + 1) * sizeof (t_Table));
 
-    for (l = 1; l <= lmax; l++) {
-      L->nctk_l[l] = 201;
-      L->nphik_l[l] = 601;
-      fillPoleTable (L->nctk_l[l], L->nphik_l[l], L->ctk_l + l, L->phik_l + l, L->Upsilon_l + l, l, L, lgdr);
+    for (l = 1; l <= L->lmax; l++) {
+      fillPoleTable (L->Upsilon_l + l, l, L, lgdr);
     }
 
     return 0;
@@ -519,7 +532,7 @@ SHARE
         ctq = uz0 + uzc * kfcp + uzs * kfsp;
         phiq = atan2 (uy0 + uyc * kfcp + uys * kfsp, ux0 + uxc * kfcp + uxs * kfsp);
         phipts[j] = phi;
-        probpts[j] = interp2D (ctq, phiq, L->nctq, L->nphiq, L->ctq, L->phiq, L->probQ);
+        probpts[j] = interp2D (ctq, phiq, lgdr, &L->probQ);
         if (probpts[j] > maxProb) {
           maxProb = probpts[j];
         }
@@ -594,35 +607,17 @@ SHARE
     return sum;
   }
 
-  // Allocates and fills a table of poleSeries on a uniform grid in cos(theta) and phi
+  // Allocates and fills a table of poleSeries on the axes of the pole density tables
   void
-  fillPoleTable (int nct, int nphi, double** ctp, double** phip, double*** tablep, int lsel, struct hkl_data_texture* L, struct legendre* lgdr) {
+  fillPoleTable (t_Table* table, int lsel, struct hkl_data_texture* L, struct legendre* lgdr) {
     int i, j;
-    double dct = 2.0 / (nct - 1);
-    double dphi = (2.0 * PI) / (nphi - 1);
-    double* ct = (double*)malloc (nct * sizeof (double));
-    double* phi = (double*)malloc (nphi * sizeof (double));
-    double** table = (double**)malloc (nct * sizeof (double*));
 
-    for (i = 0; i < nct - 1; i++) {
-      ct[i] = -1.0 + i * dct;
-    }
-    ct[nct - 1] = 1.0;
-    for (j = 0; j < nphi - 1; j++) {
-      phi[j] = -PI + j * dphi;
-    }
-    phi[nphi - 1] = PI;
-
-    for (i = 0; i < nct; i++) {
-      table[i] = (double*)malloc (nphi * sizeof (double));
-      for (j = 0; j < nphi; j++) {
-        table[i][j] = poleSeries (ct[i], phi[j], lsel, L, lgdr);
+    Table_Init (table, nPoleCt, nPolePhi);
+    for (i = 0; i < nPoleCt; i++) {
+      for (j = 0; j < nPolePhi; j++) {
+        table->data[i * nPolePhi + j] = poleSeries (lgdr->ctAxis[i], lgdr->phiAxis[j], lsel, L, lgdr);
       }
     }
-
-    *ctp = ct;
-    *phip = phi;
-    *tablep = table;
   }
 
   // end sampling
@@ -968,63 +963,41 @@ SHARE
     return yp[i1] + ((x - xp[i1]) / (xp[i2] - xp[i1])) * (yp[i2] - yp[i1]);
   }
 
+  // Bilinear interpolation in a pole density table
   double
-  interp2D (double x, double y, int nx, int ny, double* xp, double* yp, double** fp) {
+  interp2D (double x, double y, struct legendre* lgdr, t_Table* table) {
     int i, j;
-    double t, u, f1, f2, f3, f4;
+    double* xp = lgdr->ctAxis;
+    double* yp = lgdr->phiAxis;
+    double* f;
 
     i = (int)((x - xp[0]) / (xp[1] - xp[0]));
     j = (int)((y - yp[0]) / (yp[1] - yp[0]));
 
-    if (i < 0 || i >= nx - 1) {
-      if (i == nx - 1 && fabs (x - xp[i]) < 1.0e-6) {
+    if (i < 0 || i >= nPoleCt - 1) {
+      if (i == nPoleCt - 1 && fabs (x - xp[i]) < 1.0e-6) {
         i = i - 1;
       } else {
-        printf ("interp2D: bad i: %d, nx: %d x: %.16e y: %.16e\n", i, nx, x, y);
+        fprintf (stderr, "Texture_process: cos(theta) = %.16e outside the table. Exit!\n", x);
         exit (-1);
       }
     } else if (i > 0 && x < xp[i]) {
       i = i - 1;
     }
 
-    if (j < 0 || j >= ny - 1) {
-      if (j == ny - 1 && fabs (y - yp[j]) < 1.0e-6) {
+    if (j < 0 || j >= nPolePhi - 1) {
+      if (j == nPolePhi - 1 && fabs (y - yp[j]) < 1.0e-6) {
         j = j - 1;
       } else {
-        printf ("interp2D: bad j: %d, ny: %d x: %.16e y: %.16e\n", j, ny, x, y);
+        fprintf (stderr, "Texture_process: phi = %.16e outside the table. Exit!\n", y);
         exit (-1);
       }
     } else if (j > 0 && y < yp[j]) {
       j = j - 1;
     }
 
-    f1 = fp[i][j];
-    f2 = fp[i + 1][j];
-    f3 = fp[i + 1][j + 1];
-    f4 = fp[i][j + 1];
-
-    t = (x - xp[i]) / (xp[i + 1] - xp[i]);
-    u = (y - yp[j]) / (yp[j + 1] - yp[j]);
-
-    if (t < 0 || t > 1) {
-      printf ("interp2D: bad t: %.6e, u: %.6e x: %f y: %f i: %d nx: %d\n", t, u, x, y, i, nx);
-      printf ("%f %f %f\n", x, xp[i], xp[i + 1]);
-    }
-    if (u < 0 || u > 1) {
-      printf ("interp2D: bad u: %.6e, t: %.6e x: %f y: %f j: %d ny: %d\n", u, t, x, y, j, ny);
-      printf ("%f %f %f\n", y, yp[j], yp[j + 1]);
-      printf ("\n");
-      for (i = 0; i < nx; i++) {
-        printf ("%f\n", xp[i]);
-      }
-      printf ("\n");
-      for (j = 0; j < ny; j++) {
-        printf ("%f\n", yp[j]);
-      }
-      exit (-1);
-    }
-
-    return (1 - t) * (1 - u) * f1 + t * (1 - u) * f2 + t * u * f3 + (1 - t) * u * f4;
+    f = table->data + i * nPolePhi + j;
+    return Table_Interp2d (x, y, xp[i], yp[j], xp[i + 1], yp[j + 1], f[0], f[1], f[nPolePhi], f[nPolePhi + 1]);
   }
 
   ////////////////////////////////////////
@@ -1075,9 +1048,7 @@ SHARE
     // precompute the probability distribution of Q
     L = info->list;
     for (i = 0; i < info->num_hkl; i++) {
-      L[i].nctq = 201;
-      L[i].nphiq = 601;
-      fillPoleTable (L[i].nctq, L[i].nphiq, &L[i].ctq, &L[i].phiq, &L[i].probQ, -1, L + i, info->lgdr);
+      fillPoleTable (&L[i].probQ, -1, L + i, info->lgdr);
     }
 
     // precompute Upsilon_l
@@ -1142,13 +1113,15 @@ SHARE
       free ((lgdr->Plm)[i]);
     }
     free (lgdr->Plm);
+    free (lgdr->ctAxis);
+    free (lgdr->phiAxis);
 
     return 0;
   }
 
   int
   free_hkl_data_texture (struct hkl_data_texture* L) {
-    int i;
+    int l;
 
     if (L == NULL) {
       return 0;
@@ -1159,18 +1132,11 @@ SHARE
     free (L->RV);
     free (L->phiV);
 
-    if (L->ctq != NULL) {
-      free (L->ctq);
+    Table_Free (&L->probQ);
+    for (l = 1; l <= L->lmax; l++) {
+      Table_Free (L->Upsilon_l + l);
     }
-    if (L->phiq != NULL) {
-      free (L->phiq);
-    }
-    if (L->probQ != NULL) {
-      for (i = 0; i < L->nctq; i++) {
-        free ((L->probQ)[i]);
-      }
-      free (L->probQ);
-    }
+    free (L->Upsilon_l);
 
     return 0;
   }
