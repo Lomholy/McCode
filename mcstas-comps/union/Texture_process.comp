@@ -6,11 +6,11 @@
 * Component: Texture_process
 *
 * %I
-* Written by: Victor Laliena
-* Date: 2018-2019
-* Origin: University of Zaragoza
+* Written by: Victor Laliena, and expanded upon by Daniel Lomholt Christensen
+* Date: 2018-2019 and 2026-2027
+* Origin: University of Zaragoza and subsequently the University of Copenhagen, funded by the ACTNXT program
 *
-* Component for simulating textured powder in Union components
+* Component for simulating textured and strained mono-crystalline materials and polycrystalline materials in Union components
 *
 * %D
 *
