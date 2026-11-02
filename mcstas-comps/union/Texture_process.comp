@@ -35,7 +35,6 @@
 * crystal_fn:        [s]      Path to a file (.laz) containing crystallographic and physical information
 * fcoef_fn:          [s]      Path to a text file containing the Fourier coefficients of the ODF. It must have five columns: l m n Real(Clmn) Imag(Clmn)
 * lmax_user:         [1]      Cut-off for the Fourier series. If negative, the program uses all the coefficients provided in the file fcoef_fn
-* maxNeutronSaved:   [1]      Maximum number of neutron cross sections saved for reusing
 * barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files
 * order:             [1]      Limit scattering to this order
 * init:              [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
@@ -50,7 +49,7 @@ DEFINE COMPONENT Texture_process // Remember to change the name of process here
 
 SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, int lmax_user=-1,
             barns = 0, order = 0, interact_fraction = -1, packing_factor = 1,
-	        int maxNeutronSaved = 1, string init="")
+	        string init="")
 
 
 SHARE
@@ -65,19 +64,6 @@ SHARE
   #define nSamplingPoints 120
   #define maxIterReject 3000
   #define tolTexture 1.0e-6
-
-  struct saveCohMu {
-    double kix, kiy, kiz, cohMu, *XS;
-    int num_hkl_scatt;
-  };
-
-  struct save_hklScattProb {
-    double kix, kiy, kiz;
-    // Number of reflections hkl taken into account (below cut-off)
-    int num_hkl_scatt;
-    // cummulative probablity of scattering by i-th hkl plane
-    double* cumProb_hkl;
-  };
 
   struct saveScattProb {
     double kix, kiy, kiz;
@@ -126,9 +112,8 @@ SHARE
     double numNegativeXS;
     // computed cross sections
     double currXS;
-    // saved scattering parameters
-    int maxSaved, lastSaved;
-    struct saveScattProb* savedNeutrons;
+    // scattering parameters of the last neutron
+    struct saveScattProb saved;
   };
 
   struct hkl_info_struct_texture {
@@ -162,10 +147,8 @@ SHARE
     // saved info
     double cohMu; // last linear attenuation coefficient computed
 
-    // saved for reusing neutrons
-    int maxSaved, lastCohMuSaved, lastScattSaved;
-    struct saveCohMu* cohMuSaved;
-    struct save_hklScattProb* hkl_ScattProbSaved;
+    // wavevector of the last neutron
+    double last_kix, last_kiy, last_kiz;
   };
 
   // function declarations
@@ -175,7 +158,7 @@ SHARE
   double plgndr_mod (int l, int m, double x);
   struct legendre* initLegendre (int lmax);
   // intialization
-  int initData (char* coef_fn, char* crystal_fn, struct hkl_info_struct_texture* info, int maxSaved);
+  int initData (char* coef_fn, char* crystal_fn, struct hkl_info_struct_texture* info);
   // cross sections
   double total_hkl_XS_interp (double k, double kct, double kphi, struct hkl_data_texture* L, struct legendre* lgdr);
   int precomputeUpsilon_l (struct hkl_data_texture* L, struct legendre* lgdr);
@@ -450,7 +433,7 @@ SHARE
 
   int
   sampleKprime_hkl (double* kf, double* ki, struct hkl_data_texture* L, struct legendre* lgdr) {
-    int it, i, is, j;
+    int it, j;
     double xi, kdg;
     // modulus of ki and local orthonormal basis containing ki, (t1,t2,kih)
     double kim, kihx, kihy, kihz, t1x, t1y, t1z, t2x, t2y, t2z;
@@ -468,34 +451,13 @@ SHARE
     double ctq, phiq;
     // coefficientes to get the polar coordinates of q
     double ux0, uxc, uxs, uy0, uyc, uys, uz0, uzc, uzs;
-    // Legendre associated funtion and probability of phi
-    double p, plm, pimag;
+    // probability of phi
+    double p;
 
-    int lastSaved = L->lastSaved;
-    int maxSaved = L->maxSaved;
-    struct saveScattProb* sp = L->savedNeutrons;
-    struct saveScattProb* sp_save;
+    struct saveScattProb* sp_save = &L->saved;
 
-    is = -1;
-    for (i = lastSaved; i >= 0; i--) {
-      if (fabs (ki[0] - sp[i].kix) < 1.0e-90 && fabs (ki[1] - sp[i].kiy) < 1.0e-90 && fabs (ki[2] - sp[i].kiz) < 1.0e-90) {
-        is = i;
-        break;
-      }
-    }
-    if (is == -1) {
-      // continue the search
-      for (i = maxSaved - 1; i > lastSaved; i--) {
-        if (fabs (ki[0] - sp[i].kix) < 1.0e-90 && fabs (ki[1] - sp[i].kiy) < 1.0e-90 && fabs (ki[2] - sp[i].kiz) < 1.0e-90) {
-          is = i;
-          break;
-        }
-      }
-    }
-
-    if (is != -1) {
+    if (ki[0] == sp_save->kix && ki[1] == sp_save->kiy && ki[2] == sp_save->kiz) {
       // equal neutron found. reuse
-      sp_save = sp + is;
       kim = sp_save->kim;
       stheta = sp_save->stheta;
       ctheta = sp_save->ctheta;
@@ -512,8 +474,6 @@ SHARE
       maxProb = sp_save->maxProb;
       aa = sp_save->aa;
       bb = sp_save->bb;
-      // save scattering parameters
-      L->lastSaved = is;
     } else {
       // neutron different from previous. Compute prob. distribution, etc.
 
@@ -587,12 +547,6 @@ SHARE
       probpts[nSamplingPoints - 1] = probpts[0];
 
       // save scattering parameters
-      lastSaved++;
-      if (lastSaved >= maxSaved) {
-        lastSaved = 0;
-      }
-      L->lastSaved = lastSaved;
-      sp_save = sp + lastSaved;
       aa = sp_save->aa;
       bb = sp_save->bb;
       for (j = 0; j < nSamplingPoints - 1; j++) {
@@ -1334,8 +1288,8 @@ SHARE
   ////////////////////////////////////////
 
   int
-  initData (char* coef_fn, char* crystal_fn, struct hkl_info_struct_texture* info, int maxSaved) {
-    int i, j;
+  initData (char* coef_fn, char* crystal_fn, struct hkl_info_struct_texture* info) {
+    int i;
     struct fourier_coef* fc;
     struct hkl_data_texture* L;
 
@@ -1354,43 +1308,19 @@ SHARE
       return 1;
     }
 
-    // allocate memory for reusing neutrons
-    info->maxSaved = maxSaved;
-    info->cohMuSaved = (struct saveCohMu*)malloc (maxSaved * sizeof (struct saveCohMu));
-    for (j = 0; j < maxSaved; j++) {
-      (info->cohMuSaved)[j].kix = 0;
-      (info->cohMuSaved)[j].kiy = 0;
-      (info->cohMuSaved)[j].kiz = 0;
-      (info->cohMuSaved)[j].XS = (double*)malloc ((info->num_hkl) * sizeof (double));
-    }
-    info->lastCohMuSaved = 0;
-
-    info->hkl_ScattProbSaved = (struct save_hklScattProb*)malloc (maxSaved * sizeof (struct save_hklScattProb));
-    for (j = 0; j < maxSaved; j++) {
-      (info->hkl_ScattProbSaved)[j].kix = 0;
-      (info->hkl_ScattProbSaved)[j].kiy = 0;
-      (info->hkl_ScattProbSaved)[j].kiz = 0;
-      // allocate memory for saved cummulative probability for scattering by i-th hkl plane
-      (info->hkl_ScattProbSaved)[j].cumProb_hkl = (double*)malloc ((info->num_hkl) * sizeof (double));
-    }
-    info->lastScattSaved = 0;
+    info->last_kix = 0;
+    info->last_kiy = 0;
+    info->last_kiz = 0;
 
     L = info->list;
     for (i = 0; i < info->num_hkl; i++) {
       L[i].numNegativeXS = 0;
     }
-    // initialize reuse saved neutrons
     for (i = 0; i < info->num_hkl; i++) {
-      L[i].lastSaved = 0;
-      L[i].maxSaved = maxSaved;
-      L[i].savedNeutrons = (struct saveScattProb*)malloc (maxSaved * sizeof (struct saveScattProb));
-      for (j = 0; j < maxSaved; j++) {
-        (L[i].savedNeutrons)[j].kix = 0;
-        (L[i].savedNeutrons)[j].kiy = 0;
-        (L[i].savedNeutrons)[j].kiz = 0;
-      }
+      L[i].saved.kix = 0;
+      L[i].saved.kiy = 0;
+      L[i].saved.kiz = 0;
     }
-
 
     // V matrices for cross sections
     L = info->list;
@@ -1522,7 +1452,7 @@ SHARE
   // The input for this function and its order may not be changed, but the names may be updated.
   int
   Texture_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data, _class_particle* _particle) {
-    int i, is;
+    int i;
     // k_initial is a pointer to a simple vector with 3 doubles, k[0], k[1], k[2] (wavevector)
     double kix = k_initial[0];
     double kiy = k_initial[1];
@@ -1539,34 +1469,7 @@ SHARE
     // in case we use 'SPLIT' then consecutive neutrons can be identical when entering here and
     // we may skip the cross section computations
 
-    is = -1;
-    for (i = hkl_info->lastCohMuSaved; i >= 0; i--) {
-      if (fabs (kix - (hkl_info->cohMuSaved)[i].kix) < 1e-90 && fabs (kiy - (hkl_info->cohMuSaved)[i].kiy) < 1e-90
-          && fabs (kiz - (hkl_info->cohMuSaved)[i].kiz) < 1e-90) {
-        is = i;
-        break;
-      }
-    }
-    if (is == -1) {
-      for (i = hkl_info->maxSaved - 1; i > hkl_info->lastCohMuSaved; i--) {
-        if (fabs (kix - (hkl_info->cohMuSaved)[i].kix) < 1e-90 && fabs (kiy - (hkl_info->cohMuSaved)[i].kiy) < 1e-90
-            && fabs (kiz - (hkl_info->cohMuSaved)[i].kiz) < 1e-90) {
-          is = i;
-          break;
-        }
-      }
-    }
-
-    if (is != -1) {
-      // neutron found. reuse cross section
-      hkl_info->num_hkl_scatt = (hkl_info->cohMuSaved)[is].num_hkl_scatt;
-      hkl_info->cohMu = (hkl_info->cohMuSaved)[is].cohMu;
-      for (i = 0; i < hkl_info->num_hkl_scatt; i++) {
-        L[i].currXS = (hkl_info->cohMuSaved)[hkl_info->lastCohMuSaved].XS[i];
-      }
-      // save the neutron scattering parameters
-      hkl_info->lastCohMuSaved = is;
-    } else {
+    if (kix != hkl_info->last_kix || kiy != hkl_info->last_kiy || kiz != hkl_info->last_kiz) {
       //  polar coordinates of wavevector
       ki = sqrt (kix * kix + kiy * kiy + kiz * kiz);
       kict = kiz / ki;
@@ -1591,19 +1494,9 @@ SHARE
       // multiply by the appropriate factors to get the linear attenuation coefficient cohMu (in m^-1)
       hkl_info->cohMu = cohXS * (hkl_info->xs2mu) * pow ((2 * PI) / ki, 3) / (hkl_info->V0);
 
-      // save the neutron scattering parameters
-      hkl_info->lastCohMuSaved++;
-      if (hkl_info->lastCohMuSaved >= hkl_info->maxSaved) {
-        hkl_info->lastCohMuSaved = 0;
-      };
-      (hkl_info->cohMuSaved)[hkl_info->lastCohMuSaved].kix = kix;
-      (hkl_info->cohMuSaved)[hkl_info->lastCohMuSaved].kiy = kiy;
-      (hkl_info->cohMuSaved)[hkl_info->lastCohMuSaved].kiz = kiz;
-      (hkl_info->cohMuSaved)[hkl_info->lastCohMuSaved].num_hkl_scatt = hkl_info->num_hkl_scatt;
-      (hkl_info->cohMuSaved)[hkl_info->lastCohMuSaved].cohMu = hkl_info->cohMu;
-      for (i = 0; i < num_hkl_scatt; i++) {
-        (hkl_info->cohMuSaved)[hkl_info->lastCohMuSaved].XS[i] = L[i].currXS;
-      }
+      hkl_info->last_kix = kix;
+      hkl_info->last_kiy = kiy;
+      hkl_info->last_kiz = kiz;
     }
 
     *my = hkl_info->cohMu;
@@ -1615,8 +1508,8 @@ SHARE
   int
   Texture_physics_scattering (double* k_final, double* k_initial, double* weight, union data_transfer_union data_transfer, struct focus_data_struct* focus_data,
                               _class_particle* _particle) {
-    int i, is, j, num_hkl_scatt;
-    double r, sum, accum, *cumProb_hkl; /* Locals */
+    int i, j;
+    double r, sum, accum; /* Locals */
     double kf[3];                       /* Final wave vector (local) */
 
     struct hkl_info_struct_texture* hkl_info = data_transfer.pointer_to_a_Texture_physics_storage_struct->hkl_info_storage;
@@ -1633,65 +1526,18 @@ SHARE
       return 0; // Return 0 will use ABSORB in main component (as it is not allowed in a function)
     }
 
-    is = -1;
-    for (i = hkl_info->lastScattSaved; i >= 0; i--) {
-      if (fabs (k_initial[0] - (hkl_info->hkl_ScattProbSaved)[i].kix) < 1e-90 && fabs (k_initial[1] - (hkl_info->hkl_ScattProbSaved)[i].kiy) < 1e-90
-          && fabs (k_initial[2] - (hkl_info->hkl_ScattProbSaved)[i].kiz) < 1e-90) {
-        is = i;
-        break;
-      }
-    }
-    if (is == -1) {
-      for (i = hkl_info->maxSaved - 1; i > hkl_info->lastScattSaved; i--) {
-        if (fabs (k_initial[0] - (hkl_info->hkl_ScattProbSaved)[i].kix) < 1e-90 && fabs (k_initial[1] - (hkl_info->hkl_ScattProbSaved)[i].kiy) < 1e-90
-            && fabs (k_initial[2] - (hkl_info->hkl_ScattProbSaved)[i].kiz) < 1e-90) {
-          is = i;
-          break;
-        }
-      }
-    }
-
-    if (is != -1) {
-      num_hkl_scatt = (hkl_info->hkl_ScattProbSaved)[is].num_hkl_scatt;
-      cumProb_hkl = (hkl_info->hkl_ScattProbSaved)[is].cumProb_hkl;
-      // save neutron parameters
-      (hkl_info->lastScattSaved) = is;
-    } else {
-      // new neutron. Compute necessary things. select the hkl planes that scatter
-
-      num_hkl_scatt = hkl_info->num_hkl_scatt;
-
-      (hkl_info->lastScattSaved)++;
-      if (hkl_info->lastScattSaved >= hkl_info->maxSaved) {
-        hkl_info->lastScattSaved = 0;
-      }
-
-      (hkl_info->hkl_ScattProbSaved)[hkl_info->lastScattSaved].num_hkl_scatt = hkl_info->num_hkl_scatt;
-
-      (hkl_info->hkl_ScattProbSaved)[hkl_info->lastScattSaved].kix = k_initial[0];
-      (hkl_info->hkl_ScattProbSaved)[hkl_info->lastScattSaved].kiy = k_initial[1];
-      (hkl_info->hkl_ScattProbSaved)[hkl_info->lastScattSaved].kiz = k_initial[2];
-
-      cumProb_hkl = (hkl_info->hkl_ScattProbSaved)[hkl_info->lastScattSaved].cumProb_hkl;
-
-      sum = 0;
-      for (i = 0; i <= num_hkl_scatt; i++) {
-        // hkl_info->num_hkl_scatt implements Bragg cutoff
-        sum += L[i].currXS;
-      }
-      accum = 0;
-      for (i = 0; i <= num_hkl_scatt; i++) {
-        // hkl_info->num_hkl_scatt implements Bragg cutoff
-        accum += L[i].currXS / sum;
-        cumProb_hkl[i] = accum;
-      }
+    // hkl_info->num_hkl_scatt implements Bragg cutoff
+    sum = 0;
+    for (i = 0; i <= hkl_info->num_hkl_scatt; i++) {
+      sum += L[i].currXS;
     }
 
     j = -1;
     r = rand01 ();
-    for (i = 0; i <= num_hkl_scatt; i++) {
-      // hkl_info->num_hkl_scatt implements Bragg cutoff
-      if (r < cumProb_hkl[i]) {
+    accum = 0;
+    for (i = 0; i <= hkl_info->num_hkl_scatt; i++) {
+      accum += L[i].currXS / sum;
+      if (r < accum) {
         j = i;
         break;
       }
@@ -1760,7 +1606,7 @@ INITIALIZE
   hkl_info_texture.lmax = lmax_user;
 
   // initialize data
-  if (initData (fcoef_fn, crystal_fn, &hkl_info_texture, maxNeutronSaved)) {
+  if (initData (fcoef_fn, crystal_fn, &hkl_info_texture)) {
     printf ("Texture_process: %s: Error in initData: Aborting.\n", NAME_CURRENT_COMP);
     exit (-1);
   }
