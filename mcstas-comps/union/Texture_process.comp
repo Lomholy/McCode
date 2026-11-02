@@ -28,7 +28,9 @@
 * CIF and NCrystal inputs can give hundreds of reflections, and the tables use about 1 MB per l for
 * each reflection, so set lambda_min, or dcutoff in the NCrystal cfg-string, to what the instrument reaches.
 * An NCrystal material must have one crystalline phase and no orientation, as that is given by the
-* placement of the component. Each family of reflections is described by one of its members, so the
+* placement of the component. CIF files are converted with ncrystal_cif2ncmat, which needs the Python
+* modules gemmi and spglib and uses a Debye temperature of 300 K when it has no other atomic dynamics. Run
+* ncrystal_cif2ncmat directly and use the resulting NCMAT file to set this. Each family of reflections is described by one of its members, so the
 * ODF must have the crystal symmetry applied.
 *
 * Algorithm:
@@ -38,10 +40,10 @@
 * INPUT PARAMETERS:
 * packing_factor:    [1]      How dense is the material compared to optimal 0-1
 * interact_fraction: [1]      How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
-* crystal_fn:        [s]      Crystallographic information: a reflection file (LAZ, LAU), a file converted with cif2hkl (CIF, FullProf, ShelX), or an NCrystal cfg-string (containing ".ncmat" or "::")
+* crystal_fn:        [s]      Crystallographic information: a reflection file (LAZ, LAU), a CIF file, or an NCrystal cfg-string (containing ".ncmat" or "::")
 * fcoef_fn:          [s]      Path to a text file containing the Fourier coefficients of the ODF. It must have five columns: l m n Real(Clmn) Imag(Clmn)
 * lmax_user:         [1]      Cut-off for the Fourier series. If negative, the program uses all the coefficients provided in the file fcoef_fn
-* barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for files converted with cif2hkl and NCrystal cfg-strings
+* barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for CIF files and NCrystal cfg-strings
 * lambda_min:        [AA]     Reflections that only scatter below this wavelength are not used, which saves one table per l for each of them. 0 keeps all reflections
 * init:              [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
 *
@@ -524,95 +526,29 @@ SHARE
   //// Input - Output      //
   ///////////////////////////
 
-  #ifndef CIF2HKL
-  #define CIF2HKL
-  // hkl_filename = cif2hkl(file, options)
-  //   used to convert CIF/CFL/INS file into F2(hkl)
-  //   the CIF2HKL env var can point to a cif2hkl executable
-  //   else the McCode binary is attempted, then the system.
+  // Converts a CIF file to a temporary NCMAT file with ncrystal_cif2ncmat, and returns its name
   char*
-  cif2hkl (char* infile, char* options) {
-    char cmd[1024];
-    int ret = 0;
-    int found = 0;
-    char* OUTFILE;
-    char* inpath;
+  cif2ncmat_texture (char* infile) {
+    char cmd[3200];
+    char inpath[1024];
+    FILE* file = Open_File (infile, "r", inpath);
+    char* outfile = (char*)malloc (1024);
 
-    // get filename extension
-    const char* ext = strrchr (infile, '.');
-    if (!ext || ext == infile)
-      return infile;
-    else
-      ext++;
-
-    // return input when no extension or not a CIF/FullProf/ShelX file
-    if (strcasecmp (ext, "cif") && strcasecmp (ext, "pcr") && strcasecmp (ext, "cfl") && strcasecmp (ext, "shx") && strcasecmp (ext, "ins")
-        && strcasecmp (ext, "res"))
-      return infile;
-
-    OUTFILE = malloc (1024);
-    if (!OUTFILE) {
-      free (OUTFILE);
-      return infile;
+    if (!file || !outfile) {
+      fprintf (stderr, "Texture: Error: Could not open %s\n", infile);
+      return NULL;
     }
-    inpath = malloc (1024);
-    if (!inpath) {
-      free (OUTFILE);
-      free (inpath);
-      return infile;
-    }
-
-    // get input file path from read-table:Open_File
-    FILE* f_infile = Open_File (infile, "r", inpath);
-    if (!f_infile) {
-      free (OUTFILE);
-      free (inpath);
-      free (f_infile);
-      return infile;
-    }
-    fclose (f_infile);
-
-    strncpy (OUTFILE, tmpnam (NULL), 1024); // create an output temporary file name
-
-    // try in order the CIF2HKL env var, then the system cif2hkl, then the McCode one
-    if (!found && getenv ("CIF2HKL")) {
-      snprintf (cmd, 1024, "%s -o %s %s %s", getenv ("CIF2HKL"), OUTFILE, options, inpath);
-      ret = system (cmd);
-      if (ret != -1 && ret != 127)
-        found = 1;
-    }
-    if (!found) {
-      // try with cif2hkl command from the system PATH
-      snprintf (cmd, 1024, "%s -o %s %s %s", "cif2hkl", OUTFILE, options, inpath);
-      ret = system (cmd);
-      if (ret != -1 && ret != 127)
-        found = 1;
-    }
-    if (!found) {
-      // As a last resort, attempt with cif2hkl from $MCSTAS/bin
-      snprintf (cmd, 1024, "%s%c%s%c%s -o %s %s %s", getenv (FLAVOR_UPPER) ? getenv (FLAVOR_UPPER) : MCSTAS, MC_PATHSEP_C, "bin", MC_PATHSEP_C, "cif2hkl",
-                OUTFILE, options, inpath);
-      ret = system (cmd);
-    }
-    // ret = -1:  child process could not be created
-    // ret = 127: shell could not be executed in the child process
-    if (ret == -1 || ret == 127) {
-      free (OUTFILE);
-      return (NULL);
-    }
-
-    // test if the result file has been created
-    FILE* file = fopen (OUTFILE, "r");
-    if (!file) {
-      free (OUTFILE);
-      return (NULL);
-    }
-    MPI_MASTER (printf ("%s: INFO: Converting %s into F2(HKL) list %s\n", __FILE__, infile, OUTFILE); printf ("%s\n", cmd););
-    fflush (NULL);
     fclose (file);
-    return (OUTFILE);
-  } // cif2hkl
-  #endif
+
+    snprintf (outfile, 1024, "%s.ncmat", tmpnam (NULL));
+    snprintf (cmd, sizeof (cmd), "ncrystal_cif2ncmat \"%s\" --output \"%s\" --quiet", inpath, outfile);
+    if (system (cmd) != 0) {
+      fprintf (stderr, "Texture: Error: Could not convert %s with ncrystal_cif2ncmat, which needs the Python modules gemmi and spglib\n", infile);
+      free (outfile);
+      return NULL;
+    }
+    return outfile;
+  }
 
   // Fills a table with one row per family of reflections of an NCrystal material
   // and the header of a reflection file: h, k, l, |F|^2 in barns, multiplicity
@@ -696,7 +632,7 @@ SHARE
     double bsx, bsy, bsz;                // Second reciprocal lattice axis
     double csx, csy, csz;                // Third reciprocal lattice axis
     char* filename;
-    long nread;
+    char* ext;
 
     if (!SC_file || !strlen (SC_file) || !strcmp (SC_file, "NULL") || !strcmp (SC_file, "0")) {
       info->num_hkl = 0;
@@ -705,25 +641,22 @@ SHARE
 
     // Read the table
 
-    if (strstr (SC_file, ".ncmat") != NULL || strstr (SC_file, "::") != NULL) {
+    ext = strrchr (SC_file, '.');
+    if (ext && !strcasecmp (ext, ".cif")) {
+      filename = cif2ncmat_texture (SC_file);
+      if (!filename) {
+        return 0;
+      }
+      read_hkl_table_ncrystal_texture (filename, &sTable);
+      remove (filename);
+      free (filename);
+      info->flag_barns = 1;
+    } else if (strstr (SC_file, ".ncmat") != NULL || strstr (SC_file, "::") != NULL) {
       read_hkl_table_ncrystal_texture (SC_file, &sTable);
       info->flag_barns = 1;
-    } else {
-      filename = cif2hkl (SC_file, "--mode NUC");
-      if (!filename) {
-        fprintf (stderr, "Texture: Error: Could not convert %s with cif2hkl\n", SC_file);
-        return 0;
-      }
-      nread = Table_Read (&sTable, filename, 1); // read 1st block data from filename into sTable
-      if (nread <= 0) {
-        fprintf (stderr, "Texture: Error: Could not read reflections from %s\n", SC_file);
-        return 0;
-      }
-      if (filename != SC_file) {
-        info->flag_barns = 1;
-        remove (filename);
-        free (filename);
-      }
+    } else if (Table_Read (&sTable, SC_file, 1) <= 0) { // read 1st block data from SC_file into sTable
+      fprintf (stderr, "Texture: Error: Could not read reflections from %s\n", SC_file);
+      return 0;
     }
     if (sTable.columns < 5) {
       fprintf (stderr, "Texture: Error: The number of columns in %s should be", SC_file);

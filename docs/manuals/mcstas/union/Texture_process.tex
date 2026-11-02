@@ -23,10 +23,10 @@ Parameters in \textbf{boldface} are required; the others are optional.
 \textbf{Name} & \textbf{Unit} & \textbf{Description} & \textbf{Default} \\
 \midrule
 \endhead
-crystal\_fn & s & Crystallographic information: a reflection file (LAZ, LAU), a file converted with cif2hkl (CIF, FullProf, ShelX), or an NCrystal cfg-string (containing ".ncmat" or "::") & 0 \\
+crystal\_fn & s & Crystallographic information: a reflection file (LAZ, LAU), a CIF file, or an NCrystal cfg-string (containing ".ncmat" or "::") & 0 \\
 fcoef\_fn & s & Path to a text file containing the Fourier coefficients of the ODF. It must have five columns: l m n Real(Clmn) Imag(Clmn) & 0 \\
 lmax\_user & 1 & Cut-off for the Fourier series. If negative, the program uses all the coefficients provided in the file fcoef\_fn & -1 \\
-barns & 1 & Flag to indicate if |F|\textasciicircum{}2 from 'crystal\_fn' is in barns or fm\textasciicircum{}2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for files converted with cif2hkl and NCrystal cfg-strings & 0 \\
+barns & 1 & Flag to indicate if |F|\textasciicircum{}2 from 'crystal\_fn' is in barns or fm\textasciicircum{}2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for CIF files and NCrystal cfg-strings & 0 \\
 lambda\_min & AA & Reflections that only scatter below this wavelength are not used, which saves one table per l for each of them. 0 keeps all reflections & 0 \\
 interact\_fraction & 1 & How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1) & -1 \\
 packing\_factor & 1 & How dense is the material compared to optimal 0-1 & 1 \\
