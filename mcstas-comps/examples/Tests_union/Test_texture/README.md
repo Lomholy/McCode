@@ -31,6 +31,7 @@ Parameters in **boldface** are required; the others are optional.
 | crystal_fn | string | Crystal structure file name | "Zr.laz" |
 | fcoef_fn | string | Fourier component file name | "coef_Four_L2.txt" |
 | barns |  | Flag to indicate if \|F 2\| from "crystal_fn" is in barns or fm2 (barns = 1 for laz, barns = 0 for lau type files). | 1 |
+| lambda_min | AA | Reflections that only scatter below this wavelength are not used | 0 |
 
 ## Links
 
