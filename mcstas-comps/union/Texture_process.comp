@@ -67,12 +67,10 @@ SHARE
   #define tolTexture 1.0e-6
 
   struct saveScattProb {
-    double kix, kiy, kiz;
-    double kihx, kihy, kihz;
-    double t1x, t1y, t1z;
-    double t2x, t2y, t2z;
-    double kim, stheta, ctheta;
-    double dphi;
+    Coords ki, kih;       // wavevector and its unit vector
+    Coords t1, t2;        // complete kih to a right-handed basis (t1,t2,kih)
+    double kim;           // modulus of ki
+    double stheta, ctheta; // sine and cosine of the scattering angle
     double maxProb;
     double aa[nSamplingPoints], bb[nSamplingPoints];
   };
@@ -426,145 +424,56 @@ SHARE
   /// Sampling                  //
   ////////////////////////////////
 
+  // Unit vector of kf at azimuth phi around kih
+  Coords
+  kfDirection (struct saveScattProb* sp, double phi) {
+    Coords cone = coords_add (coords_scale (sp->t1, sp->stheta * cos (phi)), coords_scale (sp->t2, sp->stheta * sin (phi)));
+    return coords_add (cone, coords_scale (sp->kih, sp->ctheta));
+  }
+
   int
   sampleKprime_hkl (double* kf, double* ki, struct hkl_data_texture* L, struct legendre* lgdr) {
     int it, j;
-    double xi, kdg;
-    // modulus of ki and local orthonormal basis containing ki, (t1,t2,kih)
-    double kim, kihx, kihy, kihz, t1x, t1y, t1z, t2x, t2y, t2z;
-    double stheta, ctheta;
-    // pre computed probalility
+    double kdg, phi, p;
     double phipts[nSamplingPoints], probpts[nSamplingPoints];
-    double *aa, *bb;
-    double dphi;
-    double maxProb;
-    // cartesian coordinates of kf in the (t1,t2,kih) basis
-    double kft1, kft2, kfkih;
-    // azimuthal angle (phi) of kf in the (t1,t2,kih) basis and sine and cosine
-    double phi, kfsp, kfcp;
-    // polar coordinates (in the sample coordinate system) of the unitay scattering vector qh
-    double ctq, phiq;
-    // coefficientes to get the polar coordinates of q
-    double ux0, uxc, uxs, uy0, uyc, uys, uz0, uzc, uzs;
-    // probability of phi
-    double p;
+    double dphi = (2.0 * PI) / (nSamplingPoints - 1);
+    Coords q, kf_out;
+    struct saveScattProb* sp = &L->saved;
 
-    struct saveScattProb* sp_save = &L->saved;
-
-    if (ki[0] == sp_save->kix && ki[1] == sp_save->kiy && ki[2] == sp_save->kiz) {
-      // equal neutron found. reuse
-      kim = sp_save->kim;
-      stheta = sp_save->stheta;
-      ctheta = sp_save->ctheta;
-      kihx = sp_save->kihx;
-      kihy = sp_save->kihy;
-      kihz = sp_save->kihz;
-      t1x = sp_save->t1x;
-      t1y = sp_save->t1y;
-      t1z = sp_save->t1z;
-      t2x = sp_save->t2x;
-      t2y = sp_save->t2y;
-      t2z = sp_save->t2z;
-      dphi = sp_save->dphi;
-      maxProb = sp_save->maxProb;
-      aa = sp_save->aa;
-      bb = sp_save->bb;
-    } else {
+    if (ki[0] != sp->ki.x || ki[1] != sp->ki.y || ki[2] != sp->ki.z) {
       // neutron different from previous. Compute prob. distribution, etc.
+      sp->ki = coords_set (ki[0], ki[1], ki[2]);
+      sp->kim = coords_len (sp->ki);
+      sp->kih = coords_scale (sp->ki, 1.0 / sp->kim);
 
-      // modulus of ki
-      kim = sqrt (ki[0] * ki[0] + ki[1] * ki[1] + ki[2] * ki[2]);
-      // unitary vector in the direction of ki
-      kihx = ki[0] / kim;
-      kihy = ki[1] / kim;
-      kihz = ki[2] / kim;
+      kdg = sp->kim / (L->G);
 
-      kdg = kim / (L->G);
-
-      ctheta = 1.0 - 0.5 / (kdg * kdg);
-      stheta = sqrt (1.0 - ctheta * ctheta);
+      sp->ctheta = 1.0 - 0.5 / (kdg * kdg);
+      sp->stheta = sqrt (1.0 - sp->ctheta * sp->ctheta);
 
       // right-handed orthonormal triad
-      if (1.0 - kihz * kihz > 1.0e-3) {
-        xi = sqrt (1.0 - kihz * kihz);
-        t1x = kihy / xi;
-        t1y = -kihx / xi;
-        t1z = 0;
-        t2x = kihz * kihx / xi;
-        t2y = kihz * kihy / xi;
-        t2z = -xi;
-      } else if (1.0 - kihx * kihx > 1.0e-3) {
-        xi = sqrt (1.0 - kihx * kihx);
-        t1x = 0;
-        t1y = kihz / xi;
-        t1z = -kihy / xi;
-        t2x = -xi;
-        t2y = kihx * kihy / xi;
-        t2z = kihx * kihz / xi;
-      } else {
-        xi = sqrt (1.0 - kihy * kihy);
-        t1x = -kihz / xi;
-        t1y = 0;
-        t1z = kihx / xi;
-        t2x = kihy * kihx / xi;
-        t2y = -xi;
-        t2z = kihy * kihz / xi;
-      }
+      normal_vec (&sp->t1.x, &sp->t1.y, &sp->t1.z, sp->kih.x, sp->kih.y, sp->kih.z);
+      sp->t2 = coords_xp (sp->kih, sp->t1);
 
-      // coefficients to obtain the polar coordinates of qh = kih - kfh
-      ux0 = (1.0 - ctheta) * kihx;
-      uxc = -stheta * t1x;
-      uxs = -stheta * t2x;
-      uy0 = (1.0 - ctheta) * kihy;
-      uyc = -stheta * t1y;
-      uys = -stheta * t2y;
-      uz0 = kdg * (1.0 - ctheta) * kihz;
-      uzc = -kdg * stheta * t1z;
-      uzs = -kdg * stheta * t2z;
-
-      maxProb = -1.0e99;
-      dphi = (2.0 * PI) / (nSamplingPoints - 1);
+      sp->maxProb = -1.0e99;
       phi = -PI;
-      // precompute probability distribution
+      // precompute probability distribution of the unitary scattering vector qh = kdg * (kih - kfh)
       for (j = 0; j < nSamplingPoints - 1; j++) {
-        kfsp = sin (phi);
-        kfcp = cos (phi);
-        ctq = uz0 + uzc * kfcp + uzs * kfsp;
-        phiq = atan2 (uy0 + uyc * kfcp + uys * kfsp, ux0 + uxc * kfcp + uxs * kfsp);
+        q = coords_scale (coords_sub (sp->kih, kfDirection (sp, phi)), kdg);
         phipts[j] = phi;
-        probpts[j] = interp2D (ctq, phiq, lgdr, &L->probQ);
-        if (probpts[j] > maxProb) {
-          maxProb = probpts[j];
+        probpts[j] = interp2D (q.z, atan2 (q.y, q.x), lgdr, &L->probQ);
+        if (probpts[j] > sp->maxProb) {
+          sp->maxProb = probpts[j];
         }
         phi += dphi;
       }
       phipts[nSamplingPoints - 1] = PI;
       probpts[nSamplingPoints - 1] = probpts[0];
 
-      // save scattering parameters
-      aa = sp_save->aa;
-      bb = sp_save->bb;
       for (j = 0; j < nSamplingPoints - 1; j++) {
-        aa[j] = probpts[j] - phipts[j] * (probpts[j + 1] - probpts[j]) / dphi;
-        bb[j] = (probpts[j + 1] - probpts[j]) / dphi;
+        sp->aa[j] = probpts[j] - phipts[j] * (probpts[j + 1] - probpts[j]) / dphi;
+        sp->bb[j] = (probpts[j + 1] - probpts[j]) / dphi;
       }
-      sp_save->kix = ki[0];
-      sp_save->kiy = ki[1];
-      sp_save->kiz = ki[2];
-      sp_save->kim = kim;
-      sp_save->stheta = stheta;
-      sp_save->ctheta = ctheta;
-      sp_save->kihx = kihx;
-      sp_save->kihy = kihy;
-      sp_save->kihz = kihz;
-      sp_save->t1x = t1x;
-      sp_save->t1y = t1y;
-      sp_save->t1z = t1z;
-      sp_save->t2x = t2x;
-      sp_save->t2y = t2y;
-      sp_save->t2z = t2z;
-      sp_save->dphi = dphi;
-      sp_save->maxProb = maxProb;
     }
 
     // rejection method
@@ -572,18 +481,15 @@ SHARE
       phi = -PI + 2 * PI * rand01 ();
       // interpolate
       j = (int)((PI + phi) / dphi);
-      p = aa[j] + phi * bb[j];
-      if (p / maxProb > rand01 ()) {
-        kft1 = stheta * cos (phi);
-        kft2 = stheta * sin (phi);
-        kfkih = ctheta;
-        kf[0] = kim * (kft1 * t1x + kft2 * t2x + kfkih * kihx);
-        kf[1] = kim * (kft1 * t1y + kft2 * t2y + kfkih * kihy);
-        kf[2] = kim * (kft1 * t1z + kft2 * t2z + kfkih * kihz);
+      p = sp->aa[j] + phi * sp->bb[j];
+      if (p / sp->maxProb > rand01 ()) {
+        kf_out = coords_scale (kfDirection (sp, phi), sp->kim);
+        kf[0] = kf_out.x;
+        kf[1] = kf_out.y;
+        kf[2] = kf_out.z;
         return 0;
       }
     }
-
 
     fprintf (stderr, "Texture_process: too many iterations sampling hkl %d %d %d. Exit!\n", L->h, L->k, L->l);
     exit (-1);
@@ -1034,9 +940,7 @@ SHARE
       L[i].numNegativeXS = 0;
     }
     for (i = 0; i < info->num_hkl; i++) {
-      L[i].saved.kix = 0;
-      L[i].saved.kiy = 0;
-      L[i].saved.kiz = 0;
+      L[i].saved.ki = coords_set (0, 0, 0);
     }
 
     // V matrices for cross sections
