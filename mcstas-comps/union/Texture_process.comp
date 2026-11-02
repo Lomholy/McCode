@@ -82,10 +82,7 @@ SHARE
 
   struct legendre {
     int lmax;
-    int** index;
-    int* nplm;
-    double** x;
-    double** Plm;
+    t_Table* Plm; // per l: plgndr_mod on a uniform grid in x, with one column per m
     // axes of the pole density tables, uniform in cos(theta) and phi
     double* ctAxis;
     double* phiAxis;
@@ -145,7 +142,7 @@ SHARE
   // cross sections
   double total_hkl_XS_interp (double k, double kct, double kphi, struct hkl_data_texture* L, struct legendre* lgdr);
   int precomputeUpsilon_l (struct hkl_data_texture* L, struct legendre* lgdr);
-  int computeV (struct fourier_coef* fc, struct legendre* lgdr, struct hkl_data_texture* L);
+  int computeV (struct fourier_coef* fc, struct hkl_data_texture* L);
   // sampling
   int sampleKprime_hkl (double* kf, double* ki, struct hkl_data_texture* L, struct legendre* lgdr);
   double poleSeries (double ct, double phi, int lsel, struct hkl_data_texture* L, struct legendre* lgdr);
@@ -157,7 +154,7 @@ SHARE
   void freeFourierCoef (struct fourier_coef* c);
   // auxiliary
   int SX_list_compare_texture (void const* a, void const* b);
-  double interp (double x, int n, double* xp, double* yp);
+  double plmValue (int l, int m, double x, struct legendre* lgdr);
   double interp2D (double x, double y, struct legendre* lgdr, t_Table* table);
   // free texture memory
   int free_texture (struct hkl_info_struct_texture* hkl_info);
@@ -228,11 +225,9 @@ SHARE
 
   struct legendre*
   initLegendre (int lmax) {
-    int i, j, k, l, m, ma, nlm;
-    double x, dx, plm, norm;
+    int j, l, m, nx;
+    double x, dx;
     struct legendre* lgdr;
-
-    nlm = (lmax + 1) * (lmax + 1);
 
     lgdr = (struct legendre*)malloc (sizeof (struct legendre));
     if (!lgdr) {
@@ -240,33 +235,20 @@ SHARE
       exit (-1);
     }
     lgdr->lmax = lmax;
-    lgdr->index = (int**)malloc ((lmax + 1) * sizeof (int*));
-    lgdr->nplm = (int*)malloc (nlm * sizeof (int));
-    lgdr->x = (double**)malloc (nlm * sizeof (double*));
-    lgdr->Plm = (double**)malloc (nlm * sizeof (double*));
-    if (!lgdr->index || !lgdr->nplm || !lgdr->x || !lgdr->Plm) {
+    lgdr->Plm = (t_Table*)malloc ((lmax + 1) * sizeof (t_Table));
+    if (!lgdr->Plm) {
       fprintf (stderr, "Texture_process: Failed malloc() in initLegendre. Exit!\n");
       exit (-1);
     }
-    i = -1;
     for (l = 0; l <= lmax; l++) {
-      lgdr->index[l] = (int*)malloc ((2 * l + 1) * sizeof (int));
-      for (m = -l; m <= l; m++) {
-        i++;
-        (lgdr->index)[l][l + m] = i;
-        (lgdr->nplm)[i] = 100 * (l + 1);
-        (lgdr->x)[i] = (double*)malloc (((lgdr->nplm)[i]) * sizeof (double));
-        (lgdr->Plm)[i] = (double*)malloc (((lgdr->nplm)[i]) * sizeof (double));
-        dx = 2.0 / ((lgdr->nplm)[i] - 1);
-        for (j = 0; j < (lgdr->nplm)[i] - 1; j++) {
-          x = -1.0 + j * dx;
-          (lgdr->x)[i][j] = x;
-          (lgdr->Plm)[i][j] = plgndr_mod (l, m, x);
+      nx = 100 * (l + 1);
+      dx = 2.0 / (nx - 1);
+      Table_Init (lgdr->Plm + l, nx, 2 * l + 1);
+      for (j = 0; j < nx; j++) {
+        x = (j < nx - 1 ? -1.0 + j * dx : 1.0);
+        for (m = -l; m <= l; m++) {
+          lgdr->Plm[l].data[j * (2 * l + 1) + l + m] = plgndr_mod (l, m, x);
         }
-        j = (lgdr->nplm)[i] - 1;
-        x = 1.0;
-        (lgdr->x)[i][j] = x;
-        (lgdr->Plm)[i][j] = plgndr_mod (l, m, x);
       }
     }
 
@@ -298,7 +280,7 @@ SHARE
 
   double
   total_hkl_XS_interp (double k, double kct, double kphi, struct hkl_data_texture* L, struct legendre* lgdr) {
-    int l, id;
+    int l;
     double x = (L->G) / (2 * k);
     double XS, pl, Ul;
 
@@ -310,8 +292,7 @@ SHARE
     XS = 1.0;
     for (l = 1; l <= L->lmax; l++) {
       // l-th legendre polynomial evaluated at x, Pl(x)
-      id = (lgdr->index)[l][l];
-      pl = interp (x, lgdr->nplm[id], lgdr->x[id], lgdr->Plm[id]);
+      pl = plmValue (l, 0, x, lgdr);
       Ul = interp2D (kct, kphi, lgdr, L->Upsilon_l + l);
       XS += pl * Ul;
     }
@@ -344,7 +325,7 @@ SHARE
   }
 
   int
-  computeV (struct fourier_coef* fc, struct legendre* lgdr, struct hkl_data_texture* L) {
+  computeV (struct fourier_coef* fc, struct hkl_data_texture* L) {
     int i, l, m, n, numV;
     double Gct, Gphi, cnp, snp, pln, vr, vi;
     double **R, **Phi;
@@ -498,14 +479,13 @@ SHARE
   // Pole density series at (ct, phi): the terms of order lsel, or all terms when lsel < 0
   double
   poleSeries (double ct, double phi, int lsel, struct hkl_data_texture* L, struct legendre* lgdr) {
-    int i, id;
+    int i;
     double plm;
     double sum = 0;
 
     for (i = 0; i < L->numV; i++) {
       if (lsel < 0 || L->lv[i] == lsel) {
-        id = (lgdr->index)[L->lv[i]][L->lv[i] + L->mv[i]];
-        plm = interp (ct, (lgdr->nplm)[id], (lgdr->x)[id], (lgdr->Plm)[id]);
+        plm = plmValue (L->lv[i], L->mv[i], ct, lgdr);
         sum += L->RV[i] * plm * cos (L->phiV[i] - L->mv[i] * phi);
       }
     }
@@ -836,37 +816,21 @@ SHARE
     }
   } // SX_list_compare
 
+  // Linear interpolation of plgndr_mod in the table of order l
   double
-  interp (double x, int n, double* xp, double* yp) {
-    int i, i1, i2;
-    if (x < xp[0] || x > xp[n - 1]) {
-      printf ("interp: x ouside range\n");
-      printf ("x[0] = %.16e\n", xp[0]);
-      printf ("   x = %.16e\n", x);
-      printf ("x[n-1] = %.16e\n", xp[n - 1]);
-      printf ("Exiting...\n");
-      exit (-1);
+  plmValue (int l, int m, double x, struct legendre* lgdr) {
+    t_Table* table = lgdr->Plm + l;
+    long nx = table->rows;
+    long ncol = table->columns;
+    double dx = 2.0 / (nx - 1);
+    long j;
+
+    x = fmin (1.0, fmax (-1.0, x));
+    j = (long)((x + 1.0) / dx);
+    if (j > nx - 2) {
+      j = nx - 2;
     }
-    i1 = 0;
-    i2 = n - 1;
-    while (i2 - i1 > 1) {
-      i = (i1 + i2) / 2;
-      if (xp[i] <= x) {
-        i1 = i;
-      } else {
-        i2 = i;
-      }
-    }
-    if (i2 - i1 != 1) {
-      printf ("interp: i2-i1 > 1\n");
-      printf ("i1: %d i2: %d\n", i1, i2);
-      printf ("x[0] = %.16e\n", xp[0]);
-      printf ("   x = %.16e\n", x);
-      printf ("x[1] = %.16e\n", xp[1]);
-      printf ("Exiting...\n");
-      exit (-1);
-    }
-    return yp[i1] + ((x - xp[i1]) / (xp[i2] - xp[i1])) * (yp[i2] - yp[i1]);
+    return Table_Interp1d (x, -1.0 + j * dx, table->data[j * ncol + l + m], -1.0 + (j + 1) * dx, table->data[(j + 1) * ncol + l + m]);
   }
 
   // Bilinear interpolation in a pole density table
@@ -946,7 +910,7 @@ SHARE
     // V matrices for cross sections
     L = info->list;
     for (i = 0; i < info->num_hkl; i++) {
-      computeV (fc, info->lgdr, L + i);
+      computeV (fc, L + i);
     }
 
     // precompute the probability distribution of Q
@@ -994,27 +958,14 @@ SHARE
 
   int
   free_legendre (struct legendre* lgdr) {
-    int l, lmax, i, npt;
+    int l;
 
     if (lgdr == NULL) {
       return 0;
     }
 
-    lmax = lgdr->lmax;
-    npt = (lmax + 1) * (lmax + 1);
-
-    for (l = 0; l <= lmax; l++) {
-      free ((lgdr->index)[l]);
-    }
-    free (lgdr->index);
-
-    free (lgdr->nplm);
-    for (i = 0; i < npt; i++) {
-      free ((lgdr->x)[i]);
-    }
-    free (lgdr->x);
-    for (i = 0; i < npt; i++) {
-      free ((lgdr->Plm)[i]);
+    for (l = 0; l <= lgdr->lmax; l++) {
+      Table_Free (lgdr->Plm + l);
     }
     free (lgdr->Plm);
     free (lgdr->ctAxis);
