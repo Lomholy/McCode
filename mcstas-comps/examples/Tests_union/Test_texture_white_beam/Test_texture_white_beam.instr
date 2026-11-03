@@ -1,0 +1,134 @@
+/*******************************************************************************
+*         McStas instrument definition URL=http://www.mcstas.org
+*
+* Instrument: Test_texture_white_beam
+*
+* %Identification
+* Written by: Daniel Lomholt Christensen
+* Date: 03/11/2026
+* Origin: Niels Bohr Institute @ UCPH
+* %INSTRUMENT_SITE: Tests_union
+*
+* White beam diffraction from a textured aluminium sphere with Texture_process
+*
+* %Description
+* A 1 x 1 cm^2 Source_simple with a flat wavelength spectrum from 1 to 10 AA, a
+* 1 x 1 cm^2 slit 2.5 cm before the sample, and the sample 100 m from the source.
+* The sample is an aluminium sphere of radius 5 mm in a Union_sphere, with
+* Texture_process reading Al_sg225.ncmat from the NCrystal data library.
+*
+* Two spherical Monitor_nD of radius 1 m around the sample count the rays scattered
+* at least once:
+*   sphere_det: longitude and latitude of the scattered ray, over the whole sphere
+*   tth_lambda: scattering angle 2theta against wavelength. Each reflection hkl is
+*               the curve lambda = 2 d_hkl sin(theta).
+*
+* With a fixed sample and a white beam, each direction on the detector sees the pole
+* Q = k_f - k_i, which is independent of the wavelength, and the wavelength selects the
+* reflection. The detector thus covers the hemisphere of poles facing the source.
+*
+* The default coef_uniform.txt is the uniform ODF, so the sample is an untextured
+* powder. Give the Fourier coefficients of a texture, e.g. from MTEX, in fcoef_fn.
+* The ODF must have the cubic crystal symmetry applied.
+*
+* Bragg scattering attenuates the beam by about 10 % across the sphere, so the
+* Union_sphere sets p_interact = 0.5.
+*
+* %Test: Detector: sphere_det_I=1.28578e-05
+*
+* %Parameters
+* fcoef_fn:   [str]  Fourier coefficients of the ODF, see Texture_process
+* lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
+* lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
+*
+* %Link
+*
+* %End
+*******************************************************************************/
+DEFINE INSTRUMENT Test_texture_white_beam(string fcoef_fn="coef_uniform.txt", int lmax_user=-1, lambda_min=1)
+
+DECLARE
+%{
+  double sample_r;
+  double det_r;
+  int scattered;
+%}
+
+USERVARS
+%{
+  double tth;
+%}
+
+INITIALIZE
+%{
+  sample_r = 0.005;
+  det_r = 1;
+%}
+
+TRACE
+
+COMPONENT Origin = Progress_bar()
+  AT (0,0,0) ABSOLUTE
+EXTEND %{
+  scattered = 0;
+%}
+
+COMPONENT source = Source_simple(
+    yheight = 0.01,
+    xwidth = 0.01,
+    dist = 99.975,
+    focus_xw = 0.01,
+    focus_yh = 0.01,
+    lambda0 = 5.5,
+    dlambda = 4.5,
+    flux = 1e4
+) AT (0, 0, 0) RELATIVE Origin
+
+COMPONENT slit = Slit(
+    xwidth = 0.01,
+    yheight = 0.01
+) AT (0, 0, 99.975) RELATIVE source
+
+COMPONENT arm_sample = Arm(
+) AT (0, 0, 0.025) RELATIVE slit
+
+COMPONENT texture = Texture_process(
+    crystal_fn = "Al_sg225.ncmat", fcoef_fn = fcoef_fn, lmax_user = lmax_user, lambda_min = lambda_min
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT texture_mat = Union_make_material(
+    my_absorption = 0, process_string = "texture"
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT sample = Union_sphere(
+    radius = sample_r, priority = 1, material_string = "texture_mat", p_interact = 0.5
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT union_master = Union_master(
+) AT (0, 0, 0) RELATIVE arm_sample
+EXTEND %{
+  scattered = number_of_scattering_events;
+  tth = RAD2DEG * acos (vz / sqrt (vx * vx + vy * vy + vz * vz));
+%}
+
+// =================== Detectors
+
+COMPONENT sphere_det = Monitor_nD(
+    xwidth = 2 * det_r,
+    options = "sphere theta limits=[-180 180] bins=360 phi limits=[-90 90] bins=180",
+    filename = "sphere_det",
+    restore_neutron = 1
+) WHEN (scattered >= 1)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT tth_lambda = Monitor_nD(
+    xwidth = 2 * det_r,
+    options = "sphere user1 limits=[0 180] bins=360 lambda limits=[1 10] bins=450",
+    user1 = "tth",
+    username1 = "2theta [deg]",
+    filename = "tth_lambda",
+    restore_neutron = 1
+) WHEN (scattered >= 1)
+AT (0, 0, 0) RELATIVE arm_sample
+
+END
