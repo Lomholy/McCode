@@ -35,6 +35,8 @@
 *
 * Algorithm:
 * Described elsewhere, see e.g. <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>
+* The calculations are detailed in V. Laliena, M. A. Vicente-Alvarez and J. Campo,
+* J. Appl. Cryst. 53, 512-529 (2020), <a href="https://doi.org/10.1107/S1600576720002290">https://doi.org/10.1107/S1600576720002290</a>
 *
 * %P
 * INPUT PARAMETERS:
@@ -49,6 +51,8 @@
 *
 * %L
 * See <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>
+* V. Laliena, M. A. Vicente-Alvarez and J. Campo, "Monte Carlo simulation of neutron scattering by a textured polycrystal",
+* J. Appl. Cryst. 53, 512-529 (2020), <a href="https://doi.org/10.1107/S1600576720002290">https://doi.org/10.1107/S1600576720002290</a>
 *
 * %E
 ******************************************************************************/
