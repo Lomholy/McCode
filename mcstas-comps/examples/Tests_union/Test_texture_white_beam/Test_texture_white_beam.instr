@@ -23,13 +23,14 @@
 * Q = k_f - k_i, which is independent of the wavelength, and the wavelength selects the
 * reflection. The detector thus covers the hemisphere of poles facing the source.
 *
-* The default coef_uniform.txt is the uniform ODF, so the sample is an untextured
-* powder. Give the Fourier coefficients of a texture, e.g. from MTEX, in fcoef_fn.
-* The ODF must have the cubic crystal symmetry applied.
+* The default texture, Al_mtexdata_alu_ODF.txt in the McStas data folder, is the ODF of
+* the polycrystalline aluminium EBSD map of MTEX (mtexdata alu), with cubic crystal
+* symmetry, a Gaussian kernel of 12 deg and lmax = 12. Its (111) pole density lies
+* between 0.32 and 2.70. lmax_user = 0 gives the untextured powder.
 *
 * Union_sphere sets p_interact = 0.9.
 *
-* %Test: Detector: sphere_det_I=1.28578e-05
+* %Test: Detector: sphere_det_I=1.28132e-05
 *
 * %Parameters
 * fcoef_fn:   [str]  Fourier coefficients of the ODF, see Texture_process
@@ -40,7 +41,7 @@
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_white_beam(string fcoef_fn="coef_uniform.txt", int lmax_user=-1, lambda_min=1)
+DEFINE INSTRUMENT Test_texture_white_beam(string fcoef_fn="Al_mtexdata_alu_ODF.txt", int lmax_user=-1, lambda_min=1)
 
 DECLARE
 %{
