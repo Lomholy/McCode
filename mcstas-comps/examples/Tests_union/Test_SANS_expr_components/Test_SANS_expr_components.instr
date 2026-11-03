@@ -55,7 +55,8 @@
 *   sample_choice=10: Inhomogeneous_SANS_process
 *
 * 0, 1, 2 and 8 must agree, as must 3, 4 and 5, 6 and 7, and 9 and 10. The cylinders scatter only a
-* few percent of the rays, so the Union_cylinder geometries set p_interact = 0.5.
+* few percent of the rays, so the Union_cylinder geometries set p_interact = 0.5, as do
+* the boxes of 6 and 7.
 *
 * %Test: sample_choice=0 Detector: psd_det_I=2.80455e-09
 * %Test: sample_choice=1 Detector: psd_det_I=2.80455e-09
@@ -63,8 +64,8 @@
 * %Test: sample_choice=3 Detector: psd_det_I=1.39457e-09
 * %Test: sample_choice=4 Detector: psd_det_I=1.39449e-09
 * %Test: sample_choice=5 Detector: psd_det_I=1.23544e-09
-* %Test: sample_choice=6 Detector: psd_det_I=0.000396927
-* %Test: sample_choice=7 Detector: psd_det_I=0.000338272
+* %Test: sample_choice=6 Detector: psd_det_I=0.000346826
+* %Test: sample_choice=7 Detector: psd_det_I=0.000334125
 * %Test: sample_choice=8 Detector: psd_det_I=2.80466e-09
 * %Test: sample_choice=9 Detector: psd_det_I=0.000835319
 * %Test: sample_choice=10 Detector: psd_det_I=0.000834307
@@ -287,7 +288,7 @@ COMPONENT inh_mat = Union_make_material(
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT inh_box = Union_box(
-    xwidth = box_w, yheight = box_h, zdepth = box_d, priority = 3, material_string = "inh_mat",
+    xwidth = box_w, yheight = box_h, zdepth = box_d, priority = 3, material_string = "inh_mat", p_interact = 0.5,
     number_of_activations = union_inhomogeneous
 ) AT (0, 0, 0) RELATIVE arm_sample
 
@@ -297,7 +298,7 @@ COMPONENT box_proc_0 = SANS_process(
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_0 = Union_make_material(my_absorption = 0, process_string = "box_proc_0") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_0 = Union_box(
-    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 10, material_string = "box_mat_0",
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 10, material_string = "box_mat_0", p_interact = 0.5,
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*0, 0, 0) RELATIVE arm_sample
 
@@ -306,7 +307,7 @@ COMPONENT box_proc_1 = SANS_process(
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_1 = Union_make_material(my_absorption = 0, process_string = "box_proc_1") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_1 = Union_box(
-    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 11, material_string = "box_mat_1",
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 11, material_string = "box_mat_1", p_interact = 0.5,
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*1, 0, 0) RELATIVE arm_sample
 
@@ -315,7 +316,7 @@ COMPONENT box_proc_2 = SANS_process(
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_2 = Union_make_material(my_absorption = 0, process_string = "box_proc_2") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_2 = Union_box(
-    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 12, material_string = "box_mat_2",
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 12, material_string = "box_mat_2", p_interact = 0.5,
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*2, 0, 0) RELATIVE arm_sample
 
@@ -324,7 +325,7 @@ COMPONENT box_proc_3 = SANS_process(
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_3 = Union_make_material(my_absorption = 0, process_string = "box_proc_3") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_3 = Union_box(
-    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 13, material_string = "box_mat_3",
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 13, material_string = "box_mat_3", p_interact = 0.5,
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*3, 0, 0) RELATIVE arm_sample
 
@@ -333,7 +334,7 @@ COMPONENT box_proc_4 = SANS_process(
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_4 = Union_make_material(my_absorption = 0, process_string = "box_proc_4") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_4 = Union_box(
-    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 14, material_string = "box_mat_4",
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 14, material_string = "box_mat_4", p_interact = 0.5,
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*4, 0, 0) RELATIVE arm_sample
 
@@ -342,7 +343,7 @@ COMPONENT box_proc_5 = SANS_process(
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_5 = Union_make_material(my_absorption = 0, process_string = "box_proc_5") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_5 = Union_box(
-    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 15, material_string = "box_mat_5",
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 15, material_string = "box_mat_5", p_interact = 0.5,
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*5, 0, 0) RELATIVE arm_sample
 
@@ -351,7 +352,7 @@ COMPONENT box_proc_6 = SANS_process(
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_6 = Union_make_material(my_absorption = 0, process_string = "box_proc_6") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_6 = Union_box(
-    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 16, material_string = "box_mat_6",
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 16, material_string = "box_mat_6", p_interact = 0.5,
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*6, 0, 0) RELATIVE arm_sample
 
@@ -360,7 +361,7 @@ COMPONENT box_proc_7 = SANS_process(
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_7 = Union_make_material(my_absorption = 0, process_string = "box_proc_7") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_7 = Union_box(
-    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 17, material_string = "box_mat_7",
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 17, material_string = "box_mat_7", p_interact = 0.5,
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*7, 0, 0) RELATIVE arm_sample
 
@@ -369,7 +370,7 @@ COMPONENT box_proc_8 = SANS_process(
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_8 = Union_make_material(my_absorption = 0, process_string = "box_proc_8") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_8 = Union_box(
-    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 18, material_string = "box_mat_8",
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 18, material_string = "box_mat_8", p_interact = 0.5,
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*8, 0, 0) RELATIVE arm_sample
 
@@ -378,7 +379,7 @@ COMPONENT box_proc_9 = SANS_process(
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_9 = Union_make_material(my_absorption = 0, process_string = "box_proc_9") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_9 = Union_box(
-    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 19, material_string = "box_mat_9",
+    xwidth = box_w/10 - eps, yheight = box_h, zdepth = box_d, priority = 19, material_string = "box_mat_9", p_interact = 0.5,
     number_of_activations = union_boxes
 ) AT (-box_w/2 + box_w/20 + box_w/10*9, 0, 0) RELATIVE arm_sample
 
