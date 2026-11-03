@@ -42,12 +42,12 @@
 *
 * Union_sphere sets p_interact = 0.9.
 *
-* %Test: use_odf=0 Detector: sphere_det_I=1.28115e-05
-* %Test: use_odf=1 Detector: sphere_det_I=1.28132e-05
-* %Test: reflection=1 Detector: sphere_det_I=6.23859e-06
-* %Test: reflection=2 Detector: sphere_det_I=2.59e-06
-* %Test: reflection=3 Detector: sphere_det_I=1.12446e-06
-* %Test: source_lmin=4.05 source_lmax=4.68 Detector: q_logger_I=2.08215e-06
+* %Test: use_odf=0 Detector: sphere_det_I=1.28146e-05
+* %Test: use_odf=1 Detector: sphere_det_I=1.28146e-05
+* %Test: reflection=1 Detector: sphere_det_I=6.22617e-06
+* %Test: reflection=2 Detector: sphere_det_I=2.60198e-06
+* %Test: reflection=3 Detector: sphere_det_I=1.12426e-06
+* %Test: source_lmin=4.05 source_lmax=4.68 Detector: q_logger_I=2.34518e-06
 *
 * %Parameters
 * use_odf:    [1]    0: read the texture from Al_mtexdata_alu_EBSD.txt, 1: from Al_mtexdata_alu_ODF.txt

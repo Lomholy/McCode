@@ -33,6 +33,9 @@
 * ncrystal_cif2ncmat directly and use the resulting NCMAT file to set this. Each family of reflections is described by one of its members, so the
 * ODF must have the crystal symmetry applied.
 *
+* The crystal axes are those of the MTEX default: z || c, x || a*, y = z x x. The ODF and the
+* orientations of ebsd_fn rotate these axes into the axes of the component.
+*
 * An orientation list in ebsd_fn gives the ODF as the orientations smoothed by a Gaussian
 * kernel on the rotation group, with the Fourier coefficients kappa_l = exp(-l(l+1) sigma^2 / 2).
 * It is averaged over the proper rotations of the lattice given by crystal_fn, which is the
@@ -742,19 +745,16 @@ SHARE
       m_cc = m_bb;
     }
 
-    if (fabs (m_a - m_b) > 1e-6 || fabs (m_aa - 90) > 1e-6 || fabs (m_bb - 90) > 1e-6) {
-      fprintf (stderr, "Texture: WARNING: %s has a != b or alpha, beta != 90, which the crystal axes do not take into account\n", SC_file);
-    }
-
-    m_ax = m_a * sin (0.5 * m_cc * DEG2RAD);
-    m_ay = m_a * cos (0.5 * m_cc * DEG2RAD);
-    m_az = 0;
-    m_bx = -m_a * sin (0.5 * m_cc * DEG2RAD);
-    m_by = m_a * cos (0.5 * m_cc * DEG2RAD);
-    m_bz = 0;
+    // crystal axes as in MTEX: z || c and x || a*, so b lies in the yz plane
     m_cx = 0;
     m_cy = 0;
     m_cz = m_c;
+    m_bx = 0;
+    m_by = m_b * sin (m_aa * DEG2RAD);
+    m_bz = m_b * cos (m_aa * DEG2RAD);
+    m_az = m_a * cos (m_bb * DEG2RAD);
+    m_ay = m_a * (cos (m_cc * DEG2RAD) - cos (m_bb * DEG2RAD) * cos (m_aa * DEG2RAD)) / sin (m_aa * DEG2RAD);
+    m_ax = sqrt (m_a * m_a - m_ay * m_ay - m_az * m_az);
     info->lat[0] = coords_set (m_ax, m_ay, m_az);
     info->lat[1] = coords_set (m_bx, m_by, m_bz);
     info->lat[2] = coords_set (m_cx, m_cy, m_cz);
