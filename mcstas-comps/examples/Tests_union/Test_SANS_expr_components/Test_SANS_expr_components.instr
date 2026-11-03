@@ -86,6 +86,8 @@ DECLARE
   double box_w;
   double box_h;
   double box_d;
+  double box_R0;
+  double box_dRdx;
   double eps;
   double sphere_R;
   double sphere_phi;
@@ -123,6 +125,8 @@ INITIALIZE
   box_w = 0.03;
   box_h = 0.03;
   box_d = 0.001;
+  box_R0 = 150;
+  box_dRdx = 100 / box_w;
   eps = 1e-9;
 
   sphere_R = 100;
@@ -287,9 +291,9 @@ COMPONENT inh_box = Union_box(
     number_of_activations = union_inhomogeneous
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-// 10 boxes along x with the radius at their centres; neighbours are eps apart
+// 10 boxes along x with the radius R(x) = box_R0 + box_dRdx x at their centres; neighbours are eps apart
 COMPONENT box_proc_0 = SANS_process(
-    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 105, scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = box_R0 + box_dRdx * (-box_w/2 + box_w/20 + box_w/10*0), scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_0 = Union_make_material(my_absorption = 0, process_string = "box_proc_0") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_0 = Union_box(
@@ -298,7 +302,7 @@ COMPONENT box_0 = Union_box(
 ) AT (-box_w/2 + box_w/20 + box_w/10*0, 0, 0) RELATIVE arm_sample
 
 COMPONENT box_proc_1 = SANS_process(
-    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 115, scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = box_R0 + box_dRdx * (-box_w/2 + box_w/20 + box_w/10*1), scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_1 = Union_make_material(my_absorption = 0, process_string = "box_proc_1") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_1 = Union_box(
@@ -307,7 +311,7 @@ COMPONENT box_1 = Union_box(
 ) AT (-box_w/2 + box_w/20 + box_w/10*1, 0, 0) RELATIVE arm_sample
 
 COMPONENT box_proc_2 = SANS_process(
-    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 125, scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = box_R0 + box_dRdx * (-box_w/2 + box_w/20 + box_w/10*2), scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_2 = Union_make_material(my_absorption = 0, process_string = "box_proc_2") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_2 = Union_box(
@@ -316,7 +320,7 @@ COMPONENT box_2 = Union_box(
 ) AT (-box_w/2 + box_w/20 + box_w/10*2, 0, 0) RELATIVE arm_sample
 
 COMPONENT box_proc_3 = SANS_process(
-    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 135, scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = box_R0 + box_dRdx * (-box_w/2 + box_w/20 + box_w/10*3), scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_3 = Union_make_material(my_absorption = 0, process_string = "box_proc_3") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_3 = Union_box(
@@ -325,7 +329,7 @@ COMPONENT box_3 = Union_box(
 ) AT (-box_w/2 + box_w/20 + box_w/10*3, 0, 0) RELATIVE arm_sample
 
 COMPONENT box_proc_4 = SANS_process(
-    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 145, scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = box_R0 + box_dRdx * (-box_w/2 + box_w/20 + box_w/10*4), scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_4 = Union_make_material(my_absorption = 0, process_string = "box_proc_4") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_4 = Union_box(
@@ -334,7 +338,7 @@ COMPONENT box_4 = Union_box(
 ) AT (-box_w/2 + box_w/20 + box_w/10*4, 0, 0) RELATIVE arm_sample
 
 COMPONENT box_proc_5 = SANS_process(
-    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 155, scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = box_R0 + box_dRdx * (-box_w/2 + box_w/20 + box_w/10*5), scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_5 = Union_make_material(my_absorption = 0, process_string = "box_proc_5") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_5 = Union_box(
@@ -343,7 +347,7 @@ COMPONENT box_5 = Union_box(
 ) AT (-box_w/2 + box_w/20 + box_w/10*5, 0, 0) RELATIVE arm_sample
 
 COMPONENT box_proc_6 = SANS_process(
-    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 165, scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = box_R0 + box_dRdx * (-box_w/2 + box_w/20 + box_w/10*6), scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_6 = Union_make_material(my_absorption = 0, process_string = "box_proc_6") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_6 = Union_box(
@@ -352,7 +356,7 @@ COMPONENT box_6 = Union_box(
 ) AT (-box_w/2 + box_w/20 + box_w/10*6, 0, 0) RELATIVE arm_sample
 
 COMPONENT box_proc_7 = SANS_process(
-    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 175, scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = box_R0 + box_dRdx * (-box_w/2 + box_w/20 + box_w/10*7), scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_7 = Union_make_material(my_absorption = 0, process_string = "box_proc_7") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_7 = Union_box(
@@ -361,7 +365,7 @@ COMPONENT box_7 = Union_box(
 ) AT (-box_w/2 + box_w/20 + box_w/10*7, 0, 0) RELATIVE arm_sample
 
 COMPONENT box_proc_8 = SANS_process(
-    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 185, scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = box_R0 + box_dRdx * (-box_w/2 + box_w/20 + box_w/10*8), scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_8 = Union_make_material(my_absorption = 0, process_string = "box_proc_8") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_8 = Union_box(
@@ -370,7 +374,7 @@ COMPONENT box_8 = Union_box(
 ) AT (-box_w/2 + box_w/20 + box_w/10*8, 0, 0) RELATIVE arm_sample
 
 COMPONENT box_proc_9 = SANS_process(
-    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = 195, scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3", p1 = box_R0 + box_dRdx * (-box_w/2 + box_w/20 + box_w/10*9), scale = sphere_scale, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_mat_9 = Union_make_material(my_absorption = 0, process_string = "box_proc_9") AT (0, 0, 0) RELATIVE arm_sample
 COMPONENT box_9 = Union_box(
