@@ -40,11 +40,10 @@
 * scattering, which this weak contrast makes negligible. SasView_sphere has the same
 * model_scale and also leaves out the attenuation by scattering.
 *
-* Hard spheres with excess scattering length density 5 fm/AA^3, whose radius rises
-* linearly from 100 AA to 200 AA along x, in a 3 x 3 cm^2, 1 mm deep box:
-*   sample_choice=6: Inhomogeneous_SANS_process
-*   sample_choice=7: SANS_process in 10 boxes of 3 mm along x, with the radius at their
-*                    centres (105, 115, ..., 195 AA)
+* Hard spheres with excess scattering length density 5 fm/AA^3, whose radius steps from
+* 105 AA to 195 AA in 10 steps of 10 AA along x, in a 3 x 3 cm^2, 1 mm deep box:
+*   sample_choice=6: Inhomogeneous_SANS_process, with the radius a step function of x
+*   sample_choice=7: SANS_process in 10 boxes of 3 mm along x, with the same radii
 *
 * The Union geometries have no focusing, so SANS_process and Inhomogeneous_SANS_process
 * scatter within |q| <= q_max, which is 0.5 AA^-1 by default.
@@ -64,7 +63,7 @@
 * %Test: sample_choice=3 Detector: psd_det_I=1.39457e-09
 * %Test: sample_choice=4 Detector: psd_det_I=1.39449e-09
 * %Test: sample_choice=5 Detector: psd_det_I=1.23544e-09
-* %Test: sample_choice=6 Detector: psd_det_I=0.000395878
+* %Test: sample_choice=6 Detector: psd_det_I=0.000396927
 * %Test: sample_choice=7 Detector: psd_det_I=0.000338272
 * %Test: sample_choice=8 Detector: psd_det_I=2.80466e-09
 * %Test: sample_choice=9 Detector: psd_det_I=0.000835319
@@ -276,11 +275,11 @@ COMPONENT ellipsoid_cyl = Union_cylinder(
     number_of_activations = union_cyl_ellipsoid
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-// Radius 100 AA at x = -box_w/2 rising to 200 AA at x = box_w/2
+// Radius 105, 115, ..., 195 AA in 10 steps of box_w/10 along x, as in the 10 boxes
 COMPONENT inh_proc = Inhomogeneous_SANS_process(
-    form_factor = "3*(sin(q*(p1+p2*x))-q*(p1+p2*x)*cos(q*(p1+p2*x)))/(q*(p1+p2*x))^3",
-    scale_expr = "p3*(p1+p2*x)^3",
-    p1 = 150, p2 = 100 / 0.03, p3 = scale_per_R3, n_x = 21, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
+    form_factor = "3*(sin(q*(p1+p2*floor((x+p4)/p5)))-q*(p1+p2*floor((x+p4)/p5))*cos(q*(p1+p2*floor((x+p4)/p5))))/(q*(p1+p2*floor((x+p4)/p5)))^3",
+    scale_expr = "p3*(p1+p2*floor((x+p4)/p5))^3",
+    p1 = 105, p2 = 10, p3 = scale_per_R3, p4 = box_w/2, p5 = box_w/10, n_x = 301, n_phi = 20, n_dir_theta = 40, n_dir_phi = 40
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT inh_mat = Union_make_material(
