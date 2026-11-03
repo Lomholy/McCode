@@ -24,6 +24,12 @@
 * reflection at their own scattering angle 2 theta, within the relative tolerance
 * dlambda_rel. reflection = 0 records all scattered rays.
 *
+* q_logger, a Union_logger_2DQ, logs the scattering vector q = k_i - k_f of the rays
+* scattered once, projected on the plane perpendicular to the beam (q_x, q_y). For the
+* source band source_lmin = 4.05 AA to source_lmax = 4.68 AA, between 2 d(200) and
+* 2 d(111), only Al (111) can scatter, so q_logger shows the (111) pole figure in an
+* orthographic projection, out to 30 deg from the beam axis.
+*
 * With a fixed sample and a white beam, each direction on the detector sees the pole
 * Q = k_f - k_i, which is independent of the wavelength, and the wavelength selects the
 * reflection. The detector thus covers the hemisphere of poles facing the source.
@@ -41,6 +47,7 @@
 * %Test: reflection=1 Detector: sphere_det_I=6.23859e-06
 * %Test: reflection=2 Detector: sphere_det_I=2.59e-06
 * %Test: reflection=3 Detector: sphere_det_I=1.12446e-06
+* %Test: source_lmin=4.05 source_lmax=4.68 Detector: q_logger_I=2.08215e-06
 *
 * %Parameters
 * use_odf:    [1]    0: read the texture from Al_mtexdata_alu_EBSD.txt, 1: from Al_mtexdata_alu_ODF.txt
@@ -49,12 +56,14 @@
 * lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
 * reflection: [1]    0: all scattered rays, 1: (111), 2: (200), 3: (220)
 * dlambda_rel: [1]   Relative wavelength tolerance of the selected reflection
+* source_lmin: [AA]  Shortest wavelength of the source
+* source_lmax: [AA]  Longest wavelength of the source
 *
 * %Link
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_white_beam(int use_odf=0, ebsd_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01)
+DEFINE INSTRUMENT Test_texture_white_beam(int use_odf=0, ebsd_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01, source_lmin=1, source_lmax=10)
 
 DECLARE
 %{
@@ -94,8 +103,8 @@ COMPONENT source = Source_simple(
     dist = 99.975,
     focus_xw = 0.01,
     focus_yh = 0.01,
-    lambda0 = 5.5,
-    dlambda = 4.5,
+    lambda0 = (source_lmin + source_lmax) / 2,
+    dlambda = (source_lmax - source_lmin) / 2,
     flux = 1e4
 ) AT (0, 0, 0) RELATIVE Origin
 
@@ -117,6 +126,12 @@ COMPONENT texture_mat = Union_make_material(
 
 COMPONENT sample = Union_sphere(
     radius = sample_r, priority = 1, material_string = "texture_mat", p_interact = 0.9
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT q_logger = Union_logger_2DQ(
+    Q_direction_1 = "x", Q1_min = -3, Q1_max = 3, n1 = 120,
+    Q_direction_2 = "y", Q2_min = -3, Q2_max = 3, n2 = 120,
+    order_total = 1, filename = "q_logger"
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT union_master = Union_master(
