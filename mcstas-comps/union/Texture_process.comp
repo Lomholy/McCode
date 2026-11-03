@@ -33,6 +33,12 @@
 * ncrystal_cif2ncmat directly and use the resulting NCMAT file to set this. Each family of reflections is described by one of its members, so the
 * ODF must have the crystal symmetry applied.
 *
+* The ODF and the orientations of ebsd_fn rotate the Cartesian crystal axes into the axes of
+* the component. By default the crystal axes are those of NCrystal: x || a, b in the xy plane,
+* so z || c*. mtex_axes = 1 takes the default axes of MTEX instead: z || c, x || a*. Both are
+* the same for cubic, tetragonal and orthorhombic lattices; for hexagonal and trigonal
+* lattices they differ by 30 deg about c.
+*
 * An orientation list in ebsd_fn gives the ODF as the orientations smoothed by a Gaussian
 * kernel on the rotation group, with the Fourier coefficients kappa_l = exp(-l(l+1) sigma^2 / 2).
 * It is averaged over the proper rotations of the lattice given by crystal_fn, which is the
@@ -55,6 +61,7 @@
 * lmax_user:         [1]      Cut-off for the Fourier series. If negative, the program uses all the coefficients provided in the file fcoef_fn. Values above the lmax of fcoef_fn also use all of them. For ebsd_fn, a negative value gives the l where the kernel has fallen to 1e-3
 * barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for CIF files and NCrystal cfg-strings
 * lambda_min:        [AA]     Reflections that only scatter below this wavelength are not used, which saves one table per l for each of them. 0 keeps all reflections
+* mtex_axes:         [1]      0: crystal axes of NCrystal (x || a, b in the xy plane), 1: default crystal axes of MTEX (z || c, x || a*), for an ODF or orientations given in them
 * init:              [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
 *
 * %L
@@ -67,7 +74,7 @@
 
 DEFINE COMPONENT Texture_process // Remember to change the name of process here
 
-SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, string ebsd_fn=0, ebsd_sigma=10, int lmax_user=-1,
+SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, string ebsd_fn=0, ebsd_sigma=10, int lmax_user=-1, int mtex_axes=0,
             barns = 0, interact_fraction = -1, packing_factor = 1, lambda_min = 0,
 	        string init="")
 
@@ -146,6 +153,7 @@ SHARE
     double V0;             // Unit cell volume (AA**3)
     Coords lat[3];         // direct lattice vectors (AA) in the Cartesian crystal frame
     int flag_barns;        // |F|^2 is in barns whatever the barns parameter is
+    int use_mtex_axes;     // crystal axes z || c, x || a* instead of x || a, b in the xy plane
     double wavelength_min; // Reflections only scattering below this wavelength are not used
 
     // precomputed factors
@@ -742,19 +750,29 @@ SHARE
       m_cc = m_bb;
     }
 
-    if (fabs (m_a - m_b) > 1e-6 || fabs (m_aa - 90) > 1e-6 || fabs (m_bb - 90) > 1e-6) {
-      fprintf (stderr, "Texture: WARNING: %s has a != b or alpha, beta != 90, which the crystal axes do not take into account\n", SC_file);
+    if (info->use_mtex_axes) {
+      // MTEX default: z || c and x || a*, so b lies in the yz plane
+      m_cx = 0;
+      m_cy = 0;
+      m_cz = m_c;
+      m_bx = 0;
+      m_by = m_b * sin (m_aa * DEG2RAD);
+      m_bz = m_b * cos (m_aa * DEG2RAD);
+      m_az = m_a * cos (m_bb * DEG2RAD);
+      m_ay = m_a * (cos (m_cc * DEG2RAD) - cos (m_bb * DEG2RAD) * cos (m_aa * DEG2RAD)) / sin (m_aa * DEG2RAD);
+      m_ax = sqrt (m_a * m_a - m_ay * m_ay - m_az * m_az);
+    } else {
+      // NCrystal: x || a and b in the xy plane, so z || c*
+      m_ax = m_a;
+      m_ay = 0;
+      m_az = 0;
+      m_bx = m_b * cos (m_cc * DEG2RAD);
+      m_by = m_b * sin (m_cc * DEG2RAD);
+      m_bz = 0;
+      m_cx = m_c * cos (m_bb * DEG2RAD);
+      m_cy = m_c * (cos (m_aa * DEG2RAD) - cos (m_bb * DEG2RAD) * cos (m_cc * DEG2RAD)) / sin (m_cc * DEG2RAD);
+      m_cz = sqrt (m_c * m_c - m_cx * m_cx - m_cy * m_cy);
     }
-
-    m_ax = m_a * sin (0.5 * m_cc * DEG2RAD);
-    m_ay = m_a * cos (0.5 * m_cc * DEG2RAD);
-    m_az = 0;
-    m_bx = -m_a * sin (0.5 * m_cc * DEG2RAD);
-    m_by = m_a * cos (0.5 * m_cc * DEG2RAD);
-    m_bz = 0;
-    m_cx = 0;
-    m_cy = 0;
-    m_cz = m_c;
     info->lat[0] = coords_set (m_ax, m_ay, m_az);
     info->lat[1] = coords_set (m_bx, m_by, m_bz);
     info->lat[2] = coords_set (m_cx, m_cy, m_cz);
@@ -1638,6 +1656,7 @@ INITIALIZE
 
   hkl_info_texture.flag_barns = 0;
   hkl_info_texture.wavelength_min = lambda_min;
+  hkl_info_texture.use_mtex_axes = mtex_axes;
 
   // cut-off for l. If negative, take the cut-off provided in the Fourier coeff file
   hkl_info_texture.lmax = lmax_user;
