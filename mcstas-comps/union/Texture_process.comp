@@ -540,6 +540,10 @@ SHARE
 
     if (!file || !outfile) {
       fprintf (stderr, "Texture: Error: Could not open %s\n", infile);
+      if (file) {
+        fclose (file);
+      }
+      free (outfile);
       return NULL;
     }
     fclose (file);
@@ -665,10 +669,12 @@ SHARE
     if (sTable.columns < 5) {
       fprintf (stderr, "Texture: Error: The number of columns in %s should be", SC_file);
       fprintf (stderr, " at least %d for [h,k,l,F2,j]\n", 5);
+      Table_Free (&sTable);
       return (0);
     }
     if (!sTable.rows) {
       fprintf (stderr, "Texture: Error: The number of rows in %s should be at least %d\n", SC_file, 1);
+      Table_Free (&sTable);
       return 0;
     } else {
       size = sTable.rows;
@@ -706,6 +712,7 @@ SHARE
     // parameters consistency checks
     if (!m_a) {
       fprintf (stderr, "Texture: Error: Wrong a lattice vector definition\n");
+      Table_Free (&sTable);
       return (0);
     }
 
@@ -759,10 +766,12 @@ SHARE
 
     if (!column_order[0] || !column_order[1] || !column_order[2]) {
       fprintf (stderr, "Texture: Error: Wrong h,k,l column definition\n");
+      Table_Free (&sTable);
       return (0);
     }
     if (!column_order[3] && !column_order[4]) {
       fprintf (stderr, "Texture: Error: Wrong F,F2 column definition\n");
+      Table_Free (&sTable);
       return (0);
     }
 
@@ -892,11 +901,11 @@ SHARE
     int l, m;
     if (lmax >= 0) {
       c->lmax = lmax;
-      c->cr = (double***)malloc ((lmax + 1) * sizeof (double));
-      c->ci = (double***)malloc ((lmax + 1) * sizeof (double));
+      c->cr = (double***)malloc ((lmax + 1) * sizeof (double**));
+      c->ci = (double***)malloc ((lmax + 1) * sizeof (double**));
       for (l = 0; l <= lmax; l++) {
-        (c->cr)[l] = (double**)malloc ((2 * l + 1) * sizeof (double));
-        (c->ci)[l] = (double**)malloc ((2 * l + 1) * sizeof (double));
+        (c->cr)[l] = (double**)malloc ((2 * l + 1) * sizeof (double*));
+        (c->ci)[l] = (double**)malloc ((2 * l + 1) * sizeof (double*));
         for (m = -l; m <= l; m++) {
           (c->cr)[l][m + l] = (double*)malloc ((2 * l + 1) * sizeof (double));
           (c->ci)[l][m + l] = (double*)malloc ((2 * l + 1) * sizeof (double));
@@ -1057,6 +1066,7 @@ SHARE
 
     // free memory of fourier coefficient, not needed anymore
     freeFourierCoef (fc);
+    free (fc);
 
     return 0;
   }
