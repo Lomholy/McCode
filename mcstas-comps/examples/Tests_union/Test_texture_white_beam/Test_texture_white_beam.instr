@@ -117,7 +117,7 @@ COMPONENT arm_sample = Arm(
 ) AT (0, 0, 0.025) RELATIVE slit
 
 COMPONENT texture = Texture_process(
-    crystal_fn = "Al_sg225.ncmat", fcoef_fn = (use_odf ? "Al_mtexdata_alu_ODF.txt" : "0"), ebsd_fn = (use_odf ? "0" : "Al_mtexdata_alu_EBSD.txt"), ebsd_sigma = ebsd_sigma, lmax_user = lmax_user, lambda_min = lambda_min
+    crystal_fn = "Al_sg225.ncmat", fcoef_fn = (use_odf ? "Al_mtexdata_alu_ODF.txt" : "0"), ebsd_fn = (use_odf ? "0" : "Al_mtexdata_alu_EBSD.txt"), ebsd_sigma = ebsd_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = 1
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT texture_mat = Union_make_material(
