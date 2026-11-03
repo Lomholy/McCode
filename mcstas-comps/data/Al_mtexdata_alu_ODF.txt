@@ -1,5 +1,9 @@
 # Fourier coefficients of the ODF of the polycrystalline aluminium EBSD map of MTEX,
 # mtexdata alu: data/EBSD/polycrystalline_aluminum.txt of https://github.com/mtex-toolbox/mtex
+# The orientations originate from MTEX (GPL-2.0). If you use this file, please cite
+# F. Bachmann, R. Hielscher and H. Schaeben, "Texture Analysis with MTEX - Free and Open
+# Source Software Toolbox", Solid State Phenomena 160, 63-68 (2010),
+# https://doi.org/10.4028/www.scientific.net/SSP.160.63
 # 4255 indexed pixels, Bunge Euler angles (crystal to sample), crystal axes x||a, y||b, z||c,
 # averaged over the 24 rotations of the cubic group, with a Gaussian kernel of
 # kappa_l = exp(-l(l+1) sigma^2 / 2), sigma = 12 deg, cut at lmax = 12.
