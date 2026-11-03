@@ -1695,8 +1695,11 @@ TRACE
               inhomogeneous_sample_transmission_probability (current_p_physics, Volumes[current_volume], &real_transmission_probability, v_length);
             }
 
-            // Then check if we scatter.
-            if (p_interact_is_set (Volumes[current_volume])) {
+            // Then check if we scatter. A path too short to attenuate, where the segments of
+            // inhomogeneous volumes can have negative length, cannot scatter.
+            if (real_transmission_probability >= 1) {
+              scattering_event = 0;
+            } else if (p_interact_is_set (Volumes[current_volume])) {
               p_interact_check_scattering_event (Volumes[current_volume], _particle, &scattering_event, &p, real_transmission_probability);
             } else {
               // probability to scatter is the natural value
