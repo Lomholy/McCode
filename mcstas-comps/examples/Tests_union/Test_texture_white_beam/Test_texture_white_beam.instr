@@ -19,6 +19,11 @@
 *
 *  sphere_det: longitude and latitude of the scattered ray, over the whole sphere
 *
+* reflection = 1, 2 or 3 selects the Al reflection (111), (200) or (220): sphere_det then
+* only records rays scattered once, with the wavelength lambda = 2 d_hkl sin(theta) of that
+* reflection at their own scattering angle 2 theta, within the relative tolerance
+* dlambda_rel. reflection = 0 records all scattered rays.
+*
 * With a fixed sample and a white beam, each direction on the detector sees the pole
 * Q = k_f - k_i, which is independent of the wavelength, and the wavelength selects the
 * reflection. The detector thus covers the hemisphere of poles facing the source.
@@ -33,30 +38,46 @@
 *
 * %Test: use_odf=0 Detector: sphere_det_I=1.28115e-05
 * %Test: use_odf=1 Detector: sphere_det_I=1.28132e-05
+* %Test: reflection=1 Detector: sphere_det_I=6.23859e-06
+* %Test: reflection=2 Detector: sphere_det_I=2.59e-06
+* %Test: reflection=3 Detector: sphere_det_I=1.12446e-06
 *
 * %Parameters
 * use_odf:    [1]    0: read the texture from Al_mtexdata_alu_EBSD.txt, 1: from Al_mtexdata_alu_ODF.txt
 * ebsd_sigma: [deg]  Standard deviation of the Gaussian kernel for the EBSD file
 * lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
 * lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
+* reflection: [1]    0: all scattered rays, 1: (111), 2: (200), 3: (220)
+* dlambda_rel: [1]   Relative wavelength tolerance of the selected reflection
 *
 * %Link
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_white_beam(int use_odf=0, ebsd_sigma=12, int lmax_user=12, lambda_min=1)
+DEFINE INSTRUMENT Test_texture_white_beam(int use_odf=0, ebsd_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01)
 
 DECLARE
 %{
   double sample_r;
   double det_r;
+  double d_hkl;
+  double lambda_tol;
   int scattered;
+  int in_reflection;
 %}
 
 INITIALIZE
 %{
+  // lattice parameter of Al_sg225.ncmat
+  double a = 4.04958;
   sample_r = 0.005;
   det_r = 1;
+  if (reflection < 0 || reflection > 3) {
+    fprintf (stderr, "Unsupported instrument parameter value reflection=%d.\n", reflection);
+    exit (-1);
+  }
+  lambda_tol = dlambda_rel;
+  d_hkl = reflection == 1 ? a / sqrt (3) : reflection == 2 ? a / 2 : a / sqrt (8);
 %}
 
 TRACE
@@ -102,6 +123,10 @@ COMPONENT union_master = Union_master(
 ) AT (0, 0, 0) RELATIVE arm_sample
 EXTEND %{
   scattered = number_of_scattering_events;
+  // the beam is along z: lambda = 2 d sin(theta), with cos(2 theta) = vz / v
+  double speed = sqrt (vx * vx + vy * vy + vz * vz);
+  double sin_theta = sqrt (0.5 * (1 - vz / speed));
+  in_reflection = scattered == 1 && fabs (2 * PI / (V2K * speed) / (2 * d_hkl * sin_theta) - 1) < lambda_tol;
 %}
 
 // =================== Detectors
@@ -111,7 +136,7 @@ COMPONENT sphere_det = Monitor_nD(
     options = "sphere theta limits=[-180 180] bins=360 phi limits=[-90 90] bins=180",
     filename = "sphere_det",
     restore_neutron = 1
-) WHEN (scattered >= 1)
+) WHEN (reflection == 0 ? scattered >= 1 : in_reflection)
 AT (0, 0, 0) RELATIVE arm_sample
 
 END
