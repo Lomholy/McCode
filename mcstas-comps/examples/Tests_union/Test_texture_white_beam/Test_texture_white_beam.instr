@@ -26,17 +26,17 @@
 * The default texture is read directly from Al_mtexdata_alu_EBSD.txt in the McStas data
 * folder, the polycrystalline aluminium EBSD map of MTEX (mtexdata alu), smoothed by a
 * Gaussian kernel of ebsd_sigma = 12 deg and cut at lmax_user = 12.
-* Al_mtexdata_alu_ODF.txt holds the Fourier coefficients of the same map; use it with
-* fcoef_fn="Al_mtexdata_alu_ODF.txt" ebsd_fn=0. lmax_user = 0 gives the untextured powder.
+* use_odf=1 reads Al_mtexdata_alu_ODF.txt instead, the Fourier coefficients of the same map
+* computed beforehand. lmax_user = 0 gives the untextured powder.
 *
 * Union_sphere sets p_interact = 0.9.
 *
-* %Test: Detector: sphere_det_I=1.28115e-05
+* %Test: use_odf=0 Detector: sphere_det_I=1.28115e-05
+* %Test: use_odf=1 Detector: sphere_det_I=1.28132e-05
 *
 * %Parameters
-* ebsd_fn:    [str]  Orientation list of the texture, see Texture_process
-* ebsd_sigma: [deg]  Standard deviation of the Gaussian kernel for ebsd_fn
-* fcoef_fn:   [str]  Fourier coefficients of the ODF, used when ebsd_fn=0, see Texture_process
+* use_odf:    [1]    0: read the texture from Al_mtexdata_alu_EBSD.txt, 1: from Al_mtexdata_alu_ODF.txt
+* ebsd_sigma: [deg]  Standard deviation of the Gaussian kernel for the EBSD file
 * lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
 * lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
 *
@@ -44,7 +44,7 @@
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_white_beam(string ebsd_fn="Al_mtexdata_alu_EBSD.txt", ebsd_sigma=12, string fcoef_fn="0", int lmax_user=12, lambda_min=1)
+DEFINE INSTRUMENT Test_texture_white_beam(int use_odf=0, ebsd_sigma=12, int lmax_user=12, lambda_min=1)
 
 DECLARE
 %{
@@ -87,7 +87,7 @@ COMPONENT arm_sample = Arm(
 ) AT (0, 0, 0.025) RELATIVE slit
 
 COMPONENT texture = Texture_process(
-    crystal_fn = "Al_sg225.ncmat", fcoef_fn = fcoef_fn, ebsd_fn = ebsd_fn, ebsd_sigma = ebsd_sigma, lmax_user = lmax_user, lambda_min = lambda_min
+    crystal_fn = "Al_sg225.ncmat", fcoef_fn = (use_odf ? "Al_mtexdata_alu_ODF.txt" : "0"), ebsd_fn = (use_odf ? "0" : "Al_mtexdata_alu_EBSD.txt"), ebsd_sigma = ebsd_sigma, lmax_user = lmax_user, lambda_min = lambda_min
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT texture_mat = Union_make_material(
