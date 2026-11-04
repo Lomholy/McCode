@@ -57,7 +57,7 @@
 * crystal_fn:        [s]      Crystallographic information: a reflection file (LAZ, LAU), a CIF file, or an NCrystal cfg-string (containing ".ncmat" or "::")
 * fcoef_fn:          [s]      Path to a text file containing the Fourier coefficients of the ODF. It must have five columns: l m n Real(Clmn) Imag(Clmn)
 * ebsd_fn:           [s]      Path to an orientation list, e.g. from EBSD, used instead of fcoef_fn. Each row starts with the Bunge Euler angles phi1 Phi phi2 in radians of one orientation, crystal to sample; further columns are ignored
-* ebsd_sigma:        [deg]    Standard deviation of the Gaussian kernel that smooths the orientations of ebsd_fn
+* orientation_sigma: [deg]    Standard deviation of the Gaussian kernel that smooths the orientations of ebsd_fn
 * lmax_user:         [1]      Cut-off for the Fourier series. If negative, the program uses all the coefficients provided in the file fcoef_fn. Values above the lmax of fcoef_fn also use all of them. For ebsd_fn, a negative value gives the l where the kernel has fallen to 1e-3
 * barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for CIF files and NCrystal cfg-strings
 * lambda_min:        [AA]     Reflections that only scatter below this wavelength are not used, which saves one table per l for each of them. 0 keeps all reflections
@@ -74,7 +74,7 @@
 
 DEFINE COMPONENT Texture_process // Remember to change the name of process here
 
-SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, string ebsd_fn=0, ebsd_sigma=10, int lmax_user=-1, int mtex_axes=0,
+SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, string ebsd_fn=0, orientation_sigma=10, int lmax_user=-1, int mtex_axes=0,
             barns = 0, interact_fraction = -1, packing_factor = 1, lambda_min = 0,
 	        string init="")
 
@@ -173,7 +173,7 @@ SHARE
   double plgndr_mod (int l, int m, double x);
   struct legendre* initLegendre (int lmax);
   // intialization
-  int initData (char* coef_fn, char* ebsd_fn, double ebsd_sigma, char* crystal_fn, struct hkl_info_struct_texture* info);
+  int initData (char* coef_fn, char* ebsd_fn, double orientation_sigma, char* crystal_fn, struct hkl_info_struct_texture* info);
   // cross sections
   double total_hkl_XS_interp (double k, double kct, double kphi, struct hkl_data_texture* L, struct legendre* lgdr);
   int precomputeUpsilon_l (struct hkl_data_texture* L, struct legendre* lgdr);
@@ -1130,25 +1130,24 @@ SHARE
     return n;
   }
 
-  // Fourier coefficients of the ODF of the orientations in filename, smoothed by the kernel exp (-l (l + 1) sigma^2 / 2)
+  // Fourier coefficients of the ODF of the nOrient orientations in orient, smoothed by the kernel exp (-l (l + 1) sigma^2 / 2)
   // and averaged over the lattice rotations: C_lmn = (2l + 1) kappa_l [avg_i W (g_i) avg_s W (s)]_mn, where
-  // N_lm (g h) = sum_n W (g)_mn N_ln (h)
-  // ponytail: cost grows as rows * lmax^4; bin the orientations first if large maps are too slow
+  // N_lm (g h) = sum_n W (g)_mn N_ln (h). source names the origin of the orientations in the summary line.
+  // ponytail: cost grows as nOrient * lmax^4; bin the orientations first if large maps are too slow
   void
-  ebsdFourierCoef (char* filename, double sigma, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
-    t_Table table;
+  orientationFourierCoef (Rotation* orient, long nOrient, double sigma, char* source, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
     int lmax, nx, nphi, nq, nh, nsym, i, j, l, m, n, k, d;
     double *xg, *wg, *wq, *sqn, *p, *Fr, *Fi, *Gr, *Gi, *Sr, *Si, *Ar, *Ai, *Br, *Bi;
-    double norm, kappa, st, c1, s1, c2, s2, C, S, sr, si;
+    double norm, kappa, st, sr, si;
     Coords* hq;
     Rotation g, ops[48];
 
-    if (Table_Read (&table, filename, 1) <= 0 || table.rows < 1 || table.columns < 3) {
-      fprintf (stderr, "Texture_process: %s must have rows starting with the Euler angles phi1 Phi phi2. Exit!\n", filename);
+    if (nOrient < 1) {
+      fprintf (stderr, "Texture_process: %s gives no orientations. Exit!\n", source);
       exit (-1);
     }
     if (sigma <= 0) {
-      fprintf (stderr, "Texture_process: ebsd_sigma must be positive. Exit!\n");
+      fprintf (stderr, "Texture_process: orientation_sigma must be positive. Exit!\n");
       exit (-1);
     }
 
@@ -1175,7 +1174,7 @@ SHARE
     Br = (double*)malloc ((2 * lmax + 1) * (2 * lmax + 1) * sizeof (double));
     Bi = (double*)malloc ((2 * lmax + 1) * (2 * lmax + 1) * sizeof (double));
     if (!xg || !wg || !wq || !hq || !sqn || !p || !Fr || !Fi || !Gr || !Gi || !Sr || !Si || !Ar || !Ai || !Br || !Bi) {
-      fprintf (stderr, "Texture_process: Failed malloc() in ebsdFourierCoef. Exit!\n");
+      fprintf (stderr, "Texture_process: Failed malloc() in orientationFourierCoef. Exit!\n");
       exit (-1);
     }
 
@@ -1198,24 +1197,8 @@ SHARE
       }
     }
 
-    // orientations g = Rz (phi1) Rx (Phi) Rz (phi2)
-    for (i = 0; i < table.rows; i++) {
-      c1 = cos (Table_Index (table, i, 0));
-      s1 = sin (Table_Index (table, i, 0));
-      C = cos (Table_Index (table, i, 1));
-      S = sin (Table_Index (table, i, 1));
-      c2 = cos (Table_Index (table, i, 2));
-      s2 = sin (Table_Index (table, i, 2));
-      g[0][0] = c1 * c2 - s1 * s2 * C;
-      g[0][1] = -c1 * s2 - s1 * c2 * C;
-      g[0][2] = s1 * S;
-      g[1][0] = s1 * c2 + c1 * s2 * C;
-      g[1][1] = -s1 * s2 + c1 * c2 * C;
-      g[1][2] = -c1 * S;
-      g[2][0] = s2 * S;
-      g[2][1] = c2 * S;
-      g[2][2] = C;
-      addHarmonics (g, lmax, nq, hq, sqn, p, Fr, Fi);
+    for (i = 0; i < nOrient; i++) {
+      addHarmonics (orient[i], lmax, nq, hq, sqn, p, Fr, Fi);
     }
 
     nsym = latticeRotations (info, ops);
@@ -1227,8 +1210,8 @@ SHARE
     addHarmonics (g, lmax, nq, hq, sqn, p, Gr, Gi);
 
     for (k = 0; k < nh; k++) {
-      Fr[k] /= table.rows;
-      Fi[k] /= table.rows;
+      Fr[k] /= nOrient;
+      Fi[k] /= nOrient;
       Sr[k] /= nsym;
       Si[k] /= nsym;
     }
@@ -1253,9 +1236,8 @@ SHARE
       }
     }
 
-    printf ("Texture_process: %s: %ld orientations, %d lattice rotations, sigma = %g deg, lmax = %d\n", filename, table.rows, nsym, sigma * RAD2DEG, lmax);
+    printf ("Texture_process: %s: %ld orientations, %d lattice rotations, sigma = %g deg, lmax = %d\n", source, nOrient, nsym, sigma * RAD2DEG, lmax);
 
-    Table_Free (&table);
     free (xg);
     free (wg);
     free (wq);
@@ -1272,6 +1254,48 @@ SHARE
     free (Ai);
     free (Br);
     free (Bi);
+  }
+
+  // Fourier coefficients of the ODF of the orientations in filename, given as Bunge Euler angles g = Rz (phi1) Rx (Phi) Rz (phi2)
+  void
+  ebsdFourierCoef (char* filename, double sigma, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
+    t_Table table;
+    long i;
+    double c1, s1, c2, s2, C, S;
+    Rotation* orient;
+
+    if (Table_Read (&table, filename, 1) <= 0 || table.rows < 1 || table.columns < 3) {
+      fprintf (stderr, "Texture_process: %s must have rows starting with the Euler angles phi1 Phi phi2. Exit!\n", filename);
+      exit (-1);
+    }
+    orient = (Rotation*)malloc (table.rows * sizeof (Rotation));
+    if (!orient) {
+      fprintf (stderr, "Texture_process: Failed malloc() in ebsdFourierCoef. Exit!\n");
+      exit (-1);
+    }
+
+    for (i = 0; i < table.rows; i++) {
+      c1 = cos (Table_Index (table, i, 0));
+      s1 = sin (Table_Index (table, i, 0));
+      C = cos (Table_Index (table, i, 1));
+      S = sin (Table_Index (table, i, 1));
+      c2 = cos (Table_Index (table, i, 2));
+      s2 = sin (Table_Index (table, i, 2));
+      orient[i][0][0] = c1 * c2 - s1 * s2 * C;
+      orient[i][0][1] = -c1 * s2 - s1 * c2 * C;
+      orient[i][0][2] = s1 * S;
+      orient[i][1][0] = s1 * c2 + c1 * s2 * C;
+      orient[i][1][1] = -s1 * s2 + c1 * c2 * C;
+      orient[i][1][2] = -c1 * S;
+      orient[i][2][0] = s2 * S;
+      orient[i][2][1] = c2 * S;
+      orient[i][2][2] = C;
+    }
+
+    orientationFourierCoef (orient, table.rows, sigma, filename, info, c);
+
+    free (orient);
+    Table_Free (&table);
   }
 
   // end Input - Output
@@ -1352,7 +1376,7 @@ SHARE
   ////////////////////////////////////////
 
   int
-  initData (char* coef_fn, char* ebsd_fn, double ebsd_sigma, char* crystal_fn, struct hkl_info_struct_texture* info) {
+  initData (char* coef_fn, char* ebsd_fn, double orientation_sigma, char* crystal_fn, struct hkl_info_struct_texture* info) {
     int i, nread;
     struct fourier_coef* fc;
     struct hkl_data_texture* L;
@@ -1379,7 +1403,7 @@ SHARE
         fprintf (stderr, "Texture_process: ebsd_fn needs the lattice from crystal_fn. Exit!\n");
         exit (-1);
       }
-      ebsdFourierCoef (ebsd_fn, ebsd_sigma * DEG2RAD, info, fc);
+      ebsdFourierCoef (ebsd_fn, orientation_sigma * DEG2RAD, info, fc);
     } else {
       readFourierCoef (coef_fn, fc);
     }
@@ -1662,7 +1686,7 @@ INITIALIZE
   hkl_info_texture.lmax = lmax_user;
 
   // initialize data
-  if (initData (fcoef_fn, ebsd_fn, ebsd_sigma, crystal_fn, &hkl_info_texture)) {
+  if (initData (fcoef_fn, ebsd_fn, orientation_sigma, crystal_fn, &hkl_info_texture)) {
     printf ("Texture_process: %s: Error in initData: Aborting.\n", NAME_CURRENT_COMP);
     exit (-1);
   }

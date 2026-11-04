@@ -36,7 +36,7 @@
 *
 * The default texture is read directly from Al_mtexdata_alu_EBSD.txt in the McStas data
 * folder, the polycrystalline aluminium EBSD map of MTEX (mtexdata alu), smoothed by a
-* Gaussian kernel of ebsd_sigma = 12 deg and cut at lmax_user = 12.
+* Gaussian kernel of orientation_sigma = 12 deg and cut at lmax_user = 12.
 * use_odf=1 reads Al_mtexdata_alu_ODF.txt instead, the Fourier coefficients of the same map
 * computed beforehand. lmax_user = 0 gives the untextured powder.
 *
@@ -51,7 +51,7 @@
 *
 * %Parameters
 * use_odf:    [1]    0: read the texture from Al_mtexdata_alu_EBSD.txt, 1: from Al_mtexdata_alu_ODF.txt
-* ebsd_sigma: [deg]  Standard deviation of the Gaussian kernel for the EBSD file
+* orientation_sigma: [deg]  Standard deviation of the Gaussian kernel for the EBSD file
 * lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
 * lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
 * reflection: [1]    0: all scattered rays, 1: (111), 2: (200), 3: (220)
@@ -63,7 +63,7 @@
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_white_beam(int use_odf=0, ebsd_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01, source_lmin=1, source_lmax=10)
+DEFINE INSTRUMENT Test_texture_white_beam(int use_odf=0, orientation_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01, source_lmin=1, source_lmax=10)
 
 DECLARE
 %{
@@ -117,7 +117,7 @@ COMPONENT arm_sample = Arm(
 ) AT (0, 0, 0.025) RELATIVE slit
 
 COMPONENT texture = Texture_process(
-    crystal_fn = "Al_sg225.ncmat", fcoef_fn = (use_odf ? "Al_mtexdata_alu_ODF.txt" : "0"), ebsd_fn = (use_odf ? "0" : "Al_mtexdata_alu_EBSD.txt"), ebsd_sigma = ebsd_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = 1
+    crystal_fn = "Al_sg225.ncmat", fcoef_fn = (use_odf ? "Al_mtexdata_alu_ODF.txt" : "0"), ebsd_fn = (use_odf ? "0" : "Al_mtexdata_alu_EBSD.txt"), orientation_sigma = orientation_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = 1
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT texture_mat = Union_make_material(
