@@ -15,7 +15,8 @@
 * A 1 x 1 cm^2 Source_simple with a flat wavelength spectrum from 1 to 10 AA, a
 * 1 x 1 cm^2 slit 2.5 cm before the sample, and the sample 100 m from the source.
 * The sample is an aluminium sphere of radius 5 mm in a Union_sphere, with
-* Texture_process reading Al_sg225.ncmat from the NCrystal data library.
+* Texture_process reading Al_sg225.ncmat from the NCrystal data library, or the file
+* given by crystal.
 *
 *  sphere_det: longitude and latitude of the scattered ray, over the whole sphere
 *
@@ -40,10 +41,20 @@
 * use_odf=1 reads Al_mtexdata_alu_ODF.txt instead, the Fourier coefficients of the same map
 * computed beforehand. lmax_user = 0 gives the untextured powder.
 *
+* use_expr=1 draws the orientations from the rotation expressions of Texture_process
+* instead, as an aluminium powder: uniform rotations about x and y, and about z only
+* over half a turn, rot_x_expr = "360*u1", rot_y_expr = "asin(2*u2-1)*180/pi",
+* rot_z_expr = "180*u3". The angle about y has the density cos(ry) of uniform rotations,
+* and the half turn about z is enough because the cubic lattice has a 2-fold axis along
+* c. It gives the same intensity as lmax_user = 0, the untextured powder. With
+* crystal = "Al.laz", the rays scattered once agree within about 1% with PowderN using
+* Al.laz without absorption and incoherent scattering, in total and in each reflection.
+*
 * Union_sphere sets p_interact = 0.9.
 *
 * %Test: use_odf=0 Detector: sphere_det_I=1.28146e-05
 * %Test: use_odf=1 Detector: sphere_det_I=1.28146e-05
+* %Test: use_expr=1 Detector: sphere_det_I=1.30012e-05
 * %Test: reflection=1 Detector: sphere_det_I=6.22617e-06
 * %Test: reflection=2 Detector: sphere_det_I=2.60198e-06
 * %Test: reflection=3 Detector: sphere_det_I=1.12426e-06
@@ -51,6 +62,8 @@
 *
 * %Parameters
 * use_odf:    [1]    0: read the texture from Al_mtexdata_alu_EBSD.txt, 1: from Al_mtexdata_alu_ODF.txt
+* use_expr:   [1]    1: draw an aluminium powder from the rotation expressions instead, see above
+* crystal:    [string] Crystal structure file of Texture_process, an NCrystal material or a LAZ file
 * orientation_sigma: [deg]  Standard deviation of the Gaussian kernel for the EBSD file
 * lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
 * lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
@@ -63,7 +76,7 @@
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_white_beam(int use_odf=0, orientation_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01, source_lmin=1, source_lmax=10)
+DEFINE INSTRUMENT Test_texture_white_beam(int use_odf=0, int use_expr=0, string crystal="Al_sg225.ncmat", orientation_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01, source_lmin=1, source_lmax=10)
 
 DECLARE
 %{
@@ -77,7 +90,7 @@ DECLARE
 
 INITIALIZE
 %{
-  // lattice parameter of Al_sg225.ncmat
+  // lattice parameter of Al_sg225.ncmat (4.04932 in Al.laz)
   double a = 4.04958;
   sample_r = 0.005;
   det_r = 1;
@@ -117,7 +130,10 @@ COMPONENT arm_sample = Arm(
 ) AT (0, 0, 0.025) RELATIVE slit
 
 COMPONENT texture = Texture_process(
-    crystal_fn = "Al_sg225.ncmat", fcoef_fn = (use_odf ? "Al_mtexdata_alu_ODF.txt" : "0"), ebsd_fn = (use_odf ? "0" : "Al_mtexdata_alu_EBSD.txt"), orientation_sigma = orientation_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = 1
+    crystal_fn = crystal, barns = 1,
+    fcoef_fn = (!use_expr && use_odf ? "Al_mtexdata_alu_ODF.txt" : "0"), ebsd_fn = (!use_expr && !use_odf ? "Al_mtexdata_alu_EBSD.txt" : "0"),
+    rot_x_expr = (use_expr ? "360*u1" : ""), rot_y_expr = (use_expr ? "asin(2*u2-1)*180/pi" : ""), rot_z_expr = (use_expr ? "180*u3" : ""),
+    orientation_sigma = orientation_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = 1
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT texture_mat = Union_make_material(
