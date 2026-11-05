@@ -50,6 +50,9 @@
 *
 * An orientation list in ebsd_fn gives the ODF as the orientations smoothed by a Gaussian
 * kernel on the rotation group, with the Fourier coefficients kappa_l = exp(-l(l+1) sigma^2 / 2).
+* It is averaged over the proper rotations of the lattice given by crystal_fn, which is the
+* point group of most metals (fcc, bcc, hcp). Each orientation has the same weight, and the
+* computation time grows as the number of orientations times lmax^4.
 *
 * rot_x_expr, rot_y_expr and rot_z_expr give the orientations instead as three tinyexpr expressions
 * for the angles in deg of a rotation of the crystal axes about x, then y, then z of the component,
@@ -63,14 +66,12 @@
 *   rot_x_expr = "p1*sqrt(-2*log(1-u1))*cos(2*pi*u2)", rot_y_expr = "0", rot_z_expr = "360*u3".
 * The noise of the drawn texture falls as 1/sqrt(n_orientations) and grows as orientation_sigma
 * decreases, so the number of orientations needed grows about as orientation_sigma^-3. For this
-* example with p1 = 5 in Test_texture_white_beam (Al), the noise stays below the ray noise of 1e6
-* rays with 1000 orientations at orientation_sigma = 10 deg, and needs about 30000 at 3 deg (with
-* lmax_user = 30); the default 10000 thus suffices down to about 5 deg. k times more rays need
-* about k times more orientations. INITIALIZE takes about 37 s for 10000 orientations at 10 deg
+* example with p1 = 5 in Test_texture_white_beam (Al), the noise stays below a statistical error of
+* about 5% of the intensity on 30 x 30 deg patches of sphere_det with 1000 orientations at
+* orientation_sigma = 10 deg, and needs about 30000 at 3 deg (with lmax_user = 30); the default
+* 10000 thus suffices down to about 5 deg. A k times smaller statistical error needs about k^2
+* times more orientations. INITIALIZE takes about 37 s for 10000 orientations at 10 deg
 * (lmax = 22) and 200 s at 3 deg (lmax_user = 30), growing as n_orientations * lmax^4.
-* It is averaged over the proper rotations of the lattice given by crystal_fn, which is the
-* point group of most metals (fcc, bcc, hcp). Each orientation has the same weight, and the
-* computation time grows as the number of orientations times lmax^4.
 *
 * Algorithm:
 * Described elsewhere, see e.g. <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>
