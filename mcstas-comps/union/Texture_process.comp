@@ -96,6 +96,15 @@ SHARE
   #define nPolePhi 601
   #define maxIterReject 3000
   #define tolTexture 1.0e-6
+  #define nSavedK 10 // wavevectors whose cross sections are kept, so that the SPLIT copies of a neutron reuse them
+
+  // cross sections of one wavevector
+  struct savedXS {
+    Coords ki;
+    int num_hkl_scatt;
+    double cohMu;
+    double* XS; // currXS of each reflection
+  };
 
   struct saveScattProb {
     Coords ki, kih;       // wavevector and its unit vector
@@ -162,8 +171,8 @@ SHARE
     // saved info
     double cohMu; // last linear attenuation coefficient computed
 
-    // wavevector of the last neutron
-    double last_kix, last_kiy, last_kiz;
+    // last wavevectors, most recently used first; saved[0] is the one in currXS
+    struct savedXS saved[nSavedK];
   };
 
   // function declarations
@@ -1413,9 +1422,14 @@ SHARE
     // precompute legendre associated functions
     info->lgdr = initLegendre (fc->lmax);
 
-    info->last_kix = 0;
-    info->last_kiy = 0;
-    info->last_kiz = 0;
+    for (i = 0; i < nSavedK; i++) {
+      info->saved[i].ki = coords_set (0, 0, 0);
+      info->saved[i].XS = (double*)calloc (info->num_hkl > 0 ? info->num_hkl : 1, sizeof (double));
+      if (!info->saved[i].XS) {
+        fprintf (stderr, "Texture_process: Failed malloc() in initData. Exit!\n");
+        exit (-1);
+      }
+    }
 
     L = info->list;
     for (i = 0; i < info->num_hkl; i++) {
@@ -1471,6 +1485,9 @@ SHARE
       free_hkl_data_texture (hkl_info->list + i);
     }
     free (hkl_info->list);
+    for (i = 0; i < nSavedK; i++) {
+      free (hkl_info->saved[i].XS);
+    }
 
     return 0;
   }
@@ -1536,7 +1553,8 @@ SHARE
   // The input for this function and its order may not be changed, but the names may be updated.
   int
   Texture_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data, _class_particle* _particle) {
-    int i;
+    int i, j;
+    struct savedXS hit;
     // k_initial is a pointer to a simple vector with 3 doubles, k[0], k[1], k[2] (wavevector)
     double kix = k_initial[0];
     double kiy = k_initial[1];
@@ -1550,10 +1568,24 @@ SHARE
 
     double cohXS = -1;
 
-    // in case we use 'SPLIT' then consecutive neutrons can be identical when entering here and
-    // we may skip the cross section computations
+    struct savedXS* sv = hkl_info->saved;
 
-    if (kix != hkl_info->last_kix || kiy != hkl_info->last_kiy || kiz != hkl_info->last_kiz) {
+    // with SPLIT, the copies of a neutron enter with the same wavevector: reuse its cross sections
+    for (j = 0; j < nSavedK; j++) {
+      if (kix == sv[j].ki.x && kiy == sv[j].ki.y && kiz == sv[j].ki.z) {
+        break;
+      }
+    }
+
+    if (j > 0 && j < nSavedK) {
+      // saved[0] is already in currXS
+      hkl_info->num_hkl_scatt = sv[j].num_hkl_scatt;
+      hkl_info->cohMu = sv[j].cohMu;
+      for (i = 0; i <= sv[j].num_hkl_scatt; i++) {
+        L[i].currXS = sv[j].XS[i];
+      }
+    } else if (j == nSavedK) {
+      j = nSavedK - 1;
       //  polar coordinates of wavevector
       ki = sqrt (kix * kix + kiy * kiy + kiz * kiz);
       kict = kiz / ki;
@@ -1578,10 +1610,19 @@ SHARE
       // multiply by the appropriate factors to get the linear attenuation coefficient cohMu (in m^-1)
       hkl_info->cohMu = cohXS * (hkl_info->xs2mu) * pow ((2 * PI) / ki, 3) / (hkl_info->V0);
 
-      hkl_info->last_kix = kix;
-      hkl_info->last_kiy = kiy;
-      hkl_info->last_kiz = kiz;
+      // overwrite the least recently used entry
+      sv[j].ki = coords_set (kix, kiy, kiz);
+      sv[j].num_hkl_scatt = num_hkl_scatt;
+      sv[j].cohMu = hkl_info->cohMu;
+      for (i = 0; i <= num_hkl_scatt; i++) {
+        sv[j].XS[i] = L[i].currXS;
+      }
     }
+
+    // move entry j to the front
+    hit = sv[j];
+    memmove (sv + 1, sv, j * sizeof (struct savedXS));
+    sv[0] = hit;
 
     *my = hkl_info->cohMu;
 
