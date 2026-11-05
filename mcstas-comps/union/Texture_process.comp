@@ -38,6 +38,12 @@
 * so z || c*. mtex_axes = 1 takes the default axes of MTEX instead: z || c, x || a*. Both are
 * the same for cubic, tetragonal and orthorhombic lattices; for hexagonal and trigonal
 * lattices they differ by 30 deg about c.
+* dir1 and dir2 place the crystal axes freely, with the syntax and meaning of the NCrystal parameters
+* of the same name: dir1 = "@crys:x,y,z@lab:x,y,z" puts the direction x,y,z of the NCrystal crystal axes
+* (x || a, b in the xy plane) along x,y,z of the component, and "@crys_hkl:h,k,l@lab:x,y,z" puts the
+* normal of the plane hkl there. dir2 has the same form; only its part perpendicular to dir1 is used,
+* and the angle between dir1 and dir2 must be the same in both frames within dirtol. For example,
+* dir1 = "@crys_hkl:0,0,1@lab:0,0,1" and dir2 = "@crys:1,0,0@lab:0,1,0" put c* along z and a along y.
 *
 * An orientation list in ebsd_fn gives the ODF as the orientations smoothed by a Gaussian
 * kernel on the rotation group, with the Fourier coefficients kappa_l = exp(-l(l+1) sigma^2 / 2).
@@ -62,6 +68,9 @@
 * barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for CIF files and NCrystal cfg-strings
 * lambda_min:        [AA]     Reflections that only scatter below this wavelength are not used, which saves one table per l for each of them. 0 keeps all reflections
 * mtex_axes:         [1]      0: crystal axes of NCrystal (x || a, b in the xy plane), 1: default crystal axes of MTEX (z || c, x || a*), for an ODF or orientations given in them
+* dir1:              [s]      Crystal axes as in NCrystal: "@crys:x,y,z@lab:x,y,z" or "@crys_hkl:h,k,l@lab:x,y,z" puts a direction of the NCrystal crystal axes along a direction of the component. Needs dir2, and not mtex_axes = 1
+* dir2:              [s]      Second direction, same form as dir1. Only its part perpendicular to dir1 is used
+* dirtol:            [rad]    Allowed difference of the angle between dir1 and dir2 in the crystal and in the component
 * init:              [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
 *
 * %L
@@ -75,6 +84,7 @@
 DEFINE COMPONENT Texture_process // Remember to change the name of process here
 
 SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, string ebsd_fn=0, orientation_sigma=10, int lmax_user=-1, int mtex_axes=0,
+            string dir1=0, string dir2=0, dirtol=1e-4,
             barns = 0, interact_fraction = -1, packing_factor = 1, lambda_min = 0,
 	        string init="")
 
@@ -154,6 +164,9 @@ SHARE
     Coords lat[3];         // direct lattice vectors (AA) in the Cartesian crystal frame
     int flag_barns;        // |F|^2 is in barns whatever the barns parameter is
     int use_mtex_axes;     // crystal axes z || c, x || a* instead of x || a, b in the xy plane
+    char* crys_dir1;       // "@crys:...@lab:..." placing the crystal axes, NULL if not given
+    char* crys_dir2;
+    double crys_dirtol;    // allowed difference (rad) of the dir1-dir2 angle in the two frames
     double wavelength_min; // Reflections only scattering below this wavelength are not used
 
     // precomputed factors
@@ -635,6 +648,79 @@ SHARE
     ncrystal_unref (&ncobj);
   }
 
+  // Crystal and component directions of an NCrystal dir1/dir2 string, "@crys:x,y,z@lab:x,y,z" or "@crys_hkl:h,k,l@lab:x,y,z".
+  // @crys is in the Cartesian frame of lat, @crys_hkl is the normal of the hkl plane.
+  void
+  parseCrystalDir (char* s, Coords* lat, Coords* crys, Coords* lab) {
+    double c[3], l[3];
+    int hkl = 0;
+    char* p = NULL;
+
+    if (!strncmp (s, "@crys_hkl:", 10)) {
+      hkl = 1;
+      p = s + 10;
+    } else if (!strncmp (s, "@crys:", 6)) {
+      p = s + 6;
+    }
+
+    if (!p || sscanf (p, "%lf,%lf,%lf@lab:%lf,%lf,%lf", c, c + 1, c + 2, l, l + 1, l + 2) != 6) {
+      fprintf (stderr, "Texture_process: \"%s\" must have the form @crys:x,y,z@lab:x,y,z or @crys_hkl:h,k,l@lab:x,y,z. Exit!\n", s);
+      exit (-1);
+    }
+    if (hkl) {
+      // h a* + k b* + l c*, with a* proportional to b x c
+      *crys = coords_add (coords_add (coords_scale (coords_xp (lat[1], lat[2]), c[0]), coords_scale (coords_xp (lat[2], lat[0]), c[1])),
+                          coords_scale (coords_xp (lat[0], lat[1]), c[2]));
+    } else {
+      *crys = coords_set (c[0], c[1], c[2]);
+    }
+    *lab = coords_set (l[0], l[1], l[2]);
+  }
+
+  // Right-handed orthonormal basis: e[0] || v1, e[1] in the plane of v1 and v2
+  int
+  directionBasis (Coords v1, Coords v2, Coords* e) {
+    Coords n = coords_xp (v1, v2);
+    if (coords_len (v1) == 0 || coords_len (n) < 1e-12 * coords_len (v1) * coords_len (v2)) {
+      return 0;
+    }
+    e[0] = coords_scale (v1, 1.0 / coords_len (v1));
+    e[2] = coords_scale (n, 1.0 / coords_len (n));
+    e[1] = coords_xp (e[2], e[0]);
+    return 1;
+  }
+
+  // Rotation R that takes crystal direction c1 onto lab direction l1, and c2 into the plane of l1 and l2, as NCrystal's dir1 and dir2
+  void
+  directionRotation (Coords c1, Coords c2, Coords l1, Coords l2, double tol, Rotation R) {
+    Coords e[3], f[3];
+    double ea[3][3], fa[3][3];
+    double ac, al;
+    int i, j, k;
+
+    if (!directionBasis (c1, c2, e) || !directionBasis (l1, l2, f)) {
+      fprintf (stderr, "Texture_process: dir1 and dir2 must be nonzero and not parallel. Exit!\n");
+      exit (-1);
+    }
+    ac = acos (fmax (-1.0, fmin (1.0, coords_sp (c1, c2) / (coords_len (c1) * coords_len (c2)))));
+    al = acos (fmax (-1.0, fmin (1.0, coords_sp (l1, l2) / (coords_len (l1) * coords_len (l2)))));
+    if (fabs (ac - al) > tol) {
+      fprintf (stderr, "Texture_process: dir1 and dir2 are %g deg apart in the crystal and %g deg apart in the component frame, more than dirtol. Exit!\n",
+               ac * RAD2DEG, al * RAD2DEG);
+      exit (-1);
+    }
+    for (k = 0; k < 3; k++) {
+      coords_get (e[k], ea[k], ea[k] + 1, ea[k] + 2);
+      coords_get (f[k], fa[k], fa[k] + 1, fa[k] + 2);
+    }
+    // R = sum_k f_k e_k^T
+    for (i = 0; i < 3; i++) {
+      for (j = 0; j < 3; j++) {
+        R[i][j] = fa[0][i] * ea[0][j] + fa[1][i] * ea[1][j] + fa[2][i] * ea[2][j];
+      }
+    }
+  }
+
   int
   read_hkl_data_texture (char* SC_file, struct hkl_info_struct_texture* info) {
     struct hkl_data_texture* list = NULL;
@@ -750,32 +836,34 @@ SHARE
       m_cc = m_bb;
     }
 
-    if (info->use_mtex_axes) {
-      // MTEX default: z || c and x || a*, so b lies in the yz plane
-      m_cx = 0;
-      m_cy = 0;
-      m_cz = m_c;
-      m_bx = 0;
-      m_by = m_b * sin (m_aa * DEG2RAD);
-      m_bz = m_b * cos (m_aa * DEG2RAD);
-      m_az = m_a * cos (m_bb * DEG2RAD);
-      m_ay = m_a * (cos (m_cc * DEG2RAD) - cos (m_bb * DEG2RAD) * cos (m_aa * DEG2RAD)) / sin (m_aa * DEG2RAD);
-      m_ax = sqrt (m_a * m_a - m_ay * m_ay - m_az * m_az);
-    } else {
-      // NCrystal: x || a and b in the xy plane, so z || c*
-      m_ax = m_a;
-      m_ay = 0;
-      m_az = 0;
-      m_bx = m_b * cos (m_cc * DEG2RAD);
-      m_by = m_b * sin (m_cc * DEG2RAD);
-      m_bz = 0;
-      m_cx = m_c * cos (m_bb * DEG2RAD);
-      m_cy = m_c * (cos (m_aa * DEG2RAD) - cos (m_bb * DEG2RAD) * cos (m_cc * DEG2RAD)) / sin (m_cc * DEG2RAD);
-      m_cz = sqrt (m_c * m_c - m_cx * m_cx - m_cy * m_cy);
+    // NCrystal: x || a and b in the xy plane, so z || c*
+    m_cx = m_c * cos (m_bb * DEG2RAD);
+    m_cy = m_c * (cos (m_aa * DEG2RAD) - cos (m_bb * DEG2RAD) * cos (m_cc * DEG2RAD)) / sin (m_cc * DEG2RAD);
+    info->lat[0] = coords_set (m_a, 0, 0);
+    info->lat[1] = coords_set (m_b * cos (m_cc * DEG2RAD), m_b * sin (m_cc * DEG2RAD), 0);
+    info->lat[2] = coords_set (m_cx, m_cy, sqrt (m_c * m_c - m_cx * m_cx - m_cy * m_cy));
+
+    // rotate the lattice so that dir1 and dir2, or the MTEX axes z || c and x || a*, hold
+    if (info->crys_dir1 || info->use_mtex_axes) {
+      Rotation R;
+      Coords c1, c2, l1, l2;
+      if (info->crys_dir1) {
+        parseCrystalDir (info->crys_dir1, info->lat, &c1, &l1);
+        parseCrystalDir (info->crys_dir2, info->lat, &c2, &l2);
+      } else {
+        c1 = info->lat[2];
+        l1 = coords_set (0, 0, 1);
+        c2 = coords_xp (info->lat[1], info->lat[2]);
+        l2 = coords_set (1, 0, 0);
+      }
+      directionRotation (c1, c2, l1, l2, info->crys_dirtol, R);
+      for (i = 0; i < 3; i++) {
+        info->lat[i] = rot_apply (R, info->lat[i]);
+      }
     }
-    info->lat[0] = coords_set (m_ax, m_ay, m_az);
-    info->lat[1] = coords_set (m_bx, m_by, m_bz);
-    info->lat[2] = coords_set (m_cx, m_cy, m_cz);
+    coords_get (info->lat[0], &m_ax, &m_ay, &m_az);
+    coords_get (info->lat[1], &m_bx, &m_by, &m_bz);
+    coords_get (info->lat[2], &m_cx, &m_cy, &m_cz);
 
     // Compute reciprocal lattice vectors.
     vec_prod (tmp_x, tmp_y, tmp_z, m_bx, m_by, m_bz, m_cx, m_cy, m_cz);
@@ -1681,6 +1769,24 @@ INITIALIZE
   hkl_info_texture.flag_barns = 0;
   hkl_info_texture.wavelength_min = lambda_min;
   hkl_info_texture.use_mtex_axes = mtex_axes;
+  // "0", "NULL" and "" mean that the direction is not given
+  hkl_info_texture.crys_dir1 = NULL;
+  hkl_info_texture.crys_dir2 = NULL;
+  if (dir1 && strlen (dir1) && strcmp (dir1, "0") && strcmp (dir1, "NULL")) {
+    hkl_info_texture.crys_dir1 = dir1;
+  }
+  if (dir2 && strlen (dir2) && strcmp (dir2, "0") && strcmp (dir2, "NULL")) {
+    hkl_info_texture.crys_dir2 = dir2;
+  }
+  hkl_info_texture.crys_dirtol = dirtol;
+  if (!hkl_info_texture.crys_dir1 != !hkl_info_texture.crys_dir2) {
+    fprintf (stderr, "Texture_process: %s: give both dir1 and dir2, or neither. Exit!\n", NAME_CURRENT_COMP);
+    exit (-1);
+  }
+  if (hkl_info_texture.crys_dir1 && mtex_axes) {
+    fprintf (stderr, "Texture_process: %s: dir1 and dir2 cannot be combined with mtex_axes = 1. Exit!\n", NAME_CURRENT_COMP);
+    exit (-1);
+  }
 
   // cut-off for l. If negative, take the cut-off provided in the Fourier coeff file
   hkl_info_texture.lmax = lmax_user;
