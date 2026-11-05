@@ -47,7 +47,7 @@
 * rot_z_expr = "180*u3". The angle about y has the density cos(ry) of uniform rotations,
 * and the half turn about z is enough because the cubic lattice has a 2-fold axis along
 * c. It gives the same intensity as lmax_user = 0, the untextured powder. With
-* crystal = "Al.laz", the rays scattered once agree within the statistical error (0.5%)
+* crystal = "Al.laz", the rays scattered once agree within the statistical error
 * with Powder_process reading Al.laz in the same material, in total and in each
 * reflection. Only single scattering compares: multiple scattering in a textured sample
 * depends on the directions of the earlier scatterings.
