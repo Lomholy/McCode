@@ -39,11 +39,14 @@
 * the same for cubic, tetragonal and orthorhombic lattices; for hexagonal and trigonal
 * lattices they differ by 30 deg about c.
 * ax, ay, az, bx, by, bz and cx, cy, cz place the crystal axes instead, as for a single crystal, by
-* the directions in the component of two of the lattice vectors a, b and c; the third one is left 0.
-* The first of the two in the order a, b, c points along its direction, and the second lies in the
-* plane of the two directions, at the angle from the first given by crystal_fn. Only the directions
-* are used, the lengths come from crystal_fn. With all of them 0, the NCrystal axes are used. For
-* example, ax = 0, ay = 1, az = 0, bx = -1, by = 0, bz = 0 turns the crystal axes by 90 deg about z.
+* the directions in the component of two or three of the lattice vectors a, b and c; a vector that
+* is not given is left 0. With two, the first of the two in the order a, b, c points along its
+* direction, and the second lies in the plane of the two directions, at the angle from the first
+* given by crystal_fn. With three, each lattice vector points along its direction; the angles between
+* the directions must be those of crystal_fn within 1e-4 rad, and a, b, c must be right-handed.
+* Only the directions are used, the lengths come from crystal_fn. With all of them 0, the NCrystal
+* axes are used. For example, ax = 0, ay = 1, az = 0, bx = -1, by = 0, bz = 0 turns the crystal axes
+* by 90 deg about z.
 *
 * An orientation list in ebsd_fn gives the ODF as the orientations smoothed by a Gaussian
 * kernel on the rotation group, with the Fourier coefficients kappa_l = exp(-l(l+1) sigma^2 / 2).
@@ -89,7 +92,7 @@
 * barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for CIF files and NCrystal cfg-strings
 * lambda_min:        [AA]     Reflections that only scatter below this wavelength are not used, which saves one table per l for each of them. 0 keeps all reflections
 * mtex_axes:         [1]      0: crystal axes of NCrystal (x || a, b in the xy plane), 1: default crystal axes of MTEX (z || c, x || a*), for an ODF or orientations given in them
-* ax:                [1]      x of the direction of the lattice vector a in the component. Give two of a, b and c, or none; not with mtex_axes = 1
+* ax:                [1]      x of the direction of the lattice vector a in the component. Give two or three of a, b and c, or none; not with mtex_axes = 1
 * ay:                [1]      y of the direction of a
 * az:                [1]      z of the direction of a
 * bx:                [1]      x of the direction of the lattice vector b in the component
@@ -717,6 +720,39 @@ SHARE
     }
   }
 
+  // Lattice vectors along the three directions crys_axis, with the lengths of lat. The angles between the directions
+  // must be those between the lattice vectors, and the directions must be right-handed.
+  void
+  latticeAlongAxes (struct hkl_info_struct_texture* info) {
+    double tol = 1e-4; // rad
+    double angle_lat, angle_dir;
+    Coords dir[3];
+    int i, i_next, i_last;
+    char name[3] = { 'a', 'b', 'c' };
+
+    for (i = 0; i < 3; i++) {
+      dir[i] = coords_scale (info->crys_axis[i], 1.0 / coords_len (info->crys_axis[i]));
+    }
+    for (i = 0; i < 3; i++) {
+      i_next = (i + 1) % 3;
+      i_last = (i + 2) % 3;
+      angle_lat = acos (coords_sp (info->lat[i_next], info->lat[i_last]) / (coords_len (info->lat[i_next]) * coords_len (info->lat[i_last])));
+      angle_dir = acos (fmax (-1.0, fmin (1.0, coords_sp (dir[i_next], dir[i_last]))));
+      if (fabs (angle_dir - angle_lat) > tol) {
+        fprintf (stderr, "Texture_process: the directions of %c and %c are %g deg apart, but %g deg in the lattice of crystal_fn. Exit!\n", name[i_next],
+                 name[i_last], angle_dir * RAD2DEG, angle_lat * RAD2DEG);
+        exit (-1);
+      }
+    }
+    if (coords_sp (dir[0], coords_xp (dir[1], dir[2])) <= 0) {
+      fprintf (stderr, "Texture_process: the directions of a, b and c must be right-handed. Exit!\n");
+      exit (-1);
+    }
+    for (i = 0; i < 3; i++) {
+      info->lat[i] = coords_scale (dir[i], coords_len (info->lat[i]));
+    }
+  }
+
   int
   read_hkl_data_texture (char* SC_file, struct hkl_info_struct_texture* info) {
     struct hkl_data_texture* list = NULL;
@@ -740,7 +776,8 @@ SHARE
     double csx, csy, csz;                // Third reciprocal lattice axis
     char* filename;
     char* ext;
-    int i_first, i_second; // the two lattice vectors placed by crys_axis
+    int i_first, i_second; // the first two lattice vectors placed by crys_axis
+    int n_given;           // number of lattice vectors placed by crys_axis
     Rotation R;
 
     if (!SC_file || !strlen (SC_file) || !strcmp (SC_file, "NULL") || !strcmp (SC_file, "0")) {
@@ -841,19 +878,23 @@ SHARE
     info->lat[1] = coords_set (m_b * cos (m_cc * DEG2RAD), m_b * sin (m_cc * DEG2RAD), 0);
     info->lat[2] = coords_set (m_cx, m_cy, sqrt (m_c * m_c - m_cx * m_cx - m_cy * m_cy));
 
-    // rotate the lattice to the two given directions of crys_axis, or to the MTEX axes z || c and x || a*
+    // place the lattice along the given directions of crys_axis, or rotate it to the MTEX axes z || c and x || a*
     i_first = -1;
     i_second = -1;
+    n_given = 0;
     for (i = 0; i < 3; i++) {
       if (coords_len (info->crys_axis[i]) > 0) {
+        n_given++;
         if (i_first < 0) {
           i_first = i;
-        } else {
+        } else if (i_second < 0) {
           i_second = i;
         }
       }
     }
-    if (info->use_mtex_axes || i_second >= 0) {
+    if (n_given == 3) {
+      latticeAlongAxes (info);
+    } else if (info->use_mtex_axes || n_given == 2) {
       if (info->use_mtex_axes) {
         directionRotation (info->lat[2], coords_xp (info->lat[1], info->lat[2]), coords_set (0, 0, 1), coords_set (1, 0, 0), R);
       } else {
@@ -1870,8 +1911,8 @@ INITIALIZE
       n_axes++;
     }
   }
-  if (n_axes != 0 && n_axes != 2) {
-    fprintf (stderr, "Texture_process: %s: give the directions of two of the lattice vectors a, b and c, or none. Exit!\n", NAME_CURRENT_COMP);
+  if (n_axes == 1) {
+    fprintf (stderr, "Texture_process: %s: give the directions of two or three of the lattice vectors a, b and c, or none. Exit!\n", NAME_CURRENT_COMP);
     exit (-1);
   }
   if (n_axes && mtex_axes) {
