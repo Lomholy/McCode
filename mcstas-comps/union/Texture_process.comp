@@ -61,6 +61,13 @@
 * texture, which differ by a noise that decreases with n_orientations. For example, a fibre texture
 * with the crystal axes tilted from z by a Gaussian of standard deviation p1 deg:
 *   rot_x_expr = "p1*sqrt(-2*log(1-u1))*cos(2*pi*u2)", rot_y_expr = "0", rot_z_expr = "360*u3".
+* The noise of the drawn texture falls as 1/sqrt(n_orientations) and grows as orientation_sigma
+* decreases, so the number of orientations needed grows about as orientation_sigma^-3. For this
+* example with p1 = 5 in Test_texture_white_beam (Al), the noise stays below the ray noise of 1e6
+* rays with 1000 orientations at orientation_sigma = 10 deg, and needs about 30000 at 3 deg (with
+* lmax_user = 30); the default 10000 thus suffices down to about 5 deg. k times more rays need
+* about k times more orientations. INITIALIZE takes about 37 s for 10000 orientations at 10 deg
+* (lmax = 22) and 200 s at 3 deg (lmax_user = 30), growing as n_orientations * lmax^4.
 * It is averaged over the proper rotations of the lattice given by crystal_fn, which is the
 * point group of most metals (fcc, bcc, hcp). Each orientation has the same weight, and the
 * computation time grows as the number of orientations times lmax^4.
