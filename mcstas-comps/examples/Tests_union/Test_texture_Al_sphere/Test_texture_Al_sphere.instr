@@ -1,7 +1,7 @@
 /*******************************************************************************
 *         McStas instrument definition URL=http://www.mcstas.org
 *
-* Instrument: Test_texture_white_beam
+* Instrument: Test_texture_Al_sphere
 *
 * %Identification
 * Written by: Daniel Lomholt Christensen
@@ -9,7 +9,7 @@
 * Origin: Niels Bohr Institute @ UCPH
 * %INSTRUMENT_SITE: Tests_union
 *
-* White beam diffraction from a textured aluminium sphere with Texture_process
+* Diffraction from a textured aluminium sphere with Texture_process
 *
 * %Description
 * A 1 x 1 cm^2 Source_simple with a flat wavelength spectrum from 1 to 10 AA, a
@@ -78,7 +78,7 @@
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_white_beam(int use_odf=0, int use_expr=0, string crystal="Al_sg225.ncmat", orientation_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01, source_lmin=1, source_lmax=10)
+DEFINE INSTRUMENT Test_texture_Al_sphere(int use_odf=0, int use_expr=0, string crystal="Al_sg225.ncmat", orientation_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01, source_lmin=1, source_lmax=10)
 
 DECLARE
 %{
