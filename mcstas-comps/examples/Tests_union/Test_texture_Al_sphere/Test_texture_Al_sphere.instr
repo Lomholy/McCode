@@ -19,6 +19,7 @@
 * given by crystal.
 *
 *  sphere_det: longitude and latitude of the scattered ray, over the whole sphere
+*  sphere_det_single: the same for the rays scattered once
 *
 * reflection = 1, 2 or 3 selects the Al reflection (111), (200) or (220): sphere_det then
 * only records rays scattered once, with the wavelength lambda = 2 d_hkl sin(theta) of that
@@ -46,17 +47,20 @@
 * over half a turn, rot_x_expr = "360*u1", rot_y_expr = "asin(2*u2-1)*180/pi",
 * rot_z_expr = "180*u3". The angle about y has the density cos(ry) of uniform rotations,
 * and the half turn about z is enough because the cubic lattice has a 2-fold axis along
-* c. It gives the same intensity as lmax_user = 0, the untextured powder. With
-* crystal = "Al.laz", the rays scattered once agree within the statistical error
-* with Powder_process reading Al.laz in the same material, in total and in each
-* reflection. Only single scattering compares: multiple scattering in a textured sample
-* depends on the directions of the earlier scatterings.
+* c. It gives the same intensity as lmax_user = 0, the untextured powder.
+*
+* use_powder=1 replaces the sphere by one of the same size with Powder_process reading
+* crystal, which must then be a LAZ file. With crystal = "Al.laz", sphere_det_single of
+* use_expr=1 agrees within the statistical error with that of use_powder=1, in total and
+* in each reflection. Only single scattering compares: multiple scattering in a textured
+* sample depends on the directions of the earlier scatterings.
 *
 * Union_sphere sets p_interact = 0.9.
 *
 * %Test: use_odf=0 Detector: sphere_det_I=1.28146e-05
 * %Test: use_odf=1 Detector: sphere_det_I=1.28146e-05
 * %Test: use_expr=1 Detector: sphere_det_I=1.30012e-05
+* %Test: use_powder=1 crystal=Al.laz Detector: sphere_det_single_I=1.18552e-05
 * %Test: reflection=1 Detector: sphere_det_I=6.22617e-06
 * %Test: reflection=2 Detector: sphere_det_I=2.60198e-06
 * %Test: reflection=3 Detector: sphere_det_I=1.12426e-06
@@ -66,6 +70,7 @@
 * use_odf:    [1]    0: read the texture from Al_mtexdata_alu_EBSD.txt, 1: from Al_mtexdata_alu_ODF.txt
 * use_expr:   [1]    1: draw an aluminium powder from the rotation expressions instead, see above
 * crystal:    [string] Crystal structure file of Texture_process, an NCrystal material or a LAZ file
+* use_powder: [1]    1: Powder_process reading crystal instead of Texture_process
 * orientation_sigma: [deg]  Standard deviation of the Gaussian kernel for the EBSD file
 * lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
 * lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
@@ -78,7 +83,7 @@
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_Al_sphere(int use_odf=0, int use_expr=0, string crystal="Al_sg225.ncmat", orientation_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01, source_lmin=1, source_lmax=10)
+DEFINE INSTRUMENT Test_texture_Al_sphere(int use_odf=0, int use_expr=0, string crystal="Al_sg225.ncmat", int use_powder=0, orientation_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01, source_lmin=1, source_lmax=10)
 
 DECLARE
 %{
@@ -142,8 +147,21 @@ COMPONENT texture_mat = Union_make_material(
     my_absorption = 0, process_string = "texture"
 ) AT (0, 0, 0) RELATIVE arm_sample
 
+// Powder_process reads crystal only for use_powder = 1, as it does not read NCrystal materials
+COMPONENT powder = Powder_process(
+    reflections = (use_powder ? crystal : "NULL"), barns = 1, packing_factor = 1
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT powder_mat = Union_make_material(
+    my_absorption = 0, process_string = "powder"
+) AT (0, 0, 0) RELATIVE arm_sample
+
 COMPONENT sample = Union_sphere(
-    radius = sample_r, priority = 1, material_string = "texture_mat", p_interact = 0.9
+    radius = sample_r, priority = 1, material_string = "texture_mat", p_interact = 0.9, number_of_activations = !use_powder
+) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT sample_powder = Union_sphere(
+    radius = sample_r, priority = 2, material_string = "powder_mat", p_interact = 0.9, number_of_activations = use_powder
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT q_logger = Union_logger_2DQ(
@@ -170,6 +188,14 @@ COMPONENT sphere_det = Monitor_nD(
     filename = "sphere_det",
     restore_neutron = 1
 ) WHEN (reflection == 0 ? scattered >= 1 : in_reflection)
+AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT sphere_det_single = Monitor_nD(
+    xwidth = 2 * det_r,
+    options = "sphere theta limits=[-180 180] bins=360 phi limits=[-90 90] bins=180",
+    filename = "sphere_det_single",
+    restore_neutron = 1
+) WHEN (reflection == 0 ? scattered == 1 : in_reflection)
 AT (0, 0, 0) RELATIVE arm_sample
 
 END
