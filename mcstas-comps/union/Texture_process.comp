@@ -77,13 +77,6 @@
 * times more orientations. INITIALIZE takes about 37 s for 10000 orientations at 10 deg
 * (lmax = 22) and 200 s at 3 deg (lmax_user = 30), growing as n_orientations * lmax^4.
 *
-* kde = 1 uses the orientations of ebsd_fn or of the rotation expressions directly, as a kernel density
-* estimate of the pole figures without a cut-off in l: each orientation g and each of the distinct directions
-* +-s h of a reflection h, for the lattice rotations s, gives a pole g s h, smoothed by the von Mises-Fisher
-* kernel exp (t / sigma^2) on the sphere, which has nearly the coefficients exp (-l (l + 1) sigma^2 / 2) of the
-* Gaussian kernel. The cross section and the direction of kf are exact for this kernel, but every new wavevector
-* sums over all poles of all reflections, which is slow.
-*
 * Algorithm:
 * Described elsewhere, see e.g. <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>
 * The calculations are detailed in V. Laliena, M. A. Vicente-Alvarez and J. Campo,
@@ -120,7 +113,6 @@
 * cx:                [1]      x of the direction of the lattice vector c in the component
 * cy:                [1]      y of the direction of c
 * cz:                [1]      z of the direction of c
-* kde:               [1]      0: Fourier series of the ODF, 1: kernel density estimate of the pole figures from the orientations of ebsd_fn or of the rotation expressions, see above
 * init:              [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
 *
 * %L
@@ -137,7 +129,7 @@ SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, string ebsd_fn=0, ori
             ax=0, ay=0, az=0, bx=0, by=0, bz=0, cx=0, cy=0, cz=0,
             string rot_x_expr="", string rot_y_expr="", string rot_z_expr="", int n_orientations=10000,
             p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
-            barns = 0, interact_fraction = -1, packing_factor = 1, lambda_min = 0, int kde = 0,
+            barns = 0, interact_fraction = -1, packing_factor = 1, lambda_min = 0,
 	        string init="")
 
 
@@ -206,9 +198,6 @@ SHARE
     t_Table probQ;
     // number of negative cross sections from the truncated series
     double numNegativeXS;
-    // kernel density estimate: poles g s h of all orientations g and distinct directions s h
-    long n_pole;
-    Coords* pole;
   };
 
   struct hkl_info_struct_texture {
@@ -231,8 +220,6 @@ SHARE
     // precomputed factors
     double xs2mu; // cross section to mu (in m^-1)
 
-    int use_kde;         // kernel density estimate of the pole figures instead of the Fourier series
-    double kde_kappa;    // concentration 1 / sigma^2 of its von Mises-Fisher kernel
     double tol_V;        // terms of V with a smaller modulus are dropped
     double* sqn;         // sqrt ((l - m)! / (l + m)!) at [l * (lmax + 1) + m]
     double* plm;         // plgndr_mod (l, m, kct) of the wavevector of the last cache fill, same index
@@ -260,8 +247,6 @@ SHARE
   int computeV (struct fourier_coef* fc, struct hkl_data_texture* L, double tol);
   // sampling
   int sampleKprime_hkl (double* kf, Coords ki, struct phiTable* sp, struct hkl_data_texture* L, struct hkl_info_struct_texture* info);
-  double kde_hkl_XS (double k, Coords kh, struct hkl_data_texture* L, struct hkl_info_struct_texture* info);
-  int sampleKprime_kde (double* kf, Coords ki, struct hkl_data_texture* L, struct hkl_info_struct_texture* info);
   struct kiCache* kiEntry (double* k, struct hkl_info_struct_texture* info);
   double poleSeries (double ct, double phi, struct hkl_data_texture* L, struct legendre* lgdr);
   void fillPoleTable (t_Table* table, struct hkl_data_texture* L, struct legendre* lgdr);
@@ -618,123 +603,6 @@ SHARE
 
     fprintf (stderr, "Texture_process: too many iterations sampling hkl %d %d %d. Exit!\n", L->h, L->k, L->l);
     exit (-1);
-  }
-
-  // exp (-x) I0 (x) for x >= 0
-  // ponytail: Abramowitz-Stegun 9.8.1-2, relative error < 2e-7; a series or Chebyshev expansion if more is needed
-  double
-  besselI0e (double x) {
-    double t;
-    if (x < 3.75) {
-      t = x * x / 14.0625;
-      return exp (-x) * (1 + t * (3.5156229 + t * (3.0899424 + t * (1.2067492 + t * (0.2659732 + t * (0.0360768 + t * 0.0045813))))));
-    }
-    t = 3.75 / x;
-    return (0.39894228
-            + t * (0.01328592 + t * (0.00225319 + t * (-0.00157565 + t * (0.00916281 + t * (-0.02057706 + t * (0.02635537 + t * (-0.01647633 + t * 0.00392377))))))))
-           / sqrt (x);
-  }
-
-  // Mean over the Bragg circle q.kh = x of the kernel exp (kappa (q.p - 1)) of the pole p, and in *conc the
-  // concentration of its von Mises distribution in the azimuth of q
-  double
-  kdeWeight (Coords p, Coords kh, double x, double kappa, double* conc) {
-    double c = coords_sp (p, kh);
-    double s = sqrt (fmax (0.0, 1 - c * c) * (1 - x * x));
-
-    if (conc) {
-      *conc = kappa * s;
-    }
-    return exp (kappa * (c * x + s - 1)) * besselI0e (kappa * s);
-  }
-
-  // Total cross section of L at wavevector k kh, with kh the unit vector, from the kernel density estimate
-  double
-  kde_hkl_XS (double k, Coords kh, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
-    long j;
-    double kappa = info->kde_kappa;
-    double x = (L->G) / (2 * k);
-    double sum = 0;
-
-    if (x > 1) {
-      return 0;
-    }
-    for (j = 0; j < L->n_pole; j++) {
-      sum += kdeWeight (L->pole[j], kh, x, kappa, NULL);
-    }
-    // the pole density has mean 1 on the sphere: 4 pi times the kernel normalization kappa / (2 pi (1 - exp (-2 kappa)))
-    return (L->mult) * (L->F2) / (4 * x) * 2 * kappa / (1 - exp (-2 * kappa)) * sum / L->n_pole;
-  }
-
-  // Angle from the von Mises distribution of concentration conc, by Best and Fisher (1979)
-  double
-  vonMises (double conc) {
-    double tau, rho, r, z, f, c, u;
-
-    if (conc < 1e-6) {
-      return 2 * PI * rand01 ();
-    }
-    tau = 1 + sqrt (1 + 4 * conc * conc);
-    rho = (tau - sqrt (2 * tau)) / (2 * conc);
-    r = (1 + rho * rho) / (2 * rho);
-    do {
-      z = cos (PI * rand01 ());
-      f = (1 + r * z) / (r + z);
-      c = conc * (r - f);
-      u = rand01 ();
-    } while (c * (2 - c) <= u && log (c / u) + 1 - c < 0);
-    return (rand01 () < 0.5 ? -1 : 1) * acos (fmax (-1.0, fmin (1.0, f)));
-  }
-
-  // Samples kf for reflection L and wavevector ki from the kernel density estimate: a pole with the probability of its
-  // weight on the Bragg circle, then the azimuth of q around ki from the von Mises distribution of that pole
-  int
-  sampleKprime_kde (double* kf, Coords ki, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
-    long j, j_sel = -1;
-    double kim = coords_len (ki);
-    double x = (L->G) / (2 * kim);
-    double kappa = info->kde_kappa;
-    double sum = 0, accum = 0, r, w, conc, phi;
-    Coords kh = coords_scale (ki, 1.0 / kim);
-    Coords perp, t1, t2, q, kf_out;
-
-    for (j = 0; j < L->n_pole; j++) {
-      w = kdeWeight (L->pole[j], kh, x, kappa, NULL);
-      sum += w;
-      if (w > 0) {
-        j_sel = j;
-      }
-    }
-    if (j_sel < 0) {
-      fprintf (stderr, "Texture_process: no pole of hkl %d %d %d on the Bragg circle. Exit!\n", L->h, L->k, L->l);
-      exit (-1);
-    }
-    // rand01 () can be 1: j_sel stays the last pole of nonzero weight
-    r = rand01 () * sum;
-    for (j = 0; j < L->n_pole; j++) {
-      accum += kdeWeight (L->pole[j], kh, x, kappa, NULL);
-      if (accum > r) {
-        j_sel = j;
-        break;
-      }
-    }
-
-    // q = x kh + sqrt (1 - x^2) (cos phi t1 + sin phi t2), with t1 towards the pole
-    kdeWeight (L->pole[j_sel], kh, x, kappa, &conc);
-    perp = coords_sub (L->pole[j_sel], coords_scale (kh, coords_sp (L->pole[j_sel], kh)));
-    if (coords_len (perp) > 1e-12) {
-      t1 = coords_scale (perp, 1.0 / coords_len (perp));
-    } else {
-      normal_vec (&t1.x, &t1.y, &t1.z, kh.x, kh.y, kh.z);
-    }
-    t2 = coords_xp (kh, t1);
-    phi = vonMises (conc);
-    q = coords_add (coords_scale (kh, x), coords_scale (coords_add (coords_scale (t1, cos (phi)), coords_scale (t2, sin (phi))), sqrt (1 - x * x)));
-    kf_out = coords_sub (ki, coords_scale (q, L->G));
-    kf[0] = kf_out.x;
-    kf[1] = kf_out.y;
-    kf[2] = kf_out.z;
-    return 0;
   }
 
   // Pole density series at (ct, phi)
@@ -1112,7 +980,7 @@ SHARE
     }
 
     // allocate hkl_data array
-    list = (struct hkl_data_texture*)calloc (size, sizeof (struct hkl_data_texture));
+    list = (struct hkl_data_texture*)malloc (size * sizeof (struct hkl_data_texture));
 
     // write the data to data structures
     for (i = 0; i < size; i++) {
@@ -1465,6 +1333,15 @@ SHARE
     Coords* hq;
     Rotation g, ops[48];
 
+    if (nOrient < 1) {
+      fprintf (stderr, "Texture_process: %s gives no orientations. Exit!\n", source);
+      exit (-1);
+    }
+    if (sigma <= 0) {
+      fprintf (stderr, "Texture_process: orientation_sigma must be positive. Exit!\n");
+      exit (-1);
+    }
+
     lmax = c->lmax >= 0 ? c->lmax : (int)ceil (sqrt (2 * log (1000.0)) / sigma);
     nx = lmax + 2;
     nphi = 2 * lmax + 4;
@@ -1562,9 +1439,9 @@ SHARE
     free (Bi);
   }
 
-  // Orientations in filename, given as Bunge Euler angles g = Rz (phi1) Rx (Phi) Rz (phi2), and their number in *n
-  Rotation*
-  ebsdOrientations (char* filename, long* n) {
+  // Fourier coefficients of the ODF of the orientations in filename, given as Bunge Euler angles g = Rz (phi1) Rx (Phi) Rz (phi2)
+  void
+  ebsdFourierCoef (char* filename, double sigma, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
     t_Table table;
     long i;
     double c1, s1, c2, s2, C, S;
@@ -1598,16 +1475,17 @@ SHARE
       orient[i][2][2] = C;
     }
 
-    *n = table.rows;
+    orientationFourierCoef (orient, table.rows, sigma, filename, info, c);
+
+    free (orient);
     Table_Free (&table);
-    return orient;
   }
 
-  // info->n_orient orientations, also in *n, drawn from the expressions info->rot_expr of the angles (deg)
+  // Fourier coefficients of the ODF of info->n_orient orientations drawn from the expressions info->rot_expr of the angles (deg)
   // about x, y and z, composed as ROTATED: g = Rx (rx) Ry (ry) Rz (rz), active, crystal axes to component axes.
   // u1, u2, u3 are drawn anew for each orientation from the McStas random generator, seeded from mcseed.
-  Rotation*
-  expressionOrientations (struct hkl_info_struct_texture* info, long* n) {
+  void
+  expressionFourierCoef (double sigma, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
     // values of u1, u2, u3, p1...p6 in the expressions
     const char* names[9] = { "u1", "u2", "u3", "p1", "p2", "p3", "p4", "p5", "p6" };
     double vars[9];
@@ -1673,60 +1551,12 @@ SHARE
       rot_transpose (t, orient[i_orient]);
     }
 
+    orientationFourierCoef (orient, info->n_orient, sigma, "rotation expressions", info, c);
+
+    free (orient);
     for (axis = 0; axis < 3; axis++) {
       te_free (expr[axis]);
     }
-    *n = info->n_orient;
-    return orient;
-  }
-
-  // Poles of the kernel density estimate: g s h for the orientations g and the distinct directions +-s h of each
-  // reflection h, for the lattice rotations s
-  void
-  kdePoles (Rotation* orient, long nOrient, double sigma, char* source, struct hkl_info_struct_texture* info) {
-    Rotation ops[48];
-    Coords h, v, img[96];
-    int nsym, i_hkl, i_sym, i_img, n_img, sgn, found;
-    long i_orient, n_total = 0;
-    double st;
-    struct hkl_data_texture* L;
-
-    nsym = latticeRotations (info, ops);
-    info->kde_kappa = 1 / (sigma * sigma);
-    for (i_hkl = 0; i_hkl < info->num_hkl; i_hkl++) {
-      L = info->list + i_hkl;
-      st = sqrt (fmax (0.0, 1 - L->Gct * L->Gct));
-      h = coords_set (st * cos (L->Gphi), st * sin (L->Gphi), L->Gct);
-      n_img = 0;
-      for (i_sym = 0; i_sym < nsym; i_sym++) {
-        for (sgn = -1; sgn <= 1; sgn += 2) {
-          v = coords_scale (rot_apply (ops[i_sym], h), sgn);
-          found = 0;
-          for (i_img = 0; i_img < n_img; i_img++) {
-            if (coords_sp (v, img[i_img]) > 1 - 1e-9) {
-              found = 1;
-            }
-          }
-          if (!found) {
-            img[n_img++] = v;
-          }
-        }
-      }
-      L->n_pole = nOrient * n_img;
-      L->pole = (Coords*)malloc (L->n_pole * sizeof (Coords));
-      if (!L->pole) {
-        fprintf (stderr, "Texture_process: Failed malloc() in kdePoles. Exit!\n");
-        exit (-1);
-      }
-      for (i_orient = 0; i_orient < nOrient; i_orient++) {
-        for (i_img = 0; i_img < n_img; i_img++) {
-          L->pole[i_orient * n_img + i_img] = rot_apply (orient[i_orient], img[i_img]);
-        }
-      }
-      n_total += L->n_pole;
-    }
-    printf ("Texture_process: %s: %ld orientations, %d lattice rotations, sigma = %g deg, kernel density estimate with %ld poles\n", source, nOrient,
-            nsym, sigma * RAD2DEG, n_total);
   }
 
   // end Input - Output
@@ -1809,10 +1639,7 @@ SHARE
   int
   initData (char* coef_fn, char* ebsd_fn, double orientation_sigma, char* crystal_fn, struct hkl_info_struct_texture* info) {
     int i, i_saved, nread;
-    long n_orient = 0;
-    Rotation* orient = NULL;
-    char* source = NULL;
-    struct fourier_coef* fc = NULL;
+    struct fourier_coef* fc;
     struct hkl_data_texture* L;
     struct kiCache* e;
     int use_coef = coef_fn && strlen (coef_fn) && strcmp (coef_fn, "0") && strcmp (coef_fn, "NULL");
@@ -1839,47 +1666,29 @@ SHARE
       return 1;
     }
 
-    // orientations of ebsd_fn or of the rotation expressions
-    if (use_ebsd || n_expr == 3) {
-      source = use_ebsd ? ebsd_fn : "the rotation expressions";
+    // get fourier coefficients of texture
+    fc = (struct fourier_coef*)malloc (sizeof (struct fourier_coef));
+    fc->lmax = info->lmax;
+    if (use_ebsd) {
       if (nread < 0) {
-        fprintf (stderr, "Texture_process: the orientations of %s need the lattice from crystal_fn. Exit!\n", source);
+        fprintf (stderr, "Texture_process: ebsd_fn needs the lattice from crystal_fn. Exit!\n");
         exit (-1);
       }
-      orient = use_ebsd ? ebsdOrientations (ebsd_fn, &n_orient) : expressionOrientations (info, &n_orient);
-      if (n_orient < 1) {
-        fprintf (stderr, "Texture_process: %s gives no orientations. Exit!\n", source);
+      ebsdFourierCoef (ebsd_fn, orientation_sigma * DEG2RAD, info, fc);
+    } else if (n_expr == 3) {
+      if (nread < 0) {
+        fprintf (stderr, "Texture_process: the rotation expressions need the lattice from crystal_fn. Exit!\n");
         exit (-1);
       }
-      if (orientation_sigma <= 0) {
-        fprintf (stderr, "Texture_process: orientation_sigma must be positive. Exit!\n");
-        exit (-1);
-      }
-    } else if (info->use_kde) {
-      fprintf (stderr, "Texture_process: kde = 1 needs the orientations of ebsd_fn or of the rotation expressions. Exit!\n");
-      exit (-1);
-    }
-
-    info->lgdr = NULL;
-    info->sqn = info->plm = info->cm = info->sm = NULL;
-    if (info->use_kde) {
-      kdePoles (orient, n_orient, orientation_sigma * DEG2RAD, source, info);
+      expressionFourierCoef (orientation_sigma * DEG2RAD, info, fc);
     } else {
-      // get fourier coefficients of texture
-      fc = (struct fourier_coef*)malloc (sizeof (struct fourier_coef));
-      fc->lmax = info->lmax;
-      if (orient) {
-        orientationFourierCoef (orient, n_orient, orientation_sigma * DEG2RAD, source, info, fc);
-      } else {
-        readFourierCoef (coef_fn, fc);
-      }
-      // the cut-off actually used: the file's lmax, or lmax_user if that is smaller
-      info->lmax = fc->lmax;
-
-      // precompute legendre associated functions
-      info->lgdr = initLegendre (fc->lmax);
+      readFourierCoef (coef_fn, fc);
     }
-    free (orient);
+    // the cut-off actually used: the file's lmax, or lmax_user if that is smaller
+    info->lmax = fc->lmax;
+
+    // precompute legendre associated functions
+    info->lgdr = initLegendre (fc->lmax);
 
     // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
     info->n_saved = 4;
@@ -1910,9 +1719,6 @@ SHARE
     L = info->list;
     for (i = 0; i < info->num_hkl; i++) {
       L[i].numNegativeXS = 0;
-    }
-    if (info->use_kde) {
-      return 0;
     }
 
     // V matrices for cross sections
@@ -2018,7 +1824,6 @@ SHARE
     Table_Free (&L->probQ);
     free (L->Ac);
     free (L->As);
-    free (L->pole);
 
     return 0;
   }
@@ -2058,12 +1863,10 @@ SHARE
       ki = sqrt (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
       kict = k[2] / ki;
       kiphi = atan2 (k[1], k[0]);
-      if (!info->use_kde) {
-        allPlgndrMod (info->lmax, fmin (1.0, fmax (-1.0, kict)), info->sqn, info->plm);
-        for (m = 0; m <= info->lmax; m++) {
-          info->cm[m] = cos (m * kiphi);
-          info->sm[m] = sin (m * kiphi);
-        }
+      allPlgndrMod (info->lmax, fmin (1.0, fmax (-1.0, kict)), info->sqn, info->plm);
+      for (m = 0; m <= info->lmax; m++) {
+        info->cm[m] = cos (m * kiphi);
+        info->sm[m] = sin (m * kiphi);
       }
 
       // reflections with G > 2 ki cannot scatter
@@ -2071,7 +1874,7 @@ SHARE
       cohXS = 0;
       for (i = 0; i < info->num_hkl && L[i].G <= 2 * ki; i++) {
         e->last_hkl = i;
-        e->XS_ki[i] = info->use_kde ? kde_hkl_XS (ki, coords_scale (e->ki, 1.0 / ki), L + i, info) : total_hkl_XS (ki, L + i, info);
+        e->XS_ki[i] = total_hkl_XS (ki, L + i, info);
         e->phi[i].built = 0;
         cohXS += e->XS_ki[i];
       }
@@ -2162,11 +1965,7 @@ SHARE
     }
 
     // sampling kprime
-    if (hkl_info->use_kde) {
-      sampleKprime_kde (kf, e->ki, L + j, hkl_info);
-    } else {
-      sampleKprime_hkl (kf, e->ki, e->phi + j, L + j, hkl_info);
-    }
+    sampleKprime_hkl (kf, e->ki, e->phi + j, L + j, hkl_info);
 
 
 
@@ -2213,11 +2012,6 @@ INITIALIZE
   // Texture initialize
 
   hkl_info_texture.flag_barns = 0;
-  if (kde != 0 && kde != 1) {
-    fprintf (stderr, "Texture_process: %s: kde must be 0 or 1. Exit!\n", NAME_CURRENT_COMP);
-    exit (-1);
-  }
-  hkl_info_texture.use_kde = kde;
   hkl_info_texture.wavelength_min = lambda_min;
   hkl_info_texture.use_mtex_axes = mtex_axes;
   hkl_info_texture.crys_axis[0] = coords_set (ax, ay, az);
