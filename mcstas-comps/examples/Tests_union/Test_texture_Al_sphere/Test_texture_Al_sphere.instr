@@ -52,7 +52,7 @@
 * use_expr=2 draws a texture that fills only the right half (x > 0) of the (111)
 * Debye-Scherrer cone, with the intensity of the whole cone of the powder, for a
 * monochromatic beam in the band where only (111) scatters, from 4.09 AA, e.g.
-* source_lmin = source_lmax = 4.3, lambda_min = 4.2. Only the direction of the {111} pole
+* source_lmin = source_lmax = 4.3. Only the direction of the {111} pole
 * that scatters matters: the crystal axes (a along (-sqrt 2, sqrt 3, -1), b along
 * (-sqrt 2, -sqrt 3, -1) in the process frame) put [111] along -x, and the process is
 * placed at ROTATED (0, -90, 0), so that its x axis is the beam. rot_y_expr tilts [111] away
@@ -77,7 +77,7 @@
 * %Test: use_odf=1 Detector: sphere_det_I=1.28146e-05
 * %Test: use_expr=1 Detector: sphere_det_I=1.30012e-05
 * %Test: use_powder=1 crystal=Al.laz Detector: sphere_det_single_I=1.18552e-05
-* %Test: use_expr=2 crystal=Al.laz source_lmin=4.3 source_lmax=4.3 lambda_min=4.2 orientation_sigma=6 lmax_user=-1 Detector: sphere_det_single_I=4.00468e-06
+* %Test: use_expr=2 crystal=Al.laz source_lmin=4.3 source_lmax=4.3 orientation_sigma=6 lmax_user=-1 Detector: sphere_det_single_I=4.00468e-06
 * %Test: reflection=1 Detector: sphere_det_I=6.22617e-06
 * %Test: reflection=2 Detector: sphere_det_I=2.60198e-06
 * %Test: reflection=3 Detector: sphere_det_I=1.12426e-06
