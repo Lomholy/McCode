@@ -81,8 +81,10 @@
 * estimate of the pole figures without a cut-off in l: each orientation g and each of the distinct directions
 * +-s h of a reflection h, for the lattice rotations s, gives a pole g s h, smoothed by the von Mises-Fisher
 * kernel exp (t / sigma^2) on the sphere, which has nearly the coefficients exp (-l (l + 1) sigma^2 / 2) of the
-* Gaussian kernel. The cross section and the direction of kf are exact for this kernel, but every new wavevector
-* sums over all poles of all reflections, which is slow.
+* Gaussian kernel. The cross section and the direction of kf are exact for this kernel, up to the kernels below
+* exp (-20) of their peak, farther than about 6.3 sigma from the Bragg circle, which are dropped. Every new wavevector
+* sums over the poles near the Bragg circle of each reflection, found from cells of about 2 sigma on the sphere,
+* so the time per neutron falls about as sigma, but stays far above that of the Fourier series.
 *
 * Algorithm:
 * Described elsewhere, see e.g. <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>
@@ -206,9 +208,14 @@ SHARE
     t_Table probQ;
     // number of negative cross sections from the truncated series
     double numNegativeXS;
-    // kernel density estimate: poles g s h of all orientations g and distinct directions s h
+    // kernel density estimate: poles g s h of all orientations g and distinct directions s h, sorted into cells on the
+    // sphere; the poles of cell i are pole[cell_start[i]] to pole[cell_start[i + 1] - 1]
     long n_pole;
     Coords* pole;
+    long n_cell;
+    long* cell_start;
+    Coords* cell_center; // mean direction of the poles of the cell
+    double* cell_radius; // largest angle of a pole of the cell from cell_center
   };
 
   struct hkl_info_struct_texture {
@@ -233,6 +240,7 @@ SHARE
 
     int use_kde;         // kernel density estimate of the pole figures instead of the Fourier series
     double kde_kappa;    // concentration 1 / sigma^2 of its von Mises-Fisher kernel
+    double kde_cos_cut;  // poles whose angle to the Bragg circle has a smaller cosine are dropped
     double tol_V;        // terms of V with a smaller modulus are dropped
     double* sqn;         // sqrt ((l - m)! / (l + m)!) at [l * (lmax + 1) + m]
     double* plm;         // plgndr_mod (l, m, kct) of the wavevector of the last cache fill, same index
@@ -636,32 +644,63 @@ SHARE
   }
 
   // Mean over the Bragg circle q.kh = x of the kernel exp (kappa (q.p - 1)) of the pole p, and in *conc the
-  // concentration of its von Mises distribution in the azimuth of q
+  // concentration of its von Mises distribution in the azimuth of q. c x + s is the cosine of the angle of p to the
+  // circle; the weight is 0 when it is below cos_cut.
   double
-  kdeWeight (Coords p, Coords kh, double x, double kappa, double* conc) {
+  kdeWeight (Coords p, Coords kh, double x, double kappa, double cos_cut, double* conc) {
     double c = coords_sp (p, kh);
     double s = sqrt (fmax (0.0, 1 - c * c) * (1 - x * x));
 
     if (conc) {
       *conc = kappa * s;
     }
+    if (c * x + s < cos_cut) {
+      return 0;
+    }
     return exp (kappa * (c * x + s - 1)) * besselI0e (kappa * s);
+  }
+
+  // Sum of the weights of the poles of L on the Bragg circle q.kh = x, skipping the cells that are farther from the circle
+  // than the cut. With j_sel, stops when the sum exceeds r and returns that pole in *j_sel, or the last pole of nonzero
+  // weight when the sum never exceeds r.
+  double
+  kdeBandSum (struct hkl_data_texture* L, Coords kh, double x, struct hkl_info_struct_texture* info, double r, long* j_sel) {
+    long i_cell, j;
+    double beta, w;
+    double sum = 0;
+    double theta = acos (x);
+    double delta = acos (fmax (-1.0, info->kde_cos_cut));
+
+    for (i_cell = 0; i_cell < L->n_cell; i_cell++) {
+      beta = acos (fmax (-1.0, fmin (1.0, coords_sp (L->cell_center[i_cell], kh))));
+      if (beta - L->cell_radius[i_cell] > theta + delta || beta + L->cell_radius[i_cell] < theta - delta) {
+        continue;
+      }
+      for (j = L->cell_start[i_cell]; j < L->cell_start[i_cell + 1]; j++) {
+        w = kdeWeight (L->pole[j], kh, x, info->kde_kappa, info->kde_cos_cut, NULL);
+        sum += w;
+        if (j_sel && w > 0) {
+          *j_sel = j;
+          if (sum > r) {
+            return sum;
+          }
+        }
+      }
+    }
+    return sum;
   }
 
   // Total cross section of L at wavevector k kh, with kh the unit vector, from the kernel density estimate
   double
   kde_hkl_XS (double k, Coords kh, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
-    long j;
     double kappa = info->kde_kappa;
     double x = (L->G) / (2 * k);
-    double sum = 0;
+    double sum;
 
     if (x > 1) {
       return 0;
     }
-    for (j = 0; j < L->n_pole; j++) {
-      sum += kdeWeight (L->pole[j], kh, x, kappa, NULL);
-    }
+    sum = kdeBandSum (L, kh, x, info, 0, NULL);
     // the pole density has mean 1 on the sphere: 4 pi times the kernel normalization kappa / (2 pi (1 - exp (-2 kappa)))
     return (L->mult) * (L->F2) / (4 * x) * 2 * kappa / (1 - exp (-2 * kappa)) * sum / L->n_pole;
   }
@@ -690,37 +729,23 @@ SHARE
   // weight on the Bragg circle, then the azimuth of q around ki from the von Mises distribution of that pole
   int
   sampleKprime_kde (double* kf, Coords ki, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
-    long j, j_sel = -1;
+    long j_sel = -1;
     double kim = coords_len (ki);
     double x = (L->G) / (2 * kim);
-    double kappa = info->kde_kappa;
-    double sum = 0, accum = 0, r, w, conc, phi;
+    double sum, conc, phi;
     Coords kh = coords_scale (ki, 1.0 / kim);
     Coords perp, t1, t2, q, kf_out;
 
-    for (j = 0; j < L->n_pole; j++) {
-      w = kdeWeight (L->pole[j], kh, x, kappa, NULL);
-      sum += w;
-      if (w > 0) {
-        j_sel = j;
-      }
-    }
+    // rand01 () can be 1: j_sel is then the last pole of nonzero weight
+    sum = kdeBandSum (L, kh, x, info, 0, NULL);
+    kdeBandSum (L, kh, x, info, rand01 () * sum, &j_sel);
     if (j_sel < 0) {
       fprintf (stderr, "Texture_process: no pole of hkl %d %d %d on the Bragg circle. Exit!\n", L->h, L->k, L->l);
       exit (-1);
     }
-    // rand01 () can be 1: j_sel stays the last pole of nonzero weight
-    r = rand01 () * sum;
-    for (j = 0; j < L->n_pole; j++) {
-      accum += kdeWeight (L->pole[j], kh, x, kappa, NULL);
-      if (accum > r) {
-        j_sel = j;
-        break;
-      }
-    }
 
     // q = x kh + sqrt (1 - x^2) (cos phi t1 + sin phi t2), with t1 towards the pole
-    kdeWeight (L->pole[j_sel], kh, x, kappa, &conc);
+    kdeWeight (L->pole[j_sel], kh, x, info->kde_kappa, -1.0, &conc);
     perp = coords_sub (L->pole[j_sel], coords_scale (kh, coords_sp (L->pole[j_sel], kh)));
     if (coords_len (perp) > 1e-12) {
       t1 = coords_scale (perp, 1.0 / coords_len (perp));
@@ -1680,19 +1705,99 @@ SHARE
     return orient;
   }
 
+  // Sorts the poles of L into n_ct x 2 n_ct cells uniform in cos (theta) and phi, and keeps the nonempty ones
+  void
+  kdeCells (struct hkl_data_texture* L, int n_ct) {
+    int n_phi = 2 * n_ct;
+    int i_ct, i_phi;
+    long n_grid = (long)n_ct * n_phi;
+    long i_grid, i_cell, j;
+    long *start, *next, *grid_of;
+    double radius;
+    Coords p, mean;
+    Coords* sorted;
+
+    start = (long*)calloc (n_grid + 1, sizeof (long));
+    next = (long*)malloc (n_grid * sizeof (long));
+    grid_of = (long*)malloc (L->n_pole * sizeof (long));
+    sorted = (Coords*)malloc (L->n_pole * sizeof (Coords));
+    if (!start || !next || !grid_of || !sorted) {
+      fprintf (stderr, "Texture_process: Failed malloc() in kdeCells. Exit!\n");
+      exit (-1);
+    }
+
+    // counting sort of the poles by grid cell
+    for (j = 0; j < L->n_pole; j++) {
+      p = L->pole[j];
+      i_ct = (int)fmin (n_ct - 1, fmax (0, (p.z + 1) / 2 * n_ct));
+      i_phi = (int)fmin (n_phi - 1, fmax (0, (atan2 (p.y, p.x) + PI) / (2 * PI) * n_phi));
+      grid_of[j] = (long)i_ct * n_phi + i_phi;
+      start[grid_of[j] + 1]++;
+    }
+    L->n_cell = 0;
+    for (i_grid = 0; i_grid < n_grid; i_grid++) {
+      if (start[i_grid + 1] > 0) {
+        L->n_cell++;
+      }
+      start[i_grid + 1] += start[i_grid];
+      next[i_grid] = start[i_grid];
+    }
+    for (j = 0; j < L->n_pole; j++) {
+      sorted[next[grid_of[j]]++] = L->pole[j];
+    }
+    free (L->pole);
+    L->pole = sorted;
+
+    L->cell_start = (long*)malloc ((L->n_cell + 1) * sizeof (long));
+    L->cell_center = (Coords*)malloc (L->n_cell * sizeof (Coords));
+    L->cell_radius = (double*)malloc (L->n_cell * sizeof (double));
+    if (!L->cell_start || !L->cell_center || !L->cell_radius) {
+      fprintf (stderr, "Texture_process: Failed malloc() in kdeCells. Exit!\n");
+      exit (-1);
+    }
+    i_cell = 0;
+    for (i_grid = 0; i_grid < n_grid; i_grid++) {
+      if (start[i_grid + 1] == start[i_grid]) {
+        continue;
+      }
+      mean = coords_set (0, 0, 0);
+      for (j = start[i_grid]; j < start[i_grid + 1]; j++) {
+        mean = coords_add (mean, L->pole[j]);
+      }
+      mean = coords_len (mean) > 0 ? coords_scale (mean, 1.0 / coords_len (mean)) : L->pole[start[i_grid]];
+      radius = 0;
+      for (j = start[i_grid]; j < start[i_grid + 1]; j++) {
+        radius = fmax (radius, acos (fmax (-1.0, fmin (1.0, coords_sp (L->pole[j], mean)))));
+      }
+      L->cell_start[i_cell] = start[i_grid];
+      L->cell_center[i_cell] = mean;
+      L->cell_radius[i_cell] = radius + 1e-9;
+      i_cell++;
+    }
+    L->cell_start[L->n_cell] = L->n_pole;
+
+    free (start);
+    free (next);
+    free (grid_of);
+  }
+
   // Poles of the kernel density estimate: g s h for the orientations g and the distinct directions +-s h of each
   // reflection h, for the lattice rotations s
   void
   kdePoles (Rotation* orient, long nOrient, double sigma, char* source, struct hkl_info_struct_texture* info) {
     Rotation ops[48];
     Coords h, v, img[96];
-    int nsym, i_hkl, i_sym, i_img, n_img, sgn, found;
-    long i_orient, n_total = 0;
+    int nsym, i_hkl, i_sym, i_img, n_img, sgn, found, n_ct;
+    long i_orient, n_total = 0, n_cells = 0;
     double st;
     struct hkl_data_texture* L;
 
     nsym = latticeRotations (info, ops);
     info->kde_kappa = 1 / (sigma * sigma);
+    // kernels below exp (-20) of their peak are dropped: those farther than about 6.3 sigma from the Bragg circle
+    info->kde_cos_cut = 1 - 20 / info->kde_kappa;
+    // cells of about 2 sigma
+    n_ct = (int)fmin (256, fmax (4, ceil (1 / sigma)));
     for (i_hkl = 0; i_hkl < info->num_hkl; i_hkl++) {
       L = info->list + i_hkl;
       st = sqrt (fmax (0.0, 1 - L->Gct * L->Gct));
@@ -1723,10 +1828,12 @@ SHARE
           L->pole[i_orient * n_img + i_img] = rot_apply (orient[i_orient], img[i_img]);
         }
       }
+      kdeCells (L, n_ct);
       n_total += L->n_pole;
+      n_cells += L->n_cell;
     }
-    printf ("Texture_process: %s: %ld orientations, %d lattice rotations, sigma = %g deg, kernel density estimate with %ld poles\n", source, nOrient,
-            nsym, sigma * RAD2DEG, n_total);
+    printf ("Texture_process: %s: %ld orientations, %d lattice rotations, sigma = %g deg, kernel density estimate with %ld poles in %ld cells\n",
+            source, nOrient, nsym, sigma * RAD2DEG, n_total, n_cells);
   }
 
   // end Input - Output
@@ -2019,6 +2126,9 @@ SHARE
     free (L->Ac);
     free (L->As);
     free (L->pole);
+    free (L->cell_start);
+    free (L->cell_center);
+    free (L->cell_radius);
 
     return 0;
   }
