@@ -196,6 +196,7 @@ SHARE
     // to sample kprime
     // precomputed Q distribution
     t_Table probQ;
+    double probQmax; // largest value of probQ
     // number of negative cross sections from the truncated series
     double numNegativeXS;
   };
@@ -225,6 +226,7 @@ SHARE
     double* plm;         // plgndr_mod (l, m, kct) of the wavevector of the last cache fill, same index
     double *cm, *sm;     // cos (m kphi) and sin (m kphi) of that wavevector
     int n_phi_points;    // points of the azimuthal sampling tables of kf
+    int phi_table;       // 1: azimuthal table of kf for each wavevector (lmax >= 20), 0: rejection on probQ directly
     int max_iter_reject; // tries of the rejection sampling of kf before giving up
 
     // everything computed for the last n_saved wavevectors, most recently used first,
@@ -539,7 +541,9 @@ SHARE
     return coords_add (cone, coords_scale (sp->kih, sp->ctheta));
   }
 
-  // Samples kf for reflection L and wavevector ki, building the table sp first if it is not built yet
+  // Samples kf for reflection L and wavevector ki by rejection on the pole density of q on the Bragg circle. With
+  // info->phi_table, the density is tabulated at n points the first time sp is used for a wavevector and bounded by
+  // its largest value there; otherwise it is read from probQ at each try and bounded by the largest value of probQ.
   int
   sampleKprime_hkl (double* kf, Coords ki, struct phiTable* sp, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
     int it, j;
@@ -547,13 +551,13 @@ SHARE
     double kdg, phi, p, p0, p1;
     double dphi = (2.0 * PI) / (n - 1);
     Coords q, kf_out;
+    Coords dir = coords_set (0, 0, 0);
 
+    kdg = coords_len (ki) / (L->G);
     if (!sp->built) {
       sp->built = 1;
       sp->kim = coords_len (ki);
       sp->kih = coords_scale (ki, 1.0 / sp->kim);
-
-      kdg = sp->kim / (L->G);
 
       sp->ctheta = 1.0 - 0.5 / (kdg * kdg);
       sp->stheta = sqrt (1.0 - sp->ctheta * sp->ctheta);
@@ -562,47 +566,61 @@ SHARE
       normal_vec (&sp->t1.x, &sp->t1.y, &sp->t1.z, sp->kih.x, sp->kih.y, sp->kih.z);
       sp->t2 = coords_xp (sp->kih, sp->t1);
 
-      // probability of the unitary scattering vector qh = kdg * (kih - kfh) at the n points, in aa
-      sp->maxProb = -1.0e99;
-      phi = -PI;
-      for (j = 0; j < n - 1; j++) {
-        q = coords_scale (coords_sub (sp->kih, kfDirection (sp, phi)), kdg);
-        sp->aa[j] = interp2D (q.z, atan2 (q.y, q.x), info->lgdr, &L->probQ);
-        if (sp->aa[j] > sp->maxProb) {
-          sp->maxProb = sp->aa[j];
+      if (info->phi_table) {
+        // probability of the unitary scattering vector qh = kdg * (kih - kfh) at the n points, in aa
+        sp->maxProb = -1.0e99;
+        phi = -PI;
+        for (j = 0; j < n - 1; j++) {
+          q = coords_scale (coords_sub (sp->kih, kfDirection (sp, phi)), kdg);
+          sp->aa[j] = interp2D (q.z, atan2 (q.y, q.x), info->lgdr, &L->probQ);
+          if (sp->aa[j] > sp->maxProb) {
+            sp->maxProb = sp->aa[j];
+          }
+          phi += dphi;
         }
-        phi += dphi;
-      }
-      sp->aa[n - 1] = sp->aa[0];
+        sp->aa[n - 1] = sp->aa[0];
 
-      // linear interpolation between the points
-      phi = -PI;
-      for (j = 0; j < n - 1; j++) {
-        p0 = sp->aa[j];
-        p1 = sp->aa[j + 1];
-        sp->aa[j] = p0 - phi * (p1 - p0) / dphi;
-        sp->bb[j] = (p1 - p0) / dphi;
-        phi += dphi;
+        // linear interpolation between the points
+        phi = -PI;
+        for (j = 0; j < n - 1; j++) {
+          p0 = sp->aa[j];
+          p1 = sp->aa[j + 1];
+          sp->aa[j] = p0 - phi * (p1 - p0) / dphi;
+          sp->bb[j] = (p1 - p0) / dphi;
+          phi += dphi;
+        }
       }
     }
 
     // rejection method
     for (it = 0; it < info->max_iter_reject; it++) {
       phi = -PI + 2 * PI * rand01 ();
-      // interpolate
-      j = (int)((PI + phi) / dphi);
-      p = sp->aa[j] + phi * sp->bb[j];
-      if (p / sp->maxProb > rand01 ()) {
-        kf_out = coords_scale (kfDirection (sp, phi), sp->kim);
-        kf[0] = kf_out.x;
-        kf[1] = kf_out.y;
-        kf[2] = kf_out.z;
-        return 0;
+      if (info->phi_table) {
+        j = (int)((PI + phi) / dphi);
+        p = sp->aa[j] + phi * sp->bb[j];
+        if (p / sp->maxProb > rand01 ()) {
+          dir = kfDirection (sp, phi);
+          break;
+        }
+      } else {
+        dir = kfDirection (sp, phi);
+        q = coords_scale (coords_sub (sp->kih, dir), kdg);
+        p = interp2D (q.z, atan2 (q.y, q.x), info->lgdr, &L->probQ);
+        if (p > rand01 () * L->probQmax) {
+          break;
+        }
       }
     }
+    if (it == info->max_iter_reject) {
+      fprintf (stderr, "Texture_process: too many iterations sampling hkl %d %d %d. Exit!\n", L->h, L->k, L->l);
+      exit (-1);
+    }
 
-    fprintf (stderr, "Texture_process: too many iterations sampling hkl %d %d %d. Exit!\n", L->h, L->k, L->l);
-    exit (-1);
+    kf_out = coords_scale (dir, sp->kim);
+    kf[0] = kf_out.x;
+    kf[1] = kf_out.y;
+    kf[2] = kf_out.z;
+    return 0;
   }
 
   // Pole density series at (ct, phi)
@@ -1639,6 +1657,7 @@ SHARE
   int
   initData (char* coef_fn, char* ebsd_fn, double orientation_sigma, char* crystal_fn, struct hkl_info_struct_texture* info) {
     int i, i_saved, nread;
+    long j;
     struct fourier_coef* fc;
     struct hkl_data_texture* L;
     struct kiCache* e;
@@ -1690,6 +1709,9 @@ SHARE
     // precompute legendre associated functions
     info->lgdr = initLegendre (fc->lmax);
 
+    // below lmax = 20 the pole density of kf is read from probQ at each try instead of tabulated for each wavevector
+    info->phi_table = info->lmax >= 20;
+
     // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
     info->n_saved = 4;
     info->saved = (struct kiCache*)calloc (info->n_saved, sizeof (struct kiCache));
@@ -1706,7 +1728,7 @@ SHARE
         fprintf (stderr, "Texture_process: Failed malloc() in initData. Exit!\n");
         exit (-1);
       }
-      for (i = 0; i < info->num_hkl; i++) {
+      for (i = 0; i < info->num_hkl && info->phi_table; i++) {
         e->phi[i].aa = (double*)malloc (info->n_phi_points * sizeof (double));
         e->phi[i].bb = (double*)malloc (info->n_phi_points * sizeof (double));
         if (!e->phi[i].aa || !e->phi[i].bb) {
@@ -1731,6 +1753,10 @@ SHARE
     L = info->list;
     for (i = 0; i < info->num_hkl; i++) {
       fillPoleTable (&L[i].probQ, L + i, info->lgdr);
+      L[i].probQmax = L[i].probQ.data[0];
+      for (j = 1; j < L[i].probQ.rows * L[i].probQ.columns; j++) {
+        L[i].probQmax = fmax (L[i].probQmax, L[i].probQ.data[j]);
+      }
     }
 
     // coefficients of the total cross sections, and the harmonics of one wavevector
