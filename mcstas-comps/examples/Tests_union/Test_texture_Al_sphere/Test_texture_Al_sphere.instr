@@ -53,13 +53,15 @@
 * Debye-Scherrer cone, with the intensity of the whole cone of the powder, for a
 * monochromatic beam in the band where only (111) scatters, e.g. source_lmin =
 * source_lmax = 4.3, lambda_min = 4.2. The (111) poles that can reach the Bragg cone lie
-* within 90 deg - theta = 23 deg of -z, so at most one pole of a grain can scatter. The
-* orientations are uniform rotations whose lowest {111} pole is turned about the beam
-* to an azimuth uniform in -90...90 deg: the pole density on the cone is 2 on the right
-* and 0 on the left. The expressions give these orientations in the rotation order of
-* Texture_process, g = Rx (rx) Ry (ry) Rz (rz). The kernel smears the poles across the
-* boundary; with orientation_sigma = 6 and lmax_user = -1, about 90% of the cone is on
-* the right.
+* within 90 deg - theta = 23 deg of -z, so at most one pole of a grain can scatter: its
+* lowest {111} pole along the beam. The process is placed at ROTATED (0, -90, 0), so that
+* its x axis is the beam and rot_x_expr, applied last in g = Rx (rx) Ry (ry) Rz (rz), turns
+* the grain about the beam. rot_z_expr and rot_y_expr give uniform rotations, reduced by the
+* cubic symmetry to rz in 0...90 deg and ry in 0...90 deg, for which the lowest pole is
+* (-1, 1, -1)/sqrt 3; the atan2 term of rot_x_expr is its azimuth about the beam, and
+* -180*u1 turns it to an azimuth on the right. The pole density on the cone is 2 on the
+* right and 0 on the left. The kernel smears the poles across the boundary; with
+* orientation_sigma = 6 and lmax_user = -1, about 92% of the cone is on the right.
 *
 * use_powder=1 replaces the sphere by one of the same size with Powder_process reading
 * crystal, which must then be a LAZ file. With crystal = "Al.laz", sphere_det_single of
@@ -73,7 +75,7 @@
 * %Test: use_odf=1 Detector: sphere_det_I=1.28146e-05
 * %Test: use_expr=1 Detector: sphere_det_I=1.30012e-05
 * %Test: use_powder=1 crystal=Al.laz Detector: sphere_det_single_I=1.18552e-05
-* %Test: use_expr=2 crystal=Al.laz source_lmin=4.3 source_lmax=4.3 lambda_min=4.2 orientation_sigma=6 lmax_user=-1 Detector: sphere_det_single_I=3.31188e-06
+* %Test: use_expr=2 crystal=Al.laz source_lmin=4.3 source_lmax=4.3 lambda_min=4.2 orientation_sigma=6 lmax_user=-1 Detector: sphere_det_single_I=3.25319e-06
 * %Test: reflection=1 Detector: sphere_det_I=6.22617e-06
 * %Test: reflection=2 Detector: sphere_det_I=2.60198e-06
 * %Test: reflection=3 Detector: sphere_det_I=1.12426e-06
@@ -123,7 +125,7 @@ INITIALIZE
   }
   lambda_tol = dlambda_rel;
 
-  // rotation expressions of use_expr = 1 (powder) and 2 (right half of the (111) cone)
+  // rotation expressions of use_expr = 1 (powder) and 2 (right half of the (111) cone, process frame with x along the beam)
   rot_x = "";
   rot_y = "";
   rot_z = "";
@@ -132,9 +134,9 @@ INITIALIZE
     rot_y = "asin(2*u2-1)*180/pi";
     rot_z = "180*u3";
   } else if (use_expr == 2) {
-    rot_x = "atan2(cos(pi*u3-pi/2-atan2(sin(2*pi*u1)*cos(2*pi*u1)*(1/abs(cos(2*pi*u1))-1/abs(sin(2*pi*u1))),2*sqrt(u2*(1-u2))*(2*u2-1)/abs((2*u2-1))-(2*u2-1)*(abs(sin(2*pi*u1))+abs(cos(2*pi*u1)))))*sin(2*pi*u1)-sin(pi*u3-pi/2-atan2(sin(2*pi*u1)*cos(2*pi*u1)*(1/abs(cos(2*pi*u1))-1/abs(sin(2*pi*u1))),2*sqrt(u2*(1-u2))*(2*u2-1)/abs((2*u2-1))-(2*u2-1)*(abs(sin(2*pi*u1))+abs(cos(2*pi*u1)))))*(2*u2-1)*cos(2*pi*u1),2*sqrt(u2*(1-u2))*cos(2*pi*u1))*180/pi";
-    rot_y = "asin(sin(pi*u3-pi/2-atan2(sin(2*pi*u1)*cos(2*pi*u1)*(1/abs(cos(2*pi*u1))-1/abs(sin(2*pi*u1))),2*sqrt(u2*(1-u2))*(2*u2-1)/abs((2*u2-1))-(2*u2-1)*(abs(sin(2*pi*u1))+abs(cos(2*pi*u1)))))*sin(2*pi*u1)+cos(pi*u3-pi/2-atan2(sin(2*pi*u1)*cos(2*pi*u1)*(1/abs(cos(2*pi*u1))-1/abs(sin(2*pi*u1))),2*sqrt(u2*(1-u2))*(2*u2-1)/abs((2*u2-1))-(2*u2-1)*(abs(sin(2*pi*u1))+abs(cos(2*pi*u1)))))*(2*u2-1)*cos(2*pi*u1))*180/pi";
-    rot_z = "atan2(sin(pi*u3-pi/2-atan2(sin(2*pi*u1)*cos(2*pi*u1)*(1/abs(cos(2*pi*u1))-1/abs(sin(2*pi*u1))),2*sqrt(u2*(1-u2))*(2*u2-1)/abs((2*u2-1))-(2*u2-1)*(abs(sin(2*pi*u1))+abs(cos(2*pi*u1)))))*cos(2*pi*u1)-cos(pi*u3-pi/2-atan2(sin(2*pi*u1)*cos(2*pi*u1)*(1/abs(cos(2*pi*u1))-1/abs(sin(2*pi*u1))),2*sqrt(u2*(1-u2))*(2*u2-1)/abs((2*u2-1))-(2*u2-1)*(abs(sin(2*pi*u1))+abs(cos(2*pi*u1)))))*(2*u2-1)*sin(2*pi*u1),cos(pi*u3-pi/2-atan2(sin(2*pi*u1)*cos(2*pi*u1)*(1/abs(cos(2*pi*u1))-1/abs(sin(2*pi*u1))),2*sqrt(u2*(1-u2))*(2*u2-1)/abs((2*u2-1))-(2*u2-1)*(abs(sin(2*pi*u1))+abs(cos(2*pi*u1)))))*2*sqrt(u2*(1-u2)))*180/pi";
+    rot_x = "-180*u1-atan2(u2*(cos(pi*u3/2)+sin(pi*u3/2))-sqrt(1-u2*u2),cos(pi*u3/2)-sin(pi*u3/2))*180/pi";
+    rot_y = "asin(u2)*180/pi";
+    rot_z = "90*u3";
   }
   d_hkl = reflection == 1 ? a / sqrt (3) : reflection == 2 ? a / 2 : a / sqrt (8);
 %}
@@ -172,6 +174,7 @@ COMPONENT texture = Texture_process(
     rot_x_expr = rot_x, rot_y_expr = rot_y, rot_z_expr = rot_z,
     orientation_sigma = orientation_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = 1
 ) AT (0, 0, 0) RELATIVE arm_sample
+ROTATED (0, (use_expr == 2 ? -90 : 0), 0) RELATIVE arm_sample
 
 COMPONENT texture_mat = Union_make_material(
     my_absorption = 0, process_string = "texture"
