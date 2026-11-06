@@ -108,6 +108,12 @@ DECLARE
   char* rot_x;
   char* rot_y;
   char* rot_z;
+  char* odf_file;
+  char* ebsd_file;
+  char* powder_file;
+  double axis_a[3];
+  double axis_b[3];
+  double process_tilt;
   double det_r;
   double d_hkl;
   double lambda_tol;
@@ -140,7 +146,43 @@ INITIALIZE
     rot_y = "acos(1-u2/4)*180/pi";
     rot_z = "0";
   }
-  d_hkl = reflection == 1 ? a / sqrt (3) : reflection == 2 ? a / 2 : a / sqrt (8);
+
+  // texture input of Texture_process: rotation expressions, else the ODF file or the EBSD map
+  odf_file = "0";
+  ebsd_file = "0";
+  if (!use_expr && use_odf) {
+    odf_file = "Al_mtexdata_alu_ODF.txt";
+  } else if (!use_expr) {
+    ebsd_file = "Al_mtexdata_alu_EBSD.txt";
+  }
+
+  // crystal axes and process placement of use_expr = 2: [111] along -x of the process, whose x axis is the beam
+  axis_a[0] = axis_a[1] = axis_a[2] = 0;
+  axis_b[0] = axis_b[1] = axis_b[2] = 0;
+  process_tilt = 0;
+  if (use_expr == 2) {
+    axis_a[0] = -sqrt (2);
+    axis_a[1] = sqrt (3);
+    axis_a[2] = -1;
+    axis_b[0] = -sqrt (2);
+    axis_b[1] = -sqrt (3);
+    axis_b[2] = -1;
+    process_tilt = -90;
+  }
+
+  // Powder_process only reads crystal for use_powder = 1, as it does not read NCrystal materials
+  powder_file = "NULL";
+  if (use_powder) {
+    powder_file = crystal;
+  }
+
+  if (reflection == 1) {
+    d_hkl = a / sqrt (3);
+  } else if (reflection == 2) {
+    d_hkl = a / 2;
+  } else {
+    d_hkl = a / sqrt (8);
+  }
 %}
 
 TRACE
@@ -172,21 +214,19 @@ COMPONENT arm_sample = Arm(
 
 COMPONENT texture = Texture_process(
     crystal_fn = crystal, barns = 1,
-    fcoef_fn = (!use_expr && use_odf ? "Al_mtexdata_alu_ODF.txt" : "0"), ebsd_fn = (!use_expr && !use_odf ? "Al_mtexdata_alu_EBSD.txt" : "0"),
+    fcoef_fn = odf_file, ebsd_fn = ebsd_file,
     rot_x_expr = rot_x, rot_y_expr = rot_y, rot_z_expr = rot_z,
     orientation_sigma = orientation_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = (use_expr != 2),
-    ax = (use_expr == 2 ? -sqrt (2) : 0), ay = (use_expr == 2 ? sqrt (3) : 0), az = (use_expr == 2 ? -1 : 0),
-    bx = (use_expr == 2 ? -sqrt (2) : 0), by = (use_expr == 2 ? -sqrt (3) : 0), bz = (use_expr == 2 ? -1 : 0)
+    ax = axis_a[0], ay = axis_a[1], az = axis_a[2], bx = axis_b[0], by = axis_b[1], bz = axis_b[2]
 ) AT (0, 0, 0) RELATIVE arm_sample
-ROTATED (0, (use_expr == 2 ? -90 : 0), 0) RELATIVE arm_sample
+ROTATED (0, process_tilt, 0) RELATIVE arm_sample
 
 COMPONENT texture_mat = Union_make_material(
     my_absorption = 0, process_string = "texture"
 ) AT (0, 0, 0) RELATIVE arm_sample
 
-// Powder_process reads crystal only for use_powder = 1, as it does not read NCrystal materials
 COMPONENT powder = Powder_process(
-    reflections = (use_powder ? crystal : "NULL"), barns = 1, packing_factor = 1
+    reflections = powder_file, barns = 1, packing_factor = 1
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT powder_mat = Union_make_material(
@@ -224,7 +264,7 @@ COMPONENT sphere_det = Monitor_nD(
     options = "sphere theta limits=[-180 180] bins=360 phi limits=[-90 90] bins=180",
     filename = "sphere_det",
     restore_neutron = 1
-) WHEN (reflection == 0 ? scattered >= 1 : in_reflection)
+) WHEN ((reflection == 0 && scattered >= 1) || (reflection != 0 && in_reflection))
 AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT sphere_det_single = Monitor_nD(
@@ -232,7 +272,7 @@ COMPONENT sphere_det_single = Monitor_nD(
     options = "sphere theta limits=[-180 180] bins=360 phi limits=[-90 90] bins=180",
     filename = "sphere_det_single",
     restore_neutron = 1
-) WHEN (reflection == 0 ? scattered == 1 : in_reflection)
+) WHEN ((reflection == 0 && scattered == 1) || (reflection != 0 && in_reflection))
 AT (0, 0, 0) RELATIVE arm_sample
 
 END
