@@ -800,16 +800,26 @@ SHARE
     int i_first, i_second; // the first two lattice vectors placed by crys_axis
     int n_given;           // number of lattice vectors placed by crys_axis
     Rotation R;
+    t_Table* cached;
+    int from_cache = 0; // sTable is a cache entry (found or just stored): never Table_Free it
 
     if (!SC_file || !strlen (SC_file) || !strcmp (SC_file, "NULL") || !strcmp (SC_file, "0")) {
       info->num_hkl = 0;
       return -1;
     }
 
-    // Read the table
+    // Read the table. The CIF/NCrystal path builds the table from NCrystal directly
+    // instead of through Table_Read, so it is cached here by hand under block_number 0:
+    // repeated crystal_fn across Texture_process instances skips re-running NCrystal
+    // (and, for a CIF file, re-running ncrystal_cif2ncmat).
 
     ext = strrchr (SC_file, '.');
-    if (ext && !strcasecmp (ext, ".cif")) {
+    cached = Table_File_List_find (SC_file, 0, 0);
+    if (cached != NULL) {
+      sTable = *cached;
+      info->flag_barns = 1;
+      from_cache = 1;
+    } else if (ext && !strcasecmp (ext, ".cif")) {
       filename = cif2ncmat_texture (SC_file);
       if (!filename) {
         return 0;
@@ -818,9 +828,17 @@ SHARE
       remove (filename);
       free (filename);
       info->flag_barns = 1;
+      strncpy (sTable.filename, SC_file, sizeof (sTable.filename) - 1);
+      sTable.filename[sizeof (sTable.filename) - 1] = '\0';
+      Table_File_List_store (&sTable);
+      from_cache = 1;
     } else if (strstr (SC_file, ".ncmat") != NULL || strstr (SC_file, "::") != NULL) {
       read_hkl_table_ncrystal_texture (SC_file, &sTable);
       info->flag_barns = 1;
+      strncpy (sTable.filename, SC_file, sizeof (sTable.filename) - 1);
+      sTable.filename[sizeof (sTable.filename) - 1] = '\0';
+      Table_File_List_store (&sTable);
+      from_cache = 1;
     } else if (Table_Read (&sTable, SC_file, 1) <= 0) { // read 1st block data from SC_file into sTable
       fprintf (stderr, "Texture: Error: Could not read reflections from %s\n", SC_file);
       return 0;
@@ -828,12 +846,16 @@ SHARE
     if (sTable.columns < 5) {
       fprintf (stderr, "Texture: Error: The number of columns in %s should be", SC_file);
       fprintf (stderr, " at least %d for [h,k,l,F2,j]\n", 5);
-      Table_Free (&sTable);
+      if (!from_cache) {
+        Table_Free (&sTable);
+      }
       return (0);
     }
     if (!sTable.rows) {
       fprintf (stderr, "Texture: Error: The number of rows in %s should be at least %d\n", SC_file, 1);
-      Table_Free (&sTable);
+      if (!from_cache) {
+        Table_Free (&sTable);
+      }
       return 0;
     } else {
       size = sTable.rows;
@@ -871,7 +893,9 @@ SHARE
     // parameters consistency checks
     if (!m_a) {
       fprintf (stderr, "Texture: Error: Wrong a lattice vector definition\n");
-      Table_Free (&sTable);
+      if (!from_cache) {
+        Table_Free (&sTable);
+      }
       return (0);
     }
 
@@ -948,12 +972,16 @@ SHARE
 
     if (!column_order[0] || !column_order[1] || !column_order[2]) {
       fprintf (stderr, "Texture: Error: Wrong h,k,l column definition\n");
-      Table_Free (&sTable);
+      if (!from_cache) {
+        Table_Free (&sTable);
+      }
       return (0);
     }
     if (!column_order[3] && !column_order[4]) {
       fprintf (stderr, "Texture: Error: Wrong F,F2 column definition\n");
-      Table_Free (&sTable);
+      if (!from_cache) {
+        Table_Free (&sTable);
+      }
       return (0);
     }
 
@@ -985,7 +1013,13 @@ SHARE
       list[i].Gphi = atan2 (Gy / list[i].G, Gx / list[i].G);
     }
 
-    Table_Free (&sTable);
+    // ponytail: a table cached by Table_File_List_store above is kept for the rest of the
+    // process, not freed here or anywhere later, so that the next Texture_process sharing
+    // this crystal_fn still finds it; upgrade path: free it in free_texture if that leak
+    // (one small table per distinct crystal_fn) ever matters.
+    if (!from_cache) {
+      Table_Free (&sTable);
+    }
 
     // sort the list with increasing G
     qsort (list, i, sizeof (struct hkl_data_texture), SX_list_compare_texture);
