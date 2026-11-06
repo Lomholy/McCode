@@ -25,7 +25,7 @@
 * ODF and another one with crystallographic and physical information.
 *
 *
-* CIF and NCrystal inputs can give hundreds of reflections, and the tables use about 1 MB per l for
+* CIF and NCrystal inputs can give hundreds of reflections, and the tables use about 1 MB for
 * each reflection, so set lambda_min, or dcutoff in the NCrystal cfg-string, to what the instrument reaches.
 * An NCrystal material must have one crystalline phase and no orientation, as that is given by the
 * placement of the component. CIF files are converted with ncrystal_cif2ncmat, which needs the Python
@@ -187,9 +187,8 @@ SHARE
     int mult;             // Multiplicity of the line
     double F2;            // Value of square of structure factor
     double G, Gct, Gphi;  // polar coordinates of G [Gct=cos(theta)]
-    // to interpolate the total cross section
-    int lmax;
-    t_Table* Upsilon_l;
+    // total cross section: sum_m plgndr_mod (l, m, kct) (Ac cos (m kphi) + As sin (m kphi)) at [l * (lmax + 1) + m], m >= 0
+    double *Ac, *As;
     // To obtain cross sections
     int numV;
     int *lv, *mv;
@@ -222,6 +221,9 @@ SHARE
     double xs2mu; // cross section to mu (in m^-1)
 
     double tol_V;        // terms of V with a smaller modulus are dropped
+    double* sqn;         // sqrt ((l - m)! / (l + m)!) at [l * (lmax + 1) + m]
+    double* plm;         // plgndr_mod (l, m, kct) of the wavevector of the last cache fill, same index
+    double *cm, *sm;     // cos (m kphi) and sin (m kphi) of that wavevector
     int n_phi_points;    // points of the azimuthal sampling tables of kf
     int max_iter_reject; // tries of the rejection sampling of kf before giving up
 
@@ -240,14 +242,14 @@ SHARE
   // intialization
   int initData (char* coef_fn, char* ebsd_fn, double orientation_sigma, char* crystal_fn, struct hkl_info_struct_texture* info);
   // cross sections
-  double total_hkl_XS_interp (double k, double kct, double kphi, struct hkl_data_texture* L, struct legendre* lgdr);
-  int precomputeUpsilon_l (struct hkl_data_texture* L, struct legendre* lgdr);
+  double total_hkl_XS (double k, struct hkl_data_texture* L, struct hkl_info_struct_texture* info);
+  void xsCoefficients (struct hkl_data_texture* L, int lmax);
   int computeV (struct fourier_coef* fc, struct hkl_data_texture* L, double tol);
   // sampling
   int sampleKprime_hkl (double* kf, Coords ki, struct phiTable* sp, struct hkl_data_texture* L, struct hkl_info_struct_texture* info);
   struct kiCache* kiEntry (double* k, struct hkl_info_struct_texture* info);
-  double poleSeries (double ct, double phi, int lsel, struct hkl_data_texture* L, struct legendre* lgdr);
-  void fillPoleTable (t_Table* table, int lsel, struct hkl_data_texture* L, struct legendre* lgdr);
+  double poleSeries (double ct, double phi, struct hkl_data_texture* L, struct legendre* lgdr);
+  void fillPoleTable (t_Table* table, struct hkl_data_texture* L, struct legendre* lgdr);
   // Input - Output
   int read_hkl_data_texture (char* SC_file, struct hkl_info_struct_texture* info);
   void readFourierCoef (char* filename, struct fourier_coef* c);
@@ -381,23 +383,35 @@ SHARE
   ////// Cross sections     ///
   /////////////////////////////
 
+  // Total cross section of L at wavevector modulus k, with info->plm, cm, sm filled for its direction
   double
-  total_hkl_XS_interp (double k, double kct, double kphi, struct hkl_data_texture* L, struct legendre* lgdr) {
-    int l;
+  total_hkl_XS (double k, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
+    int l, m;
+    int n = info->lmax + 1;
     double x = (L->G) / (2 * k);
-    double XS, pl, Ul;
+    double XS, ul, pl, pl_prev, pl_next;
+    double *Ac, *As, *plm;
 
     if (x > 1) {
-      XS = 0;
-      return XS;
+      return 0;
     }
 
+    // XS = 1 + sum_l P_l (x) Upsilon_l (kct, kphi), with the Legendre polynomials P_l from their recurrence
     XS = 1.0;
-    for (l = 1; l <= L->lmax; l++) {
-      // l-th legendre polynomial evaluated at x, Pl(x)
-      pl = plmValue (l, 0, x, lgdr);
-      Ul = interp2D (kct, kphi, lgdr, L->Upsilon_l + l);
-      XS += pl * Ul;
+    pl_prev = 1.0;
+    pl = x;
+    for (l = 1; l <= info->lmax; l++) {
+      Ac = L->Ac + l * n;
+      As = L->As + l * n;
+      plm = info->plm + l * n;
+      ul = 0;
+      for (m = 0; m <= l; m++) {
+        ul += plm[m] * (Ac[m] * info->cm[m] + As[m] * info->sm[m]);
+      }
+      XS += pl * ul;
+      pl_next = ((2 * l + 1) * x * pl - l * pl_prev) / (l + 1);
+      pl_prev = pl;
+      pl = pl_next;
     }
 
     if (XS < 0) {
@@ -410,21 +424,31 @@ SHARE
     // and then applied only at the end
     XS *= (L->mult) * (L->F2) / (4 * x);
 
-
     return XS;
   }
 
-  int
-  precomputeUpsilon_l (struct hkl_data_texture* L, struct legendre* lgdr) {
-    int l;
+  // Ac, As of L from its V terms, with plgndr_mod (l, -m) = (-1)^m plgndr_mod (l, m)
+  void
+  xsCoefficients (struct hkl_data_texture* L, int lmax) {
+    int i, l, m, ma;
+    int n = lmax + 1;
+    double s;
 
-    L->Upsilon_l = (t_Table*)malloc ((L->lmax + 1) * sizeof (t_Table));
-
-    for (l = 1; l <= L->lmax; l++) {
-      fillPoleTable (L->Upsilon_l + l, l, L, lgdr);
+    L->Ac = (double*)calloc (n * n, sizeof (double));
+    L->As = (double*)calloc (n * n, sizeof (double));
+    if (!L->Ac || !L->As) {
+      fprintf (stderr, "Texture_process: Failed malloc() in xsCoefficients. Exit!\n");
+      exit (-1);
     }
-
-    return 0;
+    for (i = 0; i < L->numV; i++) {
+      l = L->lv[i];
+      m = L->mv[i];
+      ma = abs (m);
+      s = (m < 0 && ma % 2) ? -1 : 1;
+      // cos (phiV - m kphi) = cos phiV cos (m kphi) + sin phiV sin (m kphi)
+      L->Ac[l * n + ma] += s * L->RV[i] * cos (L->phiV[i]);
+      L->As[l * n + ma] += s * (m < 0 ? -1 : 1) * L->RV[i] * sin (L->phiV[i]);
+    }
   }
 
   int
@@ -581,18 +605,16 @@ SHARE
     exit (-1);
   }
 
-  // Pole density series at (ct, phi): the terms of order lsel, or all terms when lsel < 0
+  // Pole density series at (ct, phi)
   double
-  poleSeries (double ct, double phi, int lsel, struct hkl_data_texture* L, struct legendre* lgdr) {
+  poleSeries (double ct, double phi, struct hkl_data_texture* L, struct legendre* lgdr) {
     int i;
     double plm;
     double sum = 0;
 
     for (i = 0; i < L->numV; i++) {
-      if (lsel < 0 || L->lv[i] == lsel) {
-        plm = plmValue (L->lv[i], L->mv[i], ct, lgdr);
-        sum += L->RV[i] * plm * cos (L->phiV[i] - L->mv[i] * phi);
-      }
+      plm = plmValue (L->lv[i], L->mv[i], ct, lgdr);
+      sum += L->RV[i] * plm * cos (L->phiV[i] - L->mv[i] * phi);
     }
 
     return sum;
@@ -600,13 +622,13 @@ SHARE
 
   // Allocates and fills a table of poleSeries on the axes of the pole density tables
   void
-  fillPoleTable (t_Table* table, int lsel, struct hkl_data_texture* L, struct legendre* lgdr) {
+  fillPoleTable (t_Table* table, struct hkl_data_texture* L, struct legendre* lgdr) {
     int i, j;
 
     Table_Init (table, lgdr->n_ct, lgdr->n_phi);
     for (i = 0; i < lgdr->n_ct; i++) {
       for (j = 0; j < lgdr->n_phi; j++) {
-        table->data[i * lgdr->n_phi + j] = poleSeries (lgdr->ctAxis[i], lgdr->phiAxis[j], lsel, L, lgdr);
+        table->data[i * lgdr->n_phi + j] = poleSeries (lgdr->ctAxis[i], lgdr->phiAxis[j], L, lgdr);
       }
     }
   }
@@ -1146,6 +1168,23 @@ SHARE
     }
   }
 
+  // sqn[l * (lmax + 1) + m] = sqrt ((l - m)! / (l + m)!) for 0 <= m <= l <= lmax
+  void
+  legendreNorms (int lmax, double* sqn) {
+    int l, m, k;
+    double norm;
+
+    for (l = 0; l <= lmax; l++) {
+      for (m = 0; m <= l; m++) {
+        norm = 1.0;
+        for (k = l + m; k > l - m; k--) {
+          norm /= k;
+        }
+        sqn[l * (lmax + 1) + m] = sqrt (norm);
+      }
+    }
+  }
+
   // plgndr_mod (l, m, x) for 0 <= m <= l <= lmax at p[l * (lmax + 1) + m], with sqn = sqrt ((l - m)! / (l + m)!) at the same index
   void
   allPlgndrMod (int lmax, double x, double* sqn, double* p) {
@@ -1290,7 +1329,7 @@ SHARE
   orientationFourierCoef (Rotation* orient, long nOrient, double sigma, char* source, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
     int lmax, nx, nphi, nq, nh, nsym, i, j, l, m, n, k, d;
     double *xg, *wg, *wq, *sqn, *p, *Fr, *Fi, *Gr, *Gi, *Sr, *Si, *Ar, *Ai, *Br, *Bi;
-    double norm, kappa, st, sr, si;
+    double kappa, st, sr, si;
     Coords* hq;
     Rotation g, ops[48];
 
@@ -1339,15 +1378,7 @@ SHARE
         wq[i * nphi + j] = wg[i] * 2 * PI / nphi;
       }
     }
-    for (l = 0; l <= lmax; l++) {
-      for (m = 0; m <= l; m++) {
-        norm = 1.0;
-        for (k = l + m; k > l - m; k--) {
-          norm /= k;
-        }
-        sqn[l * (lmax + 1) + m] = sqrt (norm);
-      }
-    }
+    legendreNorms (lmax, sqn);
 
     for (i = 0; i < nOrient; i++) {
       addHarmonics (orient[i], lmax, nq, hq, sqn, p, Fr, Fi);
@@ -1699,15 +1730,23 @@ SHARE
     // precompute the probability distribution of Q
     L = info->list;
     for (i = 0; i < info->num_hkl; i++) {
-      fillPoleTable (&L[i].probQ, -1, L + i, info->lgdr);
+      fillPoleTable (&L[i].probQ, L + i, info->lgdr);
     }
 
-    // precompute Upsilon_l
+    // coefficients of the total cross sections, and the harmonics of one wavevector
     L = info->list;
     for (i = 0; i < info->num_hkl; i++) {
-      L[i].lmax = info->lmax;
-      precomputeUpsilon_l (L + i, info->lgdr);
+      xsCoefficients (L + i, info->lmax);
     }
+    info->sqn = (double*)malloc ((info->lmax + 1) * (info->lmax + 1) * sizeof (double));
+    info->plm = (double*)malloc ((info->lmax + 1) * (info->lmax + 1) * sizeof (double));
+    info->cm = (double*)malloc ((info->lmax + 1) * sizeof (double));
+    info->sm = (double*)malloc ((info->lmax + 1) * sizeof (double));
+    if (!info->sqn || !info->plm || !info->cm || !info->sm) {
+      fprintf (stderr, "Texture_process: Failed malloc() in initData. Exit!\n");
+      exit (-1);
+    }
+    legendreNorms (info->lmax, info->sqn);
 
     // free memory of fourier coefficient, not needed anymore
     freeFourierCoef (fc);
@@ -1745,6 +1784,10 @@ SHARE
       free (hkl_info->saved[i_saved].XS_ki);
     }
     free (hkl_info->saved);
+    free (hkl_info->sqn);
+    free (hkl_info->plm);
+    free (hkl_info->cm);
+    free (hkl_info->sm);
 
     return 0;
   }
@@ -1769,8 +1812,6 @@ SHARE
 
   int
   free_hkl_data_texture (struct hkl_data_texture* L) {
-    int l;
-
     if (L == NULL) {
       return 0;
     }
@@ -1781,10 +1822,8 @@ SHARE
     free (L->phiV);
 
     Table_Free (&L->probQ);
-    for (l = 1; l <= L->lmax; l++) {
-      Table_Free (L->Upsilon_l + l);
-    }
-    free (L->Upsilon_l);
+    free (L->Ac);
+    free (L->As);
 
     return 0;
   }
@@ -1798,6 +1837,7 @@ SHARE
     int i, i_saved;
     int i_hit = -1; // entry of saved that holds k, -1 if none
     int i_entry;    // entry of saved that is used and moved to the front
+    int m;
     double ki, kict, kiphi, cohXS;
     struct kiCache entry;
     struct kiCache* sv = info->saved;
@@ -1823,13 +1863,18 @@ SHARE
       ki = sqrt (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
       kict = k[2] / ki;
       kiphi = atan2 (k[1], k[0]);
+      allPlgndrMod (info->lmax, fmin (1.0, fmax (-1.0, kict)), info->sqn, info->plm);
+      for (m = 0; m <= info->lmax; m++) {
+        info->cm[m] = cos (m * kiphi);
+        info->sm[m] = sin (m * kiphi);
+      }
 
       // reflections with G > 2 ki cannot scatter
       e->last_hkl = -1;
       cohXS = 0;
       for (i = 0; i < info->num_hkl && L[i].G <= 2 * ki; i++) {
         e->last_hkl = i;
-        e->XS_ki[i] = total_hkl_XS_interp (ki, kict, kiphi, L + i, info->lgdr);
+        e->XS_ki[i] = total_hkl_XS (ki, L + i, info);
         e->phi[i].built = 0;
         cohXS += e->XS_ki[i];
       }
