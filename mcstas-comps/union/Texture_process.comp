@@ -55,18 +55,22 @@
 * computation time grows as the number of orientations times lmax^4.
 *
 * rot_x_expr, rot_y_expr and rot_z_expr give the orientations instead as three tinyexpr expressions
-* for the angles in deg of a rotation of the crystal axes about x, then y, then z of the component,
-* as ROTATED (rx, ry, rz) would place it. The expressions use the random numbers u1, u2, u3 in [0, 1],
-* drawn anew for each of the n_orientations orientations, the constants p1...p6, and pi. The
+* for the angles in deg of rotations of the crystal axes about the x, y and z axes of the component,
+* composed as ROTATED (rx, ry, rz) composes them: g = Rx (rx) Ry (ry) Rz (rz). The rotation about z
+* acts first and the one about x last, all about the fixed axes of the component. The expressions
+* use the random numbers u1, u2, u3 in [0, 1], drawn anew for each of the n_orientations
+* orientations, the constants p1...p6, and pi. The
 * orientations are then smoothed and averaged as those of ebsd_fn. They are drawn with the random
 * generator of McStas, seeded from the seed of the simulation (-s), so a fixed seed gives the same
 * texture in every run and on every MPI node. Different seeds give different draws of the same
 * texture, which differ by a noise that decreases with n_orientations. For example, a fibre texture
-* with the crystal axes tilted from z by a Gaussian of standard deviation p1 deg:
-*   rot_x_expr = "p1*sqrt(-2*log(1-u1))*cos(2*pi*u2)", rot_y_expr = "0", rot_z_expr = "360*u3".
+* with the crystal axis a tilted from x by a Gaussian of standard deviation p1 deg and turned
+* uniformly about x:
+*   rot_x_expr = "360*u3", rot_y_expr = "p1*sqrt(-2*log(1-u1))*cos(2*pi*u2)", rot_z_expr = "0".
 * The noise of the drawn texture falls as 1/sqrt(n_orientations) and grows as orientation_sigma
-* decreases, so the number of orientations needed grows about as orientation_sigma^-3. For this
-* example with p1 = 5 in Test_texture_white_beam (Al), the noise stays below a statistical error of
+* decreases, so the number of orientations needed grows about as orientation_sigma^-3. For
+* rot_x_expr = "p1*sqrt(-2*log(1-u1))*cos(2*pi*u2)", rot_y_expr = "0", rot_z_expr = "360*u3"
+* with p1 = 5 in Test_texture_Al_sphere (Al), the noise stays below a statistical error of
 * about 5% of the intensity on 30 x 30 deg patches of sphere_det with 1000 orientations at
 * orientation_sigma = 10 deg, and needs about 30000 at 3 deg (with lmax_user = 30); the default
 * 10000 thus suffices down to about 5 deg. A k times smaller statistical error needs about k^2
@@ -85,9 +89,9 @@
 * crystal_fn:        [s]      Crystallographic information: a reflection file (LAZ, LAU), a CIF file, or an NCrystal cfg-string (containing ".ncmat" or "::")
 * fcoef_fn:          [s]      Path to a text file containing the Fourier coefficients of the ODF. It must have five columns: l m n Real(Clmn) Imag(Clmn)
 * ebsd_fn:           [s]      Path to an orientation list, e.g. from EBSD, used instead of fcoef_fn. Each row starts with the Bunge Euler angles phi1 Phi phi2 in radians of one orientation, crystal to sample; further columns are ignored
-* rot_x_expr:        [s]      tinyexpr expression for the angle (deg) of the rotation of the crystal axes about x, in u1, u2, u3, p1...p6. Used instead of fcoef_fn and ebsd_fn, and needs rot_y_expr and rot_z_expr. Empty: not used; "0" is the angle 0
-* rot_y_expr:        [s]      Same for the rotation about y, applied after the one about x
-* rot_z_expr:        [s]      Same for the rotation about z, applied last
+* rot_x_expr:        [s]      tinyexpr expression for the angle (deg) of the rotation of the crystal axes about x, applied last, in u1, u2, u3, p1...p6. Used instead of fcoef_fn and ebsd_fn, and needs rot_y_expr and rot_z_expr. Empty: not used; "0" is the angle 0
+* rot_y_expr:        [s]      Same for the rotation about y, applied after the one about z and before the one about x
+* rot_z_expr:        [s]      Same for the rotation about z, applied first
 * n_orientations:    [1]      Number of orientations drawn from rot_x_expr, rot_y_expr and rot_z_expr
 * p1:                [1]      Constant available in the rotation expressions
 * p2:                [1]      Constant available in the rotation expressions
@@ -1447,7 +1451,7 @@ SHARE
   }
 
   // Fourier coefficients of the ODF of info->n_orient orientations drawn from the expressions info->rot_expr of the angles (deg)
-  // about x, y and z, in the order of ROTATED: g = Rz (rz) Ry (ry) Rx (rx), active, crystal axes to component axes.
+  // about x, y and z, composed as ROTATED: g = Rx (rx) Ry (ry) Rz (rz), active, crystal axes to component axes.
   // u1, u2, u3 are drawn anew for each orientation from the McStas random generator, seeded from mcseed.
   void
   expressionFourierCoef (double sigma, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
