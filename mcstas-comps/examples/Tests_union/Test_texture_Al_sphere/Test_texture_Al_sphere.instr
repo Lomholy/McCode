@@ -21,11 +21,6 @@
 *  sphere_det: longitude and latitude of the scattered ray, over the whole sphere
 *  sphere_det_single: the same for the rays scattered once
 *
-* reflection = 1, 2 or 3 selects the Al reflection (111), (200) or (220): sphere_det then
-* only records rays scattered once, with the wavelength lambda = 2 d_hkl sin(theta) of that
-* reflection at their own scattering angle 2 theta, within the relative tolerance
-* dlambda_rel. reflection = 0 records all scattered rays.
-*
 * q_logger, a Union_logger_2DQ, logs the scattering vector q = k_i - k_f of the rays
 * scattered once, projected on the plane perpendicular to the beam (q_x, q_y). For the
 * source band source_lmin = 4.05 AA to source_lmax = 4.68 AA, between 2 d(200) and
@@ -67,8 +62,7 @@
 *
 * use_powder=1 replaces the sphere by one of the same size with Powder_process reading
 * crystal, which must then be a LAZ file. With crystal = "Al.laz", sphere_det_single of
-* use_expr=1 agrees within the statistical error with that of use_powder=1, in total and
-* in each reflection. Only single scattering compares: multiple scattering in a textured
+* use_expr=1 agrees within the statistical error with that of use_powder=1. Only single scattering compares: multiple scattering in a textured
 * sample depends on the directions of the earlier scatterings.
 *
 * Union_sphere sets p_interact = 0.9.
@@ -78,9 +72,6 @@
 * %Test: use_expr=1 Detector: sphere_det_I=1.30012e-05
 * %Test: use_powder=1 crystal=Al.laz Detector: sphere_det_single_I=1.18552e-05
 * %Test: use_expr=2 crystal=Al.laz source_lmin=4.3 source_lmax=4.3 orientation_sigma=6 lmax_user=-1 Detector: sphere_det_single_I=4.00468e-06
-* %Test: reflection=1 Detector: sphere_det_I=6.22617e-06
-* %Test: reflection=2 Detector: sphere_det_I=2.60198e-06
-* %Test: reflection=3 Detector: sphere_det_I=1.12426e-06
 * %Test: source_lmin=4.05 source_lmax=4.68 Detector: q_logger_I=2.34518e-06
 *
 * %Parameters
@@ -91,8 +82,6 @@
 * orientation_sigma: [deg]  Standard deviation of the Gaussian kernel for the EBSD file
 * lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
 * lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
-* reflection: [1]    0: all scattered rays, 1: (111), 2: (200), 3: (220)
-* dlambda_rel: [1]   Relative wavelength tolerance of the selected reflection
 * source_lmin: [AA]  Shortest wavelength of the source
 * source_lmax: [AA]  Longest wavelength of the source
 *
@@ -100,7 +89,7 @@
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_Al_sphere(int use_odf=0, int use_expr=0, string crystal="Al_sg225.ncmat", int use_powder=0, orientation_sigma=12, int lmax_user=12, lambda_min=1, int reflection=0, dlambda_rel=0.01, source_lmin=1, source_lmax=10)
+DEFINE INSTRUMENT Test_texture_Al_sphere(int use_odf=0, int use_expr=0, string crystal="Al_sg225.ncmat", int use_powder=0, orientation_sigma=12, int lmax_user=12, lambda_min=1, source_lmin=1, source_lmax=10)
 
 DECLARE
 %{
@@ -115,23 +104,13 @@ DECLARE
   double axis_b[3];
   double process_tilt;
   double det_r;
-  double d_hkl;
-  double lambda_tol;
   int scattered;
-  int in_reflection;
 %}
 
 INITIALIZE
 %{
-  // lattice parameter of Al_sg225.ncmat (4.04932 in Al.laz)
-  double a = 4.04958;
   sample_r = 0.005;
   det_r = 1;
-  if (reflection < 0 || reflection > 3) {
-    fprintf (stderr, "Unsupported instrument parameter value reflection=%d.\n", reflection);
-    exit (-1);
-  }
-  lambda_tol = dlambda_rel;
 
   // rotation expressions of use_expr = 1 (powder) and 2 (right half of the (111) cone, process frame with x along the beam)
   rot_x = "";
@@ -174,14 +153,6 @@ INITIALIZE
   powder_file = "NULL";
   if (use_powder) {
     powder_file = crystal;
-  }
-
-  if (reflection == 1) {
-    d_hkl = a / sqrt (3);
-  } else if (reflection == 2) {
-    d_hkl = a / 2;
-  } else {
-    d_hkl = a / sqrt (8);
   }
 %}
 
@@ -251,10 +222,6 @@ COMPONENT union_master = Union_master(
 ) AT (0, 0, 0) RELATIVE arm_sample
 EXTEND %{
   scattered = number_of_scattering_events;
-  // the beam is along z: lambda = 2 d sin(theta), with cos(2 theta) = vz / v
-  double speed = sqrt (vx * vx + vy * vy + vz * vz);
-  double sin_theta = sqrt (0.5 * (1 - vz / speed));
-  in_reflection = scattered == 1 && fabs (2 * PI / (V2K * speed) / (2 * d_hkl * sin_theta) - 1) < lambda_tol;
 %}
 
 // =================== Detectors
@@ -264,7 +231,7 @@ COMPONENT sphere_det = Monitor_nD(
     options = "sphere theta limits=[-180 180] bins=360 phi limits=[-90 90] bins=180",
     filename = "sphere_det",
     restore_neutron = 1
-) WHEN ((reflection == 0 && scattered >= 1) || (reflection != 0 && in_reflection))
+) WHEN (scattered >= 1)
 AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT sphere_det_single = Monitor_nD(
@@ -272,7 +239,7 @@ COMPONENT sphere_det_single = Monitor_nD(
     options = "sphere theta limits=[-180 180] bins=360 phi limits=[-90 90] bins=180",
     filename = "sphere_det_single",
     restore_neutron = 1
-) WHEN ((reflection == 0 && scattered == 1) || (reflection != 0 && in_reflection))
+) WHEN (scattered == 1)
 AT (0, 0, 0) RELATIVE arm_sample
 
 END
