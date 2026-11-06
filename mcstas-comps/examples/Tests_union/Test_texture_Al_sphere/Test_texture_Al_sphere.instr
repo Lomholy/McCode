@@ -51,17 +51,19 @@
 *
 * use_expr=2 draws a texture that fills only the right half (x > 0) of the (111)
 * Debye-Scherrer cone, with the intensity of the whole cone of the powder, for a
-* monochromatic beam in the band where only (111) scatters, e.g. source_lmin =
-* source_lmax = 4.3, lambda_min = 4.2. The (111) poles that can reach the Bragg cone lie
-* within 90 deg - theta = 23 deg of -z, so at most one pole of a grain can scatter: its
-* lowest {111} pole along the beam. The process is placed at ROTATED (0, -90, 0), so that
-* its x axis is the beam and rot_x_expr, applied last in g = Rx (rx) Ry (ry) Rz (rz), turns
-* the grain about the beam. rot_z_expr and rot_y_expr give uniform rotations, reduced by the
-* cubic symmetry to rz in 0...90 deg and ry in 0...90 deg, for which the lowest pole is
-* (-1, 1, -1)/sqrt 3; the atan2 term of rot_x_expr is its azimuth about the beam, and
-* -180*u1 turns it to an azimuth on the right. The pole density on the cone is 2 on the
-* right and 0 on the left. The kernel smears the poles across the boundary; with
-* orientation_sigma = 6 and lmax_user = -1, about 92% of the cone is on the right.
+* monochromatic beam in the band where only (111) scatters, from 4.09 AA, e.g.
+* source_lmin = source_lmax = 4.3, lambda_min = 4.2. Only the direction of the {111} pole
+* that scatters matters: the crystal axes (a along (-sqrt 2, sqrt 3, -1), b along
+* (-sqrt 2, -sqrt 3, -1) in the process frame) put [111] along -x, and the process is
+* placed at ROTATED (0, -90, 0), so that its x axis is the beam. rot_y_expr tilts [111] away
+* from -beam evenly over the cap cos(ry) > 3/4 (41.4 deg), and rot_x_expr turns it about the
+* beam over the right half. The (111) Bragg cone lies within 23 deg of -beam, and the other
+* {111} poles of a grain are at least 70.5 deg from [111], so only [111] can scatter, with the
+* pole density 2 on the right half of the cone and 0 on the left. This holds without the
+* kernel: orientation_sigma smears the poles across the boundary to the left, and smears the
+* other poles of the grain, which lie 29 deg from -beam at the edge of the cap, onto the cone.
+* With orientation_sigma = 6 and lmax_user = -1, the cone has 1.21 times the intensity of the
+* powder cone, 77% of it on the right; the excess vanishes for orientation_sigma <= 2.
 *
 * use_powder=1 replaces the sphere by one of the same size with Powder_process reading
 * crystal, which must then be a LAZ file. With crystal = "Al.laz", sphere_det_single of
@@ -75,7 +77,7 @@
 * %Test: use_odf=1 Detector: sphere_det_I=1.28146e-05
 * %Test: use_expr=1 Detector: sphere_det_I=1.30012e-05
 * %Test: use_powder=1 crystal=Al.laz Detector: sphere_det_single_I=1.18552e-05
-* %Test: use_expr=2 crystal=Al.laz source_lmin=4.3 source_lmax=4.3 lambda_min=4.2 orientation_sigma=6 lmax_user=-1 Detector: sphere_det_single_I=3.25319e-06
+* %Test: use_expr=2 crystal=Al.laz source_lmin=4.3 source_lmax=4.3 lambda_min=4.2 orientation_sigma=6 lmax_user=-1 Detector: sphere_det_single_I=4.00468e-06
 * %Test: reflection=1 Detector: sphere_det_I=6.22617e-06
 * %Test: reflection=2 Detector: sphere_det_I=2.60198e-06
 * %Test: reflection=3 Detector: sphere_det_I=1.12426e-06
@@ -134,9 +136,9 @@ INITIALIZE
     rot_y = "asin(2*u2-1)*180/pi";
     rot_z = "180*u3";
   } else if (use_expr == 2) {
-    rot_x = "-180*u1-atan2(u2*(cos(pi*u3/2)+sin(pi*u3/2))-sqrt(1-u2*u2),cos(pi*u3/2)-sin(pi*u3/2))*180/pi";
-    rot_y = "asin(u2)*180/pi";
-    rot_z = "90*u3";
+    rot_x = "-90-180*u1";
+    rot_y = "acos(1-u2/4)*180/pi";
+    rot_z = "0";
   }
   d_hkl = reflection == 1 ? a / sqrt (3) : reflection == 2 ? a / 2 : a / sqrt (8);
 %}
@@ -172,7 +174,9 @@ COMPONENT texture = Texture_process(
     crystal_fn = crystal, barns = 1,
     fcoef_fn = (!use_expr && use_odf ? "Al_mtexdata_alu_ODF.txt" : "0"), ebsd_fn = (!use_expr && !use_odf ? "Al_mtexdata_alu_EBSD.txt" : "0"),
     rot_x_expr = rot_x, rot_y_expr = rot_y, rot_z_expr = rot_z,
-    orientation_sigma = orientation_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = 1
+    orientation_sigma = orientation_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = (use_expr != 2),
+    ax = (use_expr == 2 ? -sqrt (2) : 0), ay = (use_expr == 2 ? sqrt (3) : 0), az = (use_expr == 2 ? -1 : 0),
+    bx = (use_expr == 2 ? -sqrt (2) : 0), by = (use_expr == 2 ? -sqrt (3) : 0), bz = (use_expr == 2 ? -1 : 0)
 ) AT (0, 0, 0) RELATIVE arm_sample
 ROTATED (0, (use_expr == 2 ? -90 : 0), 0) RELATIVE arm_sample
 
