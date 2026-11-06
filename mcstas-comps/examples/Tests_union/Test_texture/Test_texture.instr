@@ -18,8 +18,8 @@
 * %Description
 * Simple test instrument for texture sample component.
 *
-* %Example: lmax=0 -n1e5 Detector: monitor_I=8.08899e-05
-* %Example: lmax=0 crystal_fn=Al_sg225.ncmat lambda_min=2 -n1e5 Detector: monitor_I=9.14077e-05
+* %Test: lmax=0 -n1e5 Detector: monitor_I=8.08899e-05
+* %Test: lmax=0 crystal_fn=Al_sg225.ncmat lambda_min=2 -n1e5 Detector: monitor_I=9.14077e-05
 *
 * %P
 * lmax: [AA] Maximum wavelength treated by texture process
