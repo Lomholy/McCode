@@ -221,7 +221,7 @@ Arm is used in 252 example(s):
 - Test_box.instr
 - Test_conditional_PSD.instr
 - Test_conditional_standard.instr
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 - Test_logger_1D.instr
 - Test_logger_2DQ.instr
 - Test_logger_2D_kf.instr

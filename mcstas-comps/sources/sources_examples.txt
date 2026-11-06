@@ -287,7 +287,7 @@ Source_simple is used in 108 example(s):
 - Test_Sources.instr
 - Hidden_Cylinder.instr
 - Many_meshes.instr
-- Test_inhomogenous_process.instr
+- Test_inhomogeneous_process.instr
 - Laue_camera.instr
 - Manual_example.instr
 - Mirror_validation.instr

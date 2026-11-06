@@ -13,7 +13,7 @@
 *
 * Common functionality for McStas components using NCrystal (NCrystal_sample,
 * NCrystal_process, Union_NCrystal_material, NCrystal_filter, PowderN,
-* Single_crystal), included with %include "mccode-ncrystal-lib" in a SHARE
+* Single_crystal, Texture_process), included with %include "mccode-ncrystal-lib" in a SHARE
 * section. It also includes the NCrystal C API (ncrystal.h).
 *
 *******************************************************************************/

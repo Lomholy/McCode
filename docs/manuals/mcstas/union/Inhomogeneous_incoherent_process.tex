@@ -1,4 +1,4 @@
-\section{The \texttt{Inhomogenous\_incoherent\_process} McStas Component}
+\section{The \texttt{Inhomogeneous\_incoherent\_process} McStas Component}
 A sample component to separate geometry and phsysics
 
 \subsection*{Identification}
@@ -21,7 +21,7 @@ There is a dedicated manual available for the Union components
 
 Algorithm: The general algorithm for the Union system is described elsewhere.
 
-I here give a brief introduction as to what changes occur when using an inhomogenous process in your Union make material. It is expected that you understand the basic algorithm of the Union system before reading this.
+I here give a brief introduction as to what changes occur when using an inhomogeneous process in your Union make material. It is expected that you understand the basic algorithm of the Union system before reading this.
 
 In Union, the neutron moves through a network of objects in a 3 dimensional world. When the neutron hits a material, the probability to scatter is calculated, and a Monte Carlo choice is taken, as to whether that neutron should scatter, or pass through. For a homogenous material (i.e constant attenuation coefficient \textless{}span class="latex"\textgreater{}\$\textbackslash{}mu\$\textless{}/span\textgreater{}), this probability is the Beer-Lambert law,
 
@@ -35,7 +35,7 @@ $P_s = 1 - e^{-\mu l}$
 
 Where \textless{}span class="latex"\textgreater{}\$P\_s\$\textless{}/span\textgreater{} is the scattering probability, and \textless{}span class="latex"\textgreater{}\$l\$\textless{}/span\textgreater{} is length of the neutron path throughout the object.
 
-For an inhomogenous material, this Beer-Lambert law must be modified, as \textless{}span class="latex"\textgreater{}\$\textbackslash{}mu\$\textless{}/span\textgreater{} is a function of the position. Therefore the Beer-Lambert law becomes,
+For an inhomogeneous material, this Beer-Lambert law must be modified, as \textless{}span class="latex"\textgreater{}\$\textbackslash{}mu\$\textless{}/span\textgreater{} is a function of the position. Therefore the Beer-Lambert law becomes,
 
 \textless{}div class="latex"\textgreater{}
 
@@ -45,7 +45,7 @@ $P_s = \int^l_0 1 -  e^{-\mu(l')l'}dl'$
 
 \textless{}/div\textgreater{}
 
-Calculating this \textless{}span class="latex"\textgreater{}\$\textbackslash{}mu\$\textless{}/span\textgreater{} in the inhomogenous case is often trivial, but not feasible, from a software development point of view (seeing as many different functions of \textless{}span class="latex"\textgreater{}\$\textbackslash{}mu\$\textless{}/span\textgreater{} might be wanted). Instead the inhomogenous processes performs an approximate integral, by evaluating \textless{}span class="latex"\textgreater{}\$\textbackslash{}mu\$\textless{}/span\textgreater{} at a number of points along the neutron path (This number is in fact number\_of\_sample\_points).
+Calculating this \textless{}span class="latex"\textgreater{}\$\textbackslash{}mu\$\textless{}/span\textgreater{} in the inhomogeneous case is often trivial, but not feasible, from a software development point of view (seeing as many different functions of \textless{}span class="latex"\textgreater{}\$\textbackslash{}mu\$\textless{}/span\textgreater{} might be wanted). Instead the inhomogeneous processes performs an approximate integral, by evaluating \textless{}span class="latex"\textgreater{}\$\textbackslash{}mu\$\textless{}/span\textgreater{} at a number of points along the neutron path (This number is in fact number\_of\_sample\_points).
 
 For this incoherent process, the linear attenuation coefficient is,
 
@@ -63,7 +63,7 @@ A gaussian distribution:
 
 gauss(A,sig,x), which evaluates to A*1/sqrt(2*PI)/sig*exp(-x\textasciicircum{}2/2/sig\textasciicircum{}2)
 
-An example using these can be found in the Test instrument for this component, called Test\_inhomogenous\_process.instr. Example \#9 implements a gaussian and a heavyside function. For more information on tiny expressions, see the link below.
+An example using these can be found in the Test instrument for this component, called Test\_inhomogeneous\_process.instr. Example \#9 implements a gaussian and a heavyside function. For more information on tiny expressions, see the link below.
 
 \subsection*{Input parameters}
 Parameters in \textbf{boldface} are required; the others are optional.
@@ -91,7 +91,7 @@ init & string & Deprecated and unused. Accepted so that instruments written for 
 
 \subsection*{Links}
 \begin{itemize}
-  \item Component source code found in file \texttt{Inhomogenous\_incoherent\_process.comp}.
+  \item Component source code found in file \texttt{Inhomogeneous\_incoherent\_process.comp}.
   \item For information on how to write a tiny expression, see \htmladdnormallink{their github repository}{https://github.com/codeplea/tinyexpr}
 \end{itemize}
-\IfFileExists{union/Inhomogenous_incoherent_process_static.tex}{\input{union/Inhomogenous_incoherent_process_static.tex}}{}
+\IfFileExists{union/Inhomogeneous_incoherent_process_static.tex}{\input{union/Inhomogeneous_incoherent_process_static.tex}}{}

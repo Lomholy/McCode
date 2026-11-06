@@ -1,0 +1,250 @@
+/*******************************************************************************
+*
+*  McStas, neutron ray-tracing package
+*  Copyright(C) 2007 Risoe National Laboratory.
+*
+* %I
+* Written by: Daniel Lomholt Christensen
+* Date: 29.09.2026
+* Version: $Revision: 0.1 $
+* Origin: University of Copenhagen
+*
+* Union process for small angle scattering with user-supplied form and
+* structure factor expressions of the scattering vector.
+*
+* %D
+* Union version of Sans_expr.comp. The form factor F and structure factor S
+* are math expression strings, parsed and evaluated with the tinyexpr library
+* (https://github.com/codeplea/tinyexpr). The differential cross-section is
+*
+*   dSigma/dOmega(q) = scale * F(q)^2 * S(q) + background
+*
+* The variables available inside the expressions are
+*   q          |q| in AA^-1
+*   qx, qy, qz the components of q = k_i - k_f in AA^-1, in the frame of this
+*              process (z along the nominal beam direction)
+*   p1 ... p6  generic constants
+* Rotating the process component therefore rotates an anisotropic sample.
+*
+* Part of the Union components, a set of components that work together and thus
+*  separates geometry and physics within McStas.
+* The use of this component requires other components to be used.
+*
+* 1) One specifies a number of processes using process components like this one
+* 2) These are gathered into material definitions using Union_make_material
+* 3) Geometries are placed using Union_box / Union_cylinder, assigned a material
+* 4) A Union_master component placed after all of the above
+*
+* Only in step 4 will any simulation happen, and per default all geometries
+*  defined before the master, but after the previous will be simulated here.
+*
+* Algorithm:
+* The inverse penetration depth of the process is the total scattering
+* cross-section
+*
+*   mu(k) = 1/k^2 int_0^2k q dq int_0^2pi dphi dSigma/dOmega(q(q,phi))
+*
+* integrated over the Ewald sphere of the wave vector k, and tabulated for
+* wavelengths 1..30 AA, as in Sans_spheres.comp. If the expressions only use q, mu
+* does not depend on the direction of k, and is tabulated in INITIALIZE. Otherwise
+* it is tabulated also over the direction of k in the process frame (n_dir_theta
+* polar angles and n_dir_phi azimuths), each node computed the first time a ray
+* needs it, and interpolated linearly in wavelength and direction, so a tilted or
+* rotated anisotropic sample has the right mu along every path. The q integral runs
+* over |q| <= q_max, with log grids from both ends of the Ewald sphere (q from 0,
+* and sqrt(4k^2 - q^2) from 0, up to q = sqrt(2) k) where that range reaches them.
+* The expressions, cross-sections and tables are handled by share/sans-expr-lib.
+*
+* In a scattering event the outgoing direction is drawn uniformly within the
+* focusing solid angle dOmega of the geometry, or the cone of |q| <= q_max without
+* focusing, and the weight is multiplied by
+* dOmega * dSigma/dOmega(q) / mu(k).
+*
+* The component is for small-angle scattering: only |q| <= q_max enters the total
+* cross-section and scatters. Without focusing the outgoing direction is drawn within the
+* cone of |q| <= q_max; with focusing, rays drawn outside it are absorbed. INITIALIZE warns
+* if scale*F^2*S at |q| > q_max exceeds 1e-3 of its largest value at |q| <= q_max. It
+* samples |q| and, for
+* expressions in qx, qy, qz, 206 directions, so narrow features away from the axes
+* can be missed.
+*
+* tinyexpr supports +, -, *, /, ^, %, unary -, parentheses, and the
+* functions abs, acos, asin, atan, atan2, ceil, cos, cosh, exp, fac, floor,
+* gauss, ln, log, log10, ncr, npr, pow, sin, sinh, sqrt, tan, tanh, plus the
+* constants pi and e. It has no if/else. For piecewise behaviour use the
+* step function hvs(x, t, a, b), which returns a if x > t and b otherwise.
+*
+* Example (dilute hard spheres, R=100 AA, Phi=1e-3, Delta_rho=0.6 fm/AA^3):
+*   SANS_process(form_factor = "3*(sin(q*p1)-q*p1*cos(q*p1))/(q*p1)^3",
+*                structure_factor = "1", p1 = 100,
+*                scale = 1e-3*0.6*0.6*4*PI/3*100*100*100)
+*
+* LIMITATIONS:
+* - tinyexpr expressions use function pointers internally and cannot be
+*   compiled for GPU (-openacc). This component is CPU-only.
+*
+* %P
+* INPUT PARAMETERS:
+* form_factor: [str]        tinyexpr expression for F, in q, qx, qy, qz and p1..p6
+* structure_factor: [str]   tinyexpr expression for S, in q, qx, qy, qz and p1..p6
+* p1: [1]                   Generic numeric constant, meaning defined by the user's expressions
+* p2: [1]                   Generic numeric constant, meaning defined by the user's expressions
+* p3: [1]                   Generic numeric constant, meaning defined by the user's expressions
+* p4: [1]                   Generic numeric constant, meaning defined by the user's expressions
+* p5: [1]                   Generic numeric constant, meaning defined by the user's expressions
+* p6: [1]                   Generic numeric constant, meaning defined by the user's expressions
+* scale: [m^-1 sr^-1]       Prefactor multiplying F^2*S
+* background: [m^-1 sr^-1]  Flat background added to the cross-section
+* n_phi: [1]                Number of azimuthal points around k in the integral of mu for anisotropic expressions
+* n_dir_theta: [1]          Number of polar angles of k, from 0 to 180 deg, in the mu table for anisotropic expressions
+* n_dir_phi: [1]            Number of azimuths of k in the mu table for anisotropic expressions
+* q_max: [AA^-1]             Largest |q| that scatters
+* interact_fraction: [1]    How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
+*
+* CALCULATED PARAMETERS:
+* SANS_storage:             Storage used to communicate with the probability and scattering functions
+*
+* %L
+* The standalone version <a href="Sans_expr.html">Sans_expr.comp</a>.
+* The tinyexpr library: https://github.com/codeplea/tinyexpr
+*
+* %E
+******************************************************************************/
+
+DEFINE COMPONENT SANS_process
+
+SETTING PARAMETERS(string form_factor="1", string structure_factor="1",
+p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
+scale=1, background=0, int n_phi=64, int n_dir_theta=91, int n_dir_phi=72, q_max=0.5, interact_fraction=-1)
+
+
+SHARE
+%{
+  %include "union-lib"
+
+  %include "sans-expr-lib"
+
+  struct SANS_physics_storage_struct {
+    double q_vars[4]; // q, qx, qy, qz bound in the expressions
+    double pars[6];   // p1..p6 bound in the expressions
+    struct sans_expr_table table;
+  };
+
+  int
+  SANS_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data, _class_particle* _particle) {
+    *my = sans_expr_sigma_s (&data_transfer.pointer_to_a_SANS_physics_storage_struct->table, k_initial[0], k_initial[1], k_initial[2]);
+    return 1;
+  };
+
+  int
+  SANS_physics_scattering (double* k_final, double* k_initial, double* weight, union data_transfer_union data_transfer, struct focus_data_struct* focus_data,
+                           _class_particle* _particle) {
+    struct SANS_physics_storage_struct* s = data_transfer.pointer_to_a_SANS_physics_storage_struct;
+    double k_length = sqrt (k_initial[0] * k_initial[0] + k_initial[1] * k_initial[1] + k_initial[2] * k_initial[2]);
+
+    Coords k_out;
+    double solid_angle;
+    if (focus_data->focusing_function == &randvec_target_circle_union && focus_data->spatial_focus_radius == 0)
+      sans_expr_random_direction (&k_out.x, &k_out.y, &k_out.z, &solid_angle, k_initial[0], k_initial[1], k_initial[2], s->table.q_limit, rand01 (), rand01 ());
+    else
+      focus_data->focusing_function (&k_out, &solid_angle, focus_data);
+    NORM (k_out.x, k_out.y, k_out.z);
+    k_final[0] = k_out.x * k_length;
+    k_final[1] = k_out.y * k_length;
+    k_final[2] = k_out.z * k_length;
+
+    double qx = k_initial[0] - k_final[0];
+    double qy = k_initial[1] - k_final[1];
+    double qz = k_initial[2] - k_final[2];
+    double q = sqrt (qx * qx + qy * qy + qz * qz);
+    if (q > s->table.q_limit)
+      return 0;
+
+    double mu = sans_expr_sigma_s (&s->table, k_initial[0], k_initial[1], k_initial[2]);
+    if (mu <= 0)
+      return 0;
+    *weight *= solid_angle * sans_expr_dSigdOmega (&s->table, q, qx, qy, qz) / mu;
+    return 1;
+  };
+
+  #ifndef PROCESS_DETECTOR
+  #define PROCESS_DETECTOR dummy
+  #endif
+
+  #ifndef PROCESS_SANS_DETECTOR
+  #define PROCESS_SANS_DETECTOR dummy
+  #endif
+
+  // Register this process with the Union_master dispatch (see union-lib.h)
+  #undef UNION_CASE_PHYSICS_MY_SANS
+  #define UNION_CASE_PHYSICS_MY_SANS(out, ...) case SANS: out = SANS_physics_my(__VA_ARGS__); break;
+  #undef UNION_CASE_PHYSICS_SCATTERING_SANS
+  #define UNION_CASE_PHYSICS_SCATTERING_SANS(out, ...) case SANS: out = SANS_physics_scattering(__VA_ARGS__); break;
+%}
+
+DECLARE
+%{
+  struct SANS_physics_storage_struct SANS_storage;
+
+  struct global_process_element_struct global_process_element;
+  struct scattering_process_struct This_process;
+%}
+
+INITIALIZE
+%{
+  struct union_state_struct* union_state_p = union_acquire ();
+  if (!form_factor || !strcmp (form_factor, ""))
+    exit (fprintf (stderr, "SANS_process: %s: form_factor expression is empty.\n", NAME_CURRENT_COMP));
+  if (!structure_factor || !strcmp (structure_factor, ""))
+    exit (fprintf (stderr, "SANS_process: %s: structure_factor expression is empty.\n", NAME_CURRENT_COMP));
+
+  if (q_max <= 0)
+    exit (fprintf (stderr, "SANS_process: %s: q_max must be positive.\n", NAME_CURRENT_COMP));
+
+  SANS_storage.pars[0] = p1;
+  SANS_storage.pars[1] = p2;
+  SANS_storage.pars[2] = p3;
+  SANS_storage.pars[3] = p4;
+  SANS_storage.pars[4] = p5;
+  SANS_storage.pars[5] = p6;
+  te_expr* F_expr = sans_expr_compile (form_factor, SANS_storage.q_vars, SANS_storage.pars, "SANS_process", NAME_CURRENT_COMP, "form_factor");
+  te_expr* S_expr = sans_expr_compile (structure_factor, SANS_storage.q_vars, SANS_storage.pars, "SANS_process", NAME_CURRENT_COMP, "structure_factor");
+  int q_only = sans_expr_is_isotropic (form_factor, SANS_storage.q_vars, SANS_storage.pars)
+               && sans_expr_is_isotropic (structure_factor, SANS_storage.q_vars, SANS_storage.pars);
+  sans_expr_check_large_q (F_expr, S_expr, SANS_storage.q_vars, scale, q_only, q_max, "SANS_process", NAME_CURRENT_COMP);
+  sans_expr_table_init (&SANS_storage.table, F_expr, S_expr, SANS_storage.q_vars, scale, background, q_only, q_max, n_phi, n_dir_theta, n_dir_phi,
+                        "SANS_process", NAME_CURRENT_COMP);
+
+  scattering_process_struct_init (&This_process);
+  This_process.non_isotropic_rot_index = 1;
+  This_process.needs_cross_section_focus = -1;
+  This_process.eProcess = SANS;
+
+  This_process.data_transfer.pointer_to_a_SANS_physics_storage_struct = &SANS_storage;
+  This_process.probability_for_scattering_function = &SANS_physics_my;
+  This_process.scattering_function = &SANS_physics_scattering;
+
+  sprintf (This_process.name, "%s", NAME_CURRENT_COMP);
+  This_process.process_p_interact = interact_fraction;
+  rot_copy (This_process.rotation_matrix, ROT_A_CURRENT_COMP);
+  sprintf (global_process_element.name, "%s", NAME_CURRENT_COMP);
+  global_process_element.component_index = INDEX_CURRENT_COMP;
+  global_process_element.p_scattering_process = &This_process;
+
+  struct pointer_to_global_process_list* global_process_list = &union_state_p->u_process_list;
+  add_element_to_process_list (global_process_list, global_process_element);
+%}
+
+TRACE
+%{
+%}
+
+FINALLY
+%{
+  te_free (SANS_storage.table.Fexpr);
+  te_free (SANS_storage.table.Sexpr);
+  sans_expr_table_free (&SANS_storage.table);
+  union_release (NAME_CURRENT_COMP);
+%}
+
+END

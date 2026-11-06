@@ -22,6 +22,9 @@
  * misrepresented as being the original software.
  * 3. This notice may not be removed or altered from any source distribution.
  */
+
+#ifndef TINYEXPR_C
+#define TINYEXPR_C
 // THIS VERSION OF TINYEXPR HAS BEEN MODIFIED TO BETTER SUIT THE NEEDS 
 // OF THE MCSTAS SOFTWARE PACKAGE
 
@@ -750,3 +753,35 @@ static void pn (const te_expr *n, int depth) {
 void te_print(const te_expr *n) {
     pn(n, 0);
 }
+
+
+te_expr *te_compile_vars(const char *expression, const char *const *names, double *const *addresses, int var_count, int skip, int *error) {
+    te_variable *list = malloc(var_count * sizeof(te_variable));
+    if (!list) {
+        if (error) *error = -1;
+        return 0;
+    }
+    int n = 0;
+    for (int i = 0; i < var_count; i++) {
+        if (i == skip) continue;
+        list[n].name = names[i];
+        list[n].address = addresses[i];
+        list[n].type = TE_VARIABLE;
+        list[n].context = 0;
+        n++;
+    }
+    te_expr *out = te_compile(expression, list, n, error);
+    free(list);
+    return out;
+}
+
+
+int te_depends_on(const char *expression, const char *const *names, double *const *addresses, int var_count, int var) {
+    int err;
+    te_expr *e = te_compile_vars(expression, names, addresses, var_count, var, &err);
+    if (!e) return 1;
+    te_free(e);
+    return 0;
+}
+
+#endif /*TINYEXPR_C*/

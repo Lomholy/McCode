@@ -1,6 +1,6 @@
-# The `Test_inhomogenous_process` Instrument
+# The `Test_inhomogeneous_process` Instrument
 
-*McStas: Test of inhomogenous incoherent union component,
+*McStas: Test of inhomogeneous incoherent union component,
 and comparison to incoherent process, and incoherent component.*
 
 ## Identification
@@ -13,7 +13,7 @@ and comparison to incoherent process, and incoherent component.*
 ## Description
 
 ```text
-Test of different setups with the Inhomogenous_incoherent_process.
+Test of different setups with the Inhomogeneous_incoherent_process.
 For all setups, the idea is the same. A source shines neutrons on the box,
 and a detector placed right up on the side of the box, measures the
 incoherently scattered neutrons.
@@ -21,14 +21,15 @@ The first three have a constant scattering cross section throughout their
 depths:
 1 is the normal incoherent component,
 1 is a union box with an incoherent process
-1 is a union box with the inhomogenous incoherent process
-Then the next three setups showcase a linearly rising scattering cross section
-in the first example, this linearly increasing cross section is implemented
+1 is a union box with the inhomogeneous incoherent process
+Then the next three setups showcase a scattering cross section rising linearly
+from that of Al (1.503 barn) to that of H (82 barn) through the box.
+In the first example, this linearly increasing cross section is implemented
 by 10 boxes utilizing the original inocherent process union component.
 
-Then the inhomogenous incoherent component implements it with its simple syntax
+Then the inhomogeneous incoherent component implements it with its simple syntax
 
-Then a union box that uses the inhomogenous process
+Then a union box that uses the inhomogeneous process
 and the original incoherent process is implemented.
 
 
@@ -39,11 +40,15 @@ fewer neutrons
 The 8th and 9th examples show an intuitive image of the transmitted beam.
 Here again the scattering cross section scales linearly, but due to the
 nature of the two different processes, the one process curve becomes
-continous (Inhomogenous_incoherent_process),
+continous (Inhomogeneous_incoherent_process),
 and the other discrete (Incoherent_process).
 
 The 10th example plays with some more complex tiny expressions using the
 gaussian function and the heavyside function.
+
+The 11th and 12th examples give the Inhomogeneous_incoherent_process the same
+steps as the 10 boxes of inc_linear, as a sum of heavyside functions, so they
+must reproduce inc_linear and inc_trans.
 ```
 
 ## Examples
@@ -51,13 +56,15 @@ gaussian function and the heavyside function.
 - **Test: sample=thin Detector: lin_det_I=0.007387**
 - **Test: sample=union_inc Detector: lin_det_I=0.007387**
 - **Test: sample=union_inho Detector: lin_det_I=0.007387**
-- **Test: sample=inc_linear Detector: lin_det_I=0.017457**
-- **Test: sample=inho_linear Detector: lin_det_I=0.017457**
-- **Test: sample=inc_and_inho Detector: lin_det_I=0.017457**
-- **Test: sample=phonon thick=0.001 Detector: lin_det_I=0.00529178**
-- **Test: sample=inc_trans Detector: lin_det_I=0.081029**
-- **Test: sample=inho_trans Detector: lin_det_I=0.081040**
+- **Test: sample=inc_linear Detector: lin_det_I=0.0185229**
+- **Test: sample=inho_linear Detector: lin_det_I=0.0185641**
+- **Test: sample=inc_and_inho Detector: lin_det_I=0.018585**
+- **Test: sample=phonon thick=0.001 Detector: lin_det_I=0.00505839**
+- **Test: sample=inc_trans Detector: lin_det_I=0.0785055**
+- **Test: sample=inho_trans Detector: lin_det_I=0.0791337**
 - **Test: sample=gauss_heavy Detector: lin_det_I=0.0985658**
+- **Test: sample=inho_hvs Detector: lin_det_I=0.0185066**
+- **Test: sample=inho_hvs_trans Detector: lin_det_I=0.0784756**
 
 ## Input parameters
 
@@ -71,7 +78,7 @@ Parameters in **boldface** are required; the others are optional.
 
 ## Links
 
-- [Source code](Test_inhomogenous_process.instr) for `Test_inhomogenous_process.instr`.
-- [Additional information](Test_inhomogenous_process.md)
+- [Source code](Test_inhomogeneous_process.instr) for `Test_inhomogeneous_process.instr`.
+- [Additional information](Test_inhomogeneous_process.md)
 
 ---
