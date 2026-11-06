@@ -25,7 +25,7 @@
 * ODF and another one with crystallographic and physical information.
 *
 *
-* CIF and NCrystal inputs can give hundreds of reflections, and the tables use about 1 MB for
+* CIF and NCrystal inputs can give hundreds of reflections, and the tables use about 1.5 MB for
 * each reflection, so set lambda_min, or dcutoff in the NCrystal cfg-string, to what the instrument reaches.
 * An NCrystal material must have one crystalline phase and no orientation, as that is given by the
 * placement of the component. CIF files are converted with ncrystal_cif2ncmat, which needs the Python
@@ -155,8 +155,7 @@ SHARE
     Coords t1, t2;         // complete kih to a right-handed basis (t1,t2,kih)
     double kim;            // modulus of ki
     double stheta, ctheta; // sine and cosine of the scattering angle
-    double maxProb;
-    double *aa, *bb;       // probability aa[j] + phi * bb[j] of the azimuth phi between points j and j + 1
+    double *aa, *bb;       // pole density aa[j] >= 0 at the azimuth -pi + j dphi, and its integral bb[j] from -pi
   };
 
   // everything computed for one wavevector
@@ -176,9 +175,9 @@ SHARE
   struct legendre {
     int lmax;
     t_Table* Plm; // per l: plgndr_mod on a uniform grid in x, with one column per m
-    // axes of the pole density tables, uniform in cos(theta) and phi
-    int n_ct, n_phi;
-    double* ctAxis;
+    // axes of the pole density tables, uniform in theta and phi
+    int n_th, n_phi;
+    double* thAxis;
     double* phiAxis;
   };
 
@@ -225,7 +224,6 @@ SHARE
     double* plm;         // plgndr_mod (l, m, kct) of the wavevector of the last cache fill, same index
     double *cm, *sm;     // cos (m kphi) and sin (m kphi) of that wavevector
     int n_phi_points;    // points of the azimuthal sampling tables of kf
-    int max_iter_reject; // tries of the rejection sampling of kf before giving up
 
     // everything computed for the last n_saved wavevectors, most recently used first,
     // so that the SPLIT copies of a neutron reuse it
@@ -355,19 +353,19 @@ SHARE
       }
     }
 
-    lgdr->n_ct = 201;
+    lgdr->n_th = 301;
     lgdr->n_phi = 601;
-    lgdr->ctAxis = (double*)malloc (lgdr->n_ct * sizeof (double));
+    lgdr->thAxis = (double*)malloc (lgdr->n_th * sizeof (double));
     lgdr->phiAxis = (double*)malloc (lgdr->n_phi * sizeof (double));
-    if (!lgdr->ctAxis || !lgdr->phiAxis) {
+    if (!lgdr->thAxis || !lgdr->phiAxis) {
       fprintf (stderr, "Texture_process: Failed malloc() in initLegendre. Exit!\n");
       exit (-1);
     }
-    dx = 2.0 / (lgdr->n_ct - 1);
-    for (j = 0; j < lgdr->n_ct - 1; j++) {
-      lgdr->ctAxis[j] = -1.0 + j * dx;
+    dx = PI / (lgdr->n_th - 1);
+    for (j = 0; j < lgdr->n_th - 1; j++) {
+      lgdr->thAxis[j] = j * dx;
     }
-    lgdr->ctAxis[lgdr->n_ct - 1] = 1.0;
+    lgdr->thAxis[lgdr->n_th - 1] = PI;
     dx = (2.0 * PI) / (lgdr->n_phi - 1);
     for (j = 0; j < lgdr->n_phi - 1; j++) {
       lgdr->phiAxis[j] = -PI + j * dx;
@@ -539,12 +537,13 @@ SHARE
     return coords_add (cone, coords_scale (sp->kih, sp->ctheta));
   }
 
-  // Samples kf for reflection L and wavevector ki, building the table sp first if it is not built yet
+  // Samples kf for reflection L and wavevector ki, building the table sp first if it is not built yet. The azimuth
+  // of kf around ki is drawn exactly from the pole density interpolated linearly between the points of the table.
   int
   sampleKprime_hkl (double* kf, Coords ki, struct phiTable* sp, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
-    int it, j;
+    int j, j_lo, j_hi, j_mid;
     int n = info->n_phi_points;
-    double kdg, phi, p, p0, p1;
+    double kdg, phi, p0, slope, u, t;
     double dphi = (2.0 * PI) / (n - 1);
     Coords q, kf_out;
 
@@ -562,47 +561,50 @@ SHARE
       normal_vec (&sp->t1.x, &sp->t1.y, &sp->t1.z, sp->kih.x, sp->kih.y, sp->kih.z);
       sp->t2 = coords_xp (sp->kih, sp->t1);
 
-      // probability of the unitary scattering vector qh = kdg * (kih - kfh) at the n points, in aa
-      sp->maxProb = -1.0e99;
+      // pole density of the unit scattering vector qh = kdg * (kih - kfh) at the n points, negative values of the
+      // truncated series set to 0, and its integral by the trapezoidal rule
       phi = -PI;
       for (j = 0; j < n - 1; j++) {
         q = coords_scale (coords_sub (sp->kih, kfDirection (sp, phi)), kdg);
-        sp->aa[j] = interp2D (q.z, atan2 (q.y, q.x), info->lgdr, &L->probQ);
-        if (sp->aa[j] > sp->maxProb) {
-          sp->maxProb = sp->aa[j];
-        }
+        sp->aa[j] = fmax (0.0, interp2D (acos (fmax (-1.0, fmin (1.0, q.z))), atan2 (q.y, q.x), info->lgdr, &L->probQ));
         phi += dphi;
       }
       sp->aa[n - 1] = sp->aa[0];
-
-      // linear interpolation between the points
-      phi = -PI;
+      sp->bb[0] = 0;
       for (j = 0; j < n - 1; j++) {
-        p0 = sp->aa[j];
-        p1 = sp->aa[j + 1];
-        sp->aa[j] = p0 - phi * (p1 - p0) / dphi;
-        sp->bb[j] = (p1 - p0) / dphi;
-        phi += dphi;
+        sp->bb[j + 1] = sp->bb[j] + (sp->aa[j] + sp->aa[j + 1]) * dphi / 2;
       }
     }
 
-    // rejection method
-    for (it = 0; it < info->max_iter_reject; it++) {
+    if (sp->bb[n - 1] > 0) {
+      // the point j below u in the integral, then the azimuth in the interval, where the integral is quadratic
+      u = rand01 () * sp->bb[n - 1];
+      j_lo = 0;
+      j_hi = n - 1;
+      while (j_hi - j_lo > 1) {
+        j_mid = (j_lo + j_hi) / 2;
+        if (sp->bb[j_mid] <= u) {
+          j_lo = j_mid;
+        } else {
+          j_hi = j_mid;
+        }
+      }
+      u -= sp->bb[j_lo];
+      p0 = sp->aa[j_lo];
+      slope = (sp->aa[j_lo + 1] - p0) / dphi;
+      // p0 t + slope t^2 / 2 = u
+      t = p0 * p0 + 2 * slope * u > 0 ? 2 * u / (p0 + sqrt (p0 * p0 + 2 * slope * u)) : 0;
+      phi = -PI + j_lo * dphi + fmin (dphi, fmax (0.0, t));
+    } else {
+      // the pole density is 0 at all points: uniform azimuth
       phi = -PI + 2 * PI * rand01 ();
-      // interpolate
-      j = (int)((PI + phi) / dphi);
-      p = sp->aa[j] + phi * sp->bb[j];
-      if (p / sp->maxProb > rand01 ()) {
-        kf_out = coords_scale (kfDirection (sp, phi), sp->kim);
-        kf[0] = kf_out.x;
-        kf[1] = kf_out.y;
-        kf[2] = kf_out.z;
-        return 0;
-      }
     }
 
-    fprintf (stderr, "Texture_process: too many iterations sampling hkl %d %d %d. Exit!\n", L->h, L->k, L->l);
-    exit (-1);
+    kf_out = coords_scale (kfDirection (sp, phi), sp->kim);
+    kf[0] = kf_out.x;
+    kf[1] = kf_out.y;
+    kf[2] = kf_out.z;
+    return 0;
   }
 
   // Pole density series at (ct, phi)
@@ -625,10 +627,10 @@ SHARE
   fillPoleTable (t_Table* table, struct hkl_data_texture* L, struct legendre* lgdr) {
     int i, j;
 
-    Table_Init (table, lgdr->n_ct, lgdr->n_phi);
-    for (i = 0; i < lgdr->n_ct; i++) {
+    Table_Init (table, lgdr->n_th, lgdr->n_phi);
+    for (i = 0; i < lgdr->n_th; i++) {
       for (j = 0; j < lgdr->n_phi; j++) {
-        table->data[i * lgdr->n_phi + j] = poleSeries (lgdr->ctAxis[i], lgdr->phiAxis[j], L, lgdr);
+        table->data[i * lgdr->n_phi + j] = poleSeries (cos (lgdr->thAxis[i]), lgdr->phiAxis[j], L, lgdr);
       }
     }
   }
@@ -1595,22 +1597,22 @@ SHARE
     return Table_Interp1d (x, -1.0 + j * dx, table->data[j * ncol + l + m], -1.0 + (j + 1) * dx, table->data[(j + 1) * ncol + l + m]);
   }
 
-  // Bilinear interpolation in a pole density table
+  // Bilinear interpolation in a pole density table at the polar angle x and the azimuth y
   double
   interp2D (double x, double y, struct legendre* lgdr, t_Table* table) {
     int i, j;
-    double* xp = lgdr->ctAxis;
+    double* xp = lgdr->thAxis;
     double* yp = lgdr->phiAxis;
     double* f;
 
     i = (int)((x - xp[0]) / (xp[1] - xp[0]));
     j = (int)((y - yp[0]) / (yp[1] - yp[0]));
 
-    if (i < 0 || i >= lgdr->n_ct - 1) {
-      if (i == lgdr->n_ct - 1 && fabs (x - xp[i]) < 1.0e-6) {
+    if (i < 0 || i >= lgdr->n_th - 1) {
+      if (i == lgdr->n_th - 1 && fabs (x - xp[i]) < 1.0e-6) {
         i = i - 1;
       } else {
-        fprintf (stderr, "Texture_process: cos(theta) = %.16e outside the table. Exit!\n", x);
+        fprintf (stderr, "Texture_process: theta = %.16e outside the table. Exit!\n", x);
         exit (-1);
       }
     } else if (i > 0 && x < xp[i]) {
@@ -1656,8 +1658,6 @@ SHARE
     }
 
     info->tol_V = 1.0e-6;
-    info->n_phi_points = 120;
-    info->max_iter_reject = 3000;
 
     // crystallographic data
     nread = read_hkl_data_texture (crystal_fn, info);
@@ -1689,6 +1689,9 @@ SHARE
 
     // precompute legendre associated functions
     info->lgdr = initLegendre (fc->lmax);
+
+    // azimuthal points of kf: at least 4 per period of the highest harmonic
+    info->n_phi_points = (int)fmax (120, 4 * info->lmax + 1);
 
     // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
     info->n_saved = 4;
@@ -1804,7 +1807,7 @@ SHARE
       Table_Free (lgdr->Plm + l);
     }
     free (lgdr->Plm);
-    free (lgdr->ctAxis);
+    free (lgdr->thAxis);
     free (lgdr->phiAxis);
 
     return 0;
