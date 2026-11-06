@@ -84,12 +84,13 @@
 * lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
 * source_lmin: [AA]  Shortest wavelength of the source
 * source_lmax: [AA]  Longest wavelength of the source
+* kde:        [1]    1: kernel density estimate of the pole figures in Texture_process instead of the Fourier series
 *
 * %Link
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_Al_sphere(int use_odf=0, int use_expr=0, string crystal="Al_sg225.ncmat", int use_powder=0, orientation_sigma=12, int lmax_user=12, lambda_min=1, source_lmin=1, source_lmax=10)
+DEFINE INSTRUMENT Test_texture_Al_sphere(int use_odf=0, int use_expr=0, string crystal="Al_sg225.ncmat", int use_powder=0, orientation_sigma=12, int lmax_user=12, lambda_min=1, source_lmin=1, source_lmax=10, int kde=0)
 
 DECLARE
 %{
@@ -187,7 +188,7 @@ COMPONENT texture = Texture_process(
     crystal_fn = crystal, barns = 1,
     fcoef_fn = odf_file, ebsd_fn = ebsd_file,
     rot_x_expr = rot_x, rot_y_expr = rot_y, rot_z_expr = rot_z,
-    orientation_sigma = orientation_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = (use_expr != 2),
+    orientation_sigma = orientation_sigma, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = (use_expr != 2), kde = kde,
     ax = axis_a[0], ay = axis_a[1], az = axis_a[2], bx = axis_b[0], by = axis_b[1], bz = axis_b[2]
 ) AT (0, 0, 0) RELATIVE arm_sample
 ROTATED (0, process_tilt, 0) RELATIVE arm_sample
