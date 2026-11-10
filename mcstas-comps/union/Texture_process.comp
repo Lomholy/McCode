@@ -51,8 +51,10 @@
 * An orientation list in ebsd_fn gives the ODF as the orientations smoothed by a Gaussian
 * kernel on the rotation group, with the Fourier coefficients kappa_l = exp(-l(l+1) sigma^2 / 2).
 * It is averaged over the proper rotations of the lattice given by crystal_fn, which is the
-* point group of most metals (fcc, bcc, hcp). Each orientation has the same weight, and the
-* computation time grows as the number of orientations times lmax^4.
+* point group of most metals (fcc, bcc, hcp). Each orientation has the same weight. The
+* harmonics of the pole density of each reflection are summed directly over the rotated poles,
+* so the computation time grows as the number of orientations times the number of distinct
+* poles of the reflections times lmax^2.
 *
 * rot_x_expr, rot_y_expr and rot_z_expr give the orientations instead as three tinyexpr expressions
 * for the angles in deg of rotations of the crystal axes about the x, y and z axes of the component,
@@ -74,8 +76,9 @@
 * about 5% of the intensity on 30 x 30 deg patches of sphere_det with 1000 orientations at
 * orientation_sigma = 10 deg, and needs about 30000 at 3 deg (with lmax_user = 30); the default
 * 10000 thus suffices down to about 5 deg. A k times smaller statistical error needs about k^2
-* times more orientations. INITIALIZE takes about 37 s for 10000 orientations at 10 deg
-* (lmax = 22) and 200 s at 3 deg (lmax_user = 30), growing as n_orientations * lmax^4.
+* times more orientations. For the 4255 orientations of Al_mtexdata_alu_EBSD.txt at
+* orientation_sigma = 5 deg (lmax = 43, 26 reflections of Al), the harmonics take about 5 s
+* and the tables of the pole densities about 23 s of INITIALIZE.
 *
 * Algorithm:
 * Described elsewhere, see e.g. <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>
@@ -453,48 +456,18 @@ SHARE
     }
   }
 
-  int
-  computeV (struct fourier_coef* fc, struct hkl_data_texture* L, double tol) {
-    int i, l, m, n, numV;
-    double Gct, Gphi, cnp, snp, pln, vr, vi;
-    double **R, **Phi;
+  // Keeps the V terms of L with |V_lm| > tol, given R[l][l + m] = |V_lm| and Phi[l][l + m] = arg V_lm
+  void
+  storeV (struct hkl_data_texture* L, int lmax, double** R, double** Phi, double tol) {
+    int i, l, m, numV = 0;
 
-    int lmax = fc->lmax;
-
-    Gct = L->Gct;
-    Gphi = L->Gphi;
-
-    R = (double**)malloc ((lmax + 1) * sizeof (double*));
-    for (l = 0; l <= lmax; l++) {
-      R[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
-    }
-    Phi = (double**)malloc ((lmax + 1) * sizeof (double*));
-    for (l = 0; l <= lmax; l++) {
-      Phi[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
-    }
-
-    // compute V
-
-    numV = 0;
     for (l = 0; l <= lmax; l++) {
       for (m = -l; m <= l; m++) {
-        vr = 0;
-        vi = 0;
-        for (n = -l; n <= l; n++) {
-          pln = plgndr_mod (l, n, Gct); // this can be interpolated from lgdr
-          cnp = cos (n * Gphi);
-          snp = sin (n * Gphi);
-          vr += pln * ((fc->cr)[l][l + m][l + n] * cnp - (fc->ci)[l][l + m][l + n] * snp);
-          vi += pln * ((fc->cr)[l][l + m][l + n] * snp + (fc->ci)[l][l + m][l + n] * cnp);
-        }
-        R[l][l + m] = sqrt (vr * vr + vi * vi);
-        Phi[l][l + m] = atan2 (vi, vr);
         if (R[l][l + m] > tol) {
           numV++;
         }
       }
     }
-
 
     L->numV = numV;
     L->lv = (int*)malloc (numV * sizeof (int));
@@ -514,7 +487,45 @@ SHARE
         }
       }
     }
+  }
 
+  // V_lm = sum_n C_lmn N_ln (G) of L from the Fourier coefficients fc
+  int
+  computeV (struct fourier_coef* fc, struct hkl_data_texture* L, double tol) {
+    int l, m, n;
+    double Gct, Gphi, cnp, snp, pln, vr, vi;
+    double **R, **Phi;
+
+    int lmax = fc->lmax;
+
+    Gct = L->Gct;
+    Gphi = L->Gphi;
+
+    R = (double**)malloc ((lmax + 1) * sizeof (double*));
+    for (l = 0; l <= lmax; l++) {
+      R[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
+    }
+    Phi = (double**)malloc ((lmax + 1) * sizeof (double*));
+    for (l = 0; l <= lmax; l++) {
+      Phi[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
+    }
+
+    for (l = 0; l <= lmax; l++) {
+      for (m = -l; m <= l; m++) {
+        vr = 0;
+        vi = 0;
+        for (n = -l; n <= l; n++) {
+          pln = plgndr_mod (l, n, Gct); // this can be interpolated from lgdr
+          cnp = cos (n * Gphi);
+          snp = sin (n * Gphi);
+          vr += pln * ((fc->cr)[l][l + m][l + n] * cnp - (fc->ci)[l][l + m][l + n] * snp);
+          vi += pln * ((fc->cr)[l][l + m][l + n] * snp + (fc->ci)[l][l + m][l + n] * cnp);
+        }
+        R[l][l + m] = sqrt (vr * vr + vi * vi);
+        Phi[l][l + m] = atan2 (vi, vr);
+      }
+    }
+    storeV (L, lmax, R, Phi, tol);
 
     // free memory
     for (l = 0; l <= lmax; l++) {
@@ -1157,35 +1168,6 @@ SHARE
     }
   } // freeFourierCoef
 
-  // Gauss-Legendre nodes x and weights w of order n on [-1, 1]
-  void
-  gaussLegendre (int n, double* x, double* w) {
-    int i, j, it;
-    double z, z1, p1, p2, p3, pp = 1;
-
-    for (i = 0; i < (n + 1) / 2; i++) {
-      z = cos (PI * (i + 0.75) / (n + 0.5));
-      for (it = 0; it < 100; it++) {
-        p1 = 1;
-        p2 = 0;
-        for (j = 1; j <= n; j++) {
-          p3 = p2;
-          p2 = p1;
-          p1 = ((2 * j - 1) * z * p2 - (j - 1) * p3) / j;
-        }
-        pp = n * (z * p1 - p2) / (z * z - 1);
-        z1 = z;
-        z = z1 - p1 / pp;
-        if (fabs (z - z1) < 1e-15) {
-          break;
-        }
-      }
-      x[i] = -z;
-      x[n - 1 - i] = z;
-      w[i] = w[n - 1 - i] = 2 / ((1 - z * z) * pp * pp);
-    }
-  }
-
   // sqn[l * (lmax + 1) + m] = sqrt ((l - m)! / (l + m)!) for 0 <= m <= l <= lmax
   void
   legendreNorms (int lmax, double* sqn) {
@@ -1224,62 +1206,6 @@ SHARE
     for (l = 0; l <= lmax; l++) {
       for (m = 0; m <= l; m++) {
         p[l * n + m] *= sqn[l * n + m];
-      }
-    }
-  }
-
-  // Adds N_lm (R h_q) = plgndr_mod (l, m, cos theta) exp (i m phi) for 0 <= m <= l <= lmax to (Fr, Fi)[(l * (lmax + 1) + m) * nq + q]
-  void
-  addHarmonics (Rotation R, int lmax, int nq, Coords* hq, double* sqn, double* p, double* Fr, double* Fi) {
-    int q, l, m, k;
-    double phi, cm, sm;
-    Coords v;
-
-    for (q = 0; q < nq; q++) {
-      v = rot_apply (R, hq[q]);
-      allPlgndrMod (lmax, fmin (1.0, fmax (-1.0, v.z)), sqn, p);
-      phi = atan2 (v.y, v.x);
-      for (m = 0; m <= lmax; m++) {
-        cm = cos (m * phi);
-        sm = sin (m * phi);
-        for (l = m; l <= lmax; l++) {
-          k = l * (lmax + 1) + m;
-          Fr[k * nq + q] += p[k] * cm;
-          Fi[k * nq + q] += p[k] * sm;
-        }
-      }
-    }
-  }
-
-  // Value at quadrature point q of a harmonic stored by addHarmonics, with N_l,-m = (-1)^m conj (N_lm)
-  void
-  harmonicValue (int l, int m, int lmax, int nq, int q, double* Fr, double* Fi, double* re, double* im) {
-    int k = (l * (lmax + 1) + abs (m)) * nq + q;
-    double s = (m < 0 && abs (m) % 2) ? -1 : 1;
-
-    *re = s * Fr[k];
-    *im = (m < 0 ? -s : s) * Fi[k];
-  }
-
-  // W_mn = (2l + 1) / (4 pi) sum_q w_q F_lm (h_q) conj (G_ln (h_q)) at W[(l + m) * (2l + 1) + l + n]: the matrix with
-  // F_lm (h) = sum_n W_mn G_ln (h), for G_ln the unrotated harmonics
-  void
-  projectHarmonics (int l, int lmax, int nq, double* wq, double* Fr, double* Fi, double* Gr, double* Gi, double* Wr, double* Wi) {
-    int m, n, q, d = 2 * l + 1;
-    double fr, fi, gr, gi, sr, si;
-
-    for (m = -l; m <= l; m++) {
-      for (n = -l; n <= l; n++) {
-        sr = 0;
-        si = 0;
-        for (q = 0; q < nq; q++) {
-          harmonicValue (l, m, lmax, nq, q, Fr, Fi, &fr, &fi);
-          harmonicValue (l, n, lmax, nq, q, Gr, Gi, &gr, &gi);
-          sr += wq[q] * (fr * gr + fi * gi);
-          si += wq[q] * (fi * gr - fr * gi);
-        }
-        Wr[(l + m) * d + l + n] = d / (4 * PI) * sr;
-        Wi[(l + m) * d + l + n] = d / (4 * PI) * si;
       }
     }
   }
@@ -1339,17 +1265,22 @@ SHARE
     return n;
   }
 
-  // Fourier coefficients of the ODF of the nOrient orientations in orient, smoothed by the kernel exp (-l (l + 1) sigma^2 / 2)
-  // and averaged over the lattice rotations: C_lmn = (2l + 1) kappa_l [avg_i W (g_i) avg_s W (s)]_mn, where
-  // N_lm (g h) = sum_n W (g)_mn N_ln (h). source names the origin of the orientations in the summary line.
-  // ponytail: cost grows as nOrient * lmax^4; bin the orientations first if large maps are too slow
+  // V terms of every reflection from the nOrient orientations in orient: the harmonics of the pole density of G,
+  // smoothed by the kernel exp (-l (l + 1) sigma^2 / 2) and averaged over the lattice rotations s,
+  // V_lm = (2l + 1) kappa_l avg_i avg_s N_lm (g_i s G), with N_lm (h) = plgndr_mod (l, m, cos theta) exp (i m phi).
+  // The average over s is the one over the distinct poles s G. info->lmax is lmax_user on entry and the cut-off on exit.
+  // source names the origin of the orientations in the summary line.
+  // ponytail: cost grows as nOrient * (sum of the distinct poles) * lmax^2; bin the orientations first if large maps are too slow
   void
-  orientationFourierCoef (Rotation* orient, long nOrient, double sigma, char* source, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
-    int lmax, nx, nphi, nq, nh, nsym, i, j, l, m, n, k, d;
-    double *xg, *wg, *wq, *sqn, *p, *Fr, *Fi, *Gr, *Gi, *Sr, *Si, *Ar, *Ai, *Br, *Bi;
-    double kappa, st, sr, si;
-    Coords* hq;
-    Rotation g, ops[48];
+  orientationV (Rotation* orient, long nOrient, double sigma, char* source, struct hkl_info_struct_texture* info) {
+    int lmax, n, nsym, n_pole, i_hkl, i_sym, i_known, i_pole, is_new, l, m, k;
+    long i_orient;
+    double st, c1, s1, cm, sm, cs, kappa, scale, sign, vr, vi;
+    double *sqn, *p, *Sr, *Si;
+    double **R, **Phi;
+    Rotation ops[48];
+    Coords G, v, poles[48];
+    struct hkl_data_texture* L;
 
     if (nOrient < 1) {
       fprintf (stderr, "Texture_process: %s gives no orientations. Exit!\n", source);
@@ -1360,106 +1291,126 @@ SHARE
       exit (-1);
     }
 
-    lmax = c->lmax >= 0 ? c->lmax : (int)ceil (sqrt (2 * log (1000.0)) / sigma);
-    nx = lmax + 2;
-    nphi = 2 * lmax + 4;
-    nq = nx * nphi;
-    nh = (lmax + 1) * (lmax + 1) * nq;
+    lmax = info->lmax;
+    if (lmax < 0) {
+      lmax = (int)ceil (sqrt (2 * log (1000.0)) / sigma);
+    }
+    n = lmax + 1;
 
-    xg = (double*)malloc (nx * sizeof (double));
-    wg = (double*)malloc (nx * sizeof (double));
-    wq = (double*)malloc (nq * sizeof (double));
-    hq = (Coords*)malloc (nq * sizeof (Coords));
-    sqn = (double*)malloc ((lmax + 1) * (lmax + 1) * sizeof (double));
-    p = (double*)malloc ((lmax + 1) * (lmax + 1) * sizeof (double));
-    Fr = (double*)calloc (nh, sizeof (double));
-    Fi = (double*)calloc (nh, sizeof (double));
-    Gr = (double*)calloc (nh, sizeof (double));
-    Gi = (double*)calloc (nh, sizeof (double));
-    Sr = (double*)calloc (nh, sizeof (double));
-    Si = (double*)calloc (nh, sizeof (double));
-    Ar = (double*)malloc ((2 * lmax + 1) * (2 * lmax + 1) * sizeof (double));
-    Ai = (double*)malloc ((2 * lmax + 1) * (2 * lmax + 1) * sizeof (double));
-    Br = (double*)malloc ((2 * lmax + 1) * (2 * lmax + 1) * sizeof (double));
-    Bi = (double*)malloc ((2 * lmax + 1) * (2 * lmax + 1) * sizeof (double));
-    if (!xg || !wg || !wq || !hq || !sqn || !p || !Fr || !Fi || !Gr || !Gi || !Sr || !Si || !Ar || !Ai || !Br || !Bi) {
-      fprintf (stderr, "Texture_process: Failed malloc() in orientationFourierCoef. Exit!\n");
+    sqn = (double*)malloc (n * n * sizeof (double));
+    p = (double*)malloc (n * n * sizeof (double));
+    Sr = (double*)malloc (n * n * sizeof (double));
+    Si = (double*)malloc (n * n * sizeof (double));
+    R = (double**)malloc (n * sizeof (double*));
+    Phi = (double**)malloc (n * sizeof (double*));
+    if (!sqn || !p || !Sr || !Si || !R || !Phi) {
+      fprintf (stderr, "Texture_process: Failed malloc() in orientationV. Exit!\n");
       exit (-1);
     }
-
-    // quadrature points on the sphere, exact for the products of two harmonics of order <= lmax
-    gaussLegendre (nx, xg, wg);
-    for (i = 0; i < nx; i++) {
-      st = sqrt (1 - xg[i] * xg[i]);
-      for (j = 0; j < nphi; j++) {
-        hq[i * nphi + j] = coords_set (st * cos (2 * PI * j / nphi), st * sin (2 * PI * j / nphi), xg[i]);
-        wq[i * nphi + j] = wg[i] * 2 * PI / nphi;
+    for (l = 0; l <= lmax; l++) {
+      R[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
+      Phi[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
+      if (!R[l] || !Phi[l]) {
+        fprintf (stderr, "Texture_process: Failed malloc() in orientationV. Exit!\n");
+        exit (-1);
       }
     }
     legendreNorms (lmax, sqn);
-
-    for (i = 0; i < nOrient; i++) {
-      addHarmonics (orient[i], lmax, nq, hq, sqn, p, Fr, Fi);
-    }
-
     nsym = latticeRotations (info, ops);
-    for (i = 0; i < nsym; i++) {
-      addHarmonics (ops[i], lmax, nq, hq, sqn, p, Sr, Si);
-    }
 
-    rot_set_rotation (g, 0, 0, 0);
-    addHarmonics (g, lmax, nq, hq, sqn, p, Gr, Gi);
+    for (i_hkl = 0; i_hkl < info->num_hkl; i_hkl++) {
+      L = info->list + i_hkl;
+      st = sqrt (fmax (0.0, 1 - L->Gct * L->Gct));
+      G = coords_set (st * cos (L->Gphi), st * sin (L->Gphi), L->Gct);
 
-    for (k = 0; k < nh; k++) {
-      Fr[k] /= nOrient;
-      Fi[k] /= nOrient;
-      Sr[k] /= nsym;
-      Si[k] /= nsym;
-    }
-
-    allocateFourierCoef (lmax, c);
-    for (l = 0; l <= lmax; l++) {
-      d = 2 * l + 1;
-      kappa = exp (-l * (l + 1) * sigma * sigma / 2);
-      projectHarmonics (l, lmax, nq, wq, Fr, Fi, Gr, Gi, Ar, Ai);
-      projectHarmonics (l, lmax, nq, wq, Sr, Si, Gr, Gi, Br, Bi);
-      for (m = 0; m < d; m++) {
-        for (n = 0; n < d; n++) {
-          sr = 0;
-          si = 0;
-          for (k = 0; k < d; k++) {
-            sr += Ar[m * d + k] * Br[k * d + n] - Ai[m * d + k] * Bi[k * d + n];
-            si += Ar[m * d + k] * Bi[k * d + n] + Ai[m * d + k] * Br[k * d + n];
+      n_pole = 0;
+      for (i_sym = 0; i_sym < nsym; i_sym++) {
+        v = rot_apply (ops[i_sym], G);
+        is_new = 1;
+        for (i_known = 0; i_known < n_pole; i_known++) {
+          if (coords_len (coords_sub (v, poles[i_known])) < 1e-9) {
+            is_new = 0;
           }
-          (c->cr)[l][m][n] = d * kappa * sr;
-          (c->ci)[l][m][n] = d * kappa * si;
+        }
+        if (is_new) {
+          poles[n_pole] = v;
+          n_pole++;
         }
       }
+
+      // sums of N_lm (g_i s G) for m >= 0, at [l * (lmax + 1) + m]
+      for (k = 0; k < n * n; k++) {
+        Sr[k] = 0;
+        Si[k] = 0;
+      }
+      for (i_orient = 0; i_orient < nOrient; i_orient++) {
+        for (i_pole = 0; i_pole < n_pole; i_pole++) {
+          v = rot_apply (orient[i_orient], poles[i_pole]);
+          allPlgndrMod (lmax, fmin (1.0, fmax (-1.0, v.z)), sqn, p);
+          // cos (m phi), sin (m phi) by the angle addition from cos phi, sin phi
+          st = sqrt (v.x * v.x + v.y * v.y);
+          c1 = 1;
+          s1 = 0;
+          if (st > 0) {
+            c1 = v.x / st;
+            s1 = v.y / st;
+          }
+          cm = 1;
+          sm = 0;
+          for (m = 0; m <= lmax; m++) {
+            for (l = m; l <= lmax; l++) {
+              k = l * n + m;
+              Sr[k] += p[k] * cm;
+              Si[k] += p[k] * sm;
+            }
+            cs = cm * c1 - sm * s1;
+            sm = sm * c1 + cm * s1;
+            cm = cs;
+          }
+        }
+      }
+
+      // V_l,-m = (-1)^m conj (V_lm)
+      for (l = 0; l <= lmax; l++) {
+        kappa = exp (-l * (l + 1) * sigma * sigma / 2);
+        scale = (2 * l + 1) * kappa / ((double)nOrient * n_pole);
+        for (m = -l; m <= l; m++) {
+          k = l * n + abs (m);
+          vr = scale * Sr[k];
+          vi = scale * Si[k];
+          if (m < 0) {
+            sign = 1;
+            if (abs (m) % 2) {
+              sign = -1;
+            }
+            vr *= sign;
+            vi *= -sign;
+          }
+          R[l][l + m] = sqrt (vr * vr + vi * vi);
+          Phi[l][l + m] = atan2 (vi, vr);
+        }
+      }
+      storeV (L, lmax, R, Phi, info->tol_V);
     }
+    info->lmax = lmax;
 
     printf ("Texture_process: %s: %ld orientations, %d lattice rotations, sigma = %g deg, lmax = %d\n", source, nOrient, nsym, sigma * RAD2DEG, lmax);
 
-    free (xg);
-    free (wg);
-    free (wq);
-    free (hq);
+    for (l = 0; l <= lmax; l++) {
+      free (R[l]);
+      free (Phi[l]);
+    }
+    free (R);
+    free (Phi);
     free (sqn);
     free (p);
-    free (Fr);
-    free (Fi);
-    free (Gr);
-    free (Gi);
     free (Sr);
     free (Si);
-    free (Ar);
-    free (Ai);
-    free (Br);
-    free (Bi);
   }
 
-  // Fourier coefficients of the ODF of the orientations in filename, given as Bunge Euler angles g = Rz (phi1) Rx (Phi) Rz (phi2)
+  // V terms of the orientations in filename, given as Bunge Euler angles g = Rz (phi1) Rx (Phi) Rz (phi2)
   void
-  ebsdFourierCoef (char* filename, double sigma, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
+  ebsdV (char* filename, double sigma, struct hkl_info_struct_texture* info) {
     t_Table table;
     long i;
     double c1, s1, c2, s2, C, S;
@@ -1471,7 +1422,7 @@ SHARE
     }
     orient = (Rotation*)malloc (table.rows * sizeof (Rotation));
     if (!orient) {
-      fprintf (stderr, "Texture_process: Failed malloc() in ebsdFourierCoef. Exit!\n");
+      fprintf (stderr, "Texture_process: Failed malloc() in ebsdV. Exit!\n");
       exit (-1);
     }
 
@@ -1493,17 +1444,17 @@ SHARE
       orient[i][2][2] = C;
     }
 
-    orientationFourierCoef (orient, table.rows, sigma, filename, info, c);
+    orientationV (orient, table.rows, sigma, filename, info);
 
     free (orient);
     Table_Free (&table);
   }
 
-  // Fourier coefficients of the ODF of info->n_orient orientations drawn from the expressions info->rot_expr of the angles (deg)
+  // V terms of info->n_orient orientations drawn from the expressions info->rot_expr of the angles (deg)
   // about x, y and z, composed as ROTATED: g = Rx (rx) Ry (ry) Rz (rz), active, crystal axes to component axes.
   // u1, u2, u3 are drawn anew for each orientation from the McStas random generator, seeded from mcseed.
   void
-  expressionFourierCoef (double sigma, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
+  expressionV (double sigma, struct hkl_info_struct_texture* info) {
     // values of u1, u2, u3, p1...p6 in the expressions
     const char* names[9] = { "u1", "u2", "u3", "p1", "p2", "p3", "p4", "p5", "p6" };
     double vars[9];
@@ -1535,7 +1486,7 @@ SHARE
     }
     orient = (Rotation*)malloc (info->n_orient * sizeof (Rotation));
     if (!orient) {
-      fprintf (stderr, "Texture_process: Failed malloc() in expressionFourierCoef. Exit!\n");
+      fprintf (stderr, "Texture_process: Failed malloc() in expressionV. Exit!\n");
       exit (-1);
     }
 
@@ -1569,7 +1520,7 @@ SHARE
       rot_transpose (t, orient[i_orient]);
     }
 
-    orientationFourierCoef (orient, info->n_orient, sigma, "rotation expressions", info, c);
+    orientationV (orient, info->n_orient, sigma, "rotation expressions", info);
 
     free (orient);
     for (axis = 0; axis < 3; axis++) {
@@ -1685,29 +1636,35 @@ SHARE
       return 1;
     }
 
-    // get fourier coefficients of texture
-    fc = (struct fourier_coef*)malloc (sizeof (struct fourier_coef));
-    fc->lmax = info->lmax;
+    // V terms of the reflections, from the orientations or from the Fourier coefficients of the texture
     if (use_ebsd) {
       if (nread < 0) {
         fprintf (stderr, "Texture_process: ebsd_fn needs the lattice from crystal_fn. Exit!\n");
         exit (-1);
       }
-      ebsdFourierCoef (ebsd_fn, orientation_sigma * DEG2RAD, info, fc);
+      ebsdV (ebsd_fn, orientation_sigma * DEG2RAD, info);
     } else if (n_expr == 3) {
       if (nread < 0) {
         fprintf (stderr, "Texture_process: the rotation expressions need the lattice from crystal_fn. Exit!\n");
         exit (-1);
       }
-      expressionFourierCoef (orientation_sigma * DEG2RAD, info, fc);
+      expressionV (orientation_sigma * DEG2RAD, info);
     } else {
+      fc = (struct fourier_coef*)malloc (sizeof (struct fourier_coef));
+      fc->lmax = info->lmax;
       readFourierCoef (coef_fn, fc);
+      // the cut-off actually used: the file's lmax, or lmax_user if that is smaller
+      info->lmax = fc->lmax;
+      L = info->list;
+      for (i = 0; i < info->num_hkl; i++) {
+        computeV (fc, L + i, info->tol_V);
+      }
+      freeFourierCoef (fc);
+      free (fc);
     }
-    // the cut-off actually used: the file's lmax, or lmax_user if that is smaller
-    info->lmax = fc->lmax;
 
     // precompute legendre associated functions
-    info->lgdr = initLegendre (fc->lmax);
+    info->lgdr = initLegendre (info->lmax);
 
     // below lmax = 20 the pole density of kf is read from probQ at each try instead of tabulated for each wavevector
     info->phi_table = info->lmax >= 20;
@@ -1743,12 +1700,6 @@ SHARE
       L[i].numNegativeXS = 0;
     }
 
-    // V matrices for cross sections
-    L = info->list;
-    for (i = 0; i < info->num_hkl; i++) {
-      computeV (fc, L + i, info->tol_V);
-    }
-
     // precompute the probability distribution of Q
     L = info->list;
     for (i = 0; i < info->num_hkl; i++) {
@@ -1773,10 +1724,6 @@ SHARE
       exit (-1);
     }
     legendreNorms (info->lmax, info->sqn);
-
-    // free memory of fourier coefficient, not needed anymore
-    freeFourierCoef (fc);
-    free (fc);
 
     return 0;
   }
