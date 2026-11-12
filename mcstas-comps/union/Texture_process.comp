@@ -108,86 +108,86 @@ SHARE
 
   // azimuthal sampling table of kf for one reflection and one wavevector
   struct kf_phi_table {
-    int built;             // 0 until the table is computed for the wavevector of its cache entry
-    Coords kih;            // unit vector of ki
-    Coords t1, t2;         // complete kih to a right-handed basis (t1,t2,kih)
-    double kim;            // modulus of ki
-    double stheta, ctheta; // sine and cosine of the scattering angle
-    double maxProb;
-    double *aa, *bb;       // probability aa[j] + phi * bb[j] of the azimuth phi between points j and j + 1
+    int built;                                         // 0 until the table is computed for the wavevector of its cache entry
+    Coords ki_unit;                                    // unit vector of ki
+    Coords perp_1, perp_2;                             // complete ki_unit to a right-handed basis (perp_1, perp_2, ki_unit)
+    double ki_modulus;                                 // modulus of ki
+    double sin_scattering_angle, cos_scattering_angle; // sine and cosine of the scattering angle
+    double max_probability;
+    double *prob_offset, *prob_slope; // probability prob_offset[j] + phi * prob_slope[j] of the azimuth phi between points j and j + 1
   };
 
   // everything computed for one wavevector
   struct ki_cache_entry {
     Coords ki;
-    int last_hkl;             // index of the last reflection below the Bragg cutoff, -1 if none
-    double cohMu;             // linear attenuation coefficient (m^-1)
-    double* XS_ki;            // cross section of each reflection alone
-    struct kf_phi_table* phi; // sampling table of each reflection
+    int last_hkl;                    // index of the last reflection below the Bragg cutoff, -1 if none
+    double coherent_mu;              // linear attenuation coefficient (m^-1)
+    double* XS_ki;                   // cross section of each reflection alone
+    struct kf_phi_table* phi_tables; // sampling table of each reflection
   };
 
   struct odf_coefficients {
     int lmax;
-    double ***cr, ***ci;
+    double ***coef_real, ***coef_imag;
   };
 
   struct legendre_tables {
     int lmax;
-    t_Table* Plm; // per l: scaled_associated_legendre on a uniform grid in x, with one column per m
+    t_Table* plm_tables; // per l: scaled_associated_legendre on a uniform grid in x, with one column per m
     // axes of the pole density tables, uniform in cos(theta) and phi
-    int n_ct, n_phi;
-    double* ctAxis;
-    double* phiAxis;
+    int n_cos_theta, n_phi;
+    double* cos_theta_axis;
+    double* phi_axis;
   };
 
   struct hkl_data_texture {
-    int h, k, l;          // Indices for this reflection
-    int mult;             // Multiplicity of the line
-    double F2;            // Value of square of structure factor
-    double G, Gct, Gphi;  // polar coordinates of G [Gct=cos(theta)]
-    // total cross section: sum_m scaled_associated_legendre (l, m, kct) (Ac cos (m kphi) + As sin (m kphi)) at [l * (lmax + 1) + m], m >= 0
-    double *Ac, *As;
-    // To obtain cross sections
-    int numV;
-    int *lv, *mv;
-    double *RV, *phiV;
+    int h, k, l;                  // Indices for this reflection
+    int multiplicity;             // Multiplicity of the line
+    double F2;                    // Value of square of structure factor
+    double G, G_cos_theta, G_phi; // polar coordinates of G
+    // total cross section: sum_m scaled_associated_legendre (l, m, kct) (XS_cos_coef cos (m kphi) + XS_sin_coef sin (m kphi)) at [l * (lmax + 1) + m], m >= 0
+    double *XS_cos_coef, *XS_sin_coef;
+    // V terms above V_tolerance, which give the cross sections: order l, m, modulus and phase of each
+    int n_V;
+    int *V_l, *V_m;
+    double *V_modulus, *V_phase;
     // to sample kprime
     // precomputed Q distribution
-    t_Table probQ;
-    double probQmax; // largest value of probQ
+    t_Table pole_density;
+    double pole_density_max; // largest value of pole_density
     // number of negative cross sections from the truncated series
-    double numNegativeXS;
+    double n_negative_XS;
   };
 
   struct hkl_info_struct_texture {
     // data structures
-    int num_hkl;                   // Number of reflections hkl taken into account
-    struct hkl_data_texture* list; // Reflection array
-    struct legendre_tables* lgdr;  // structure with precomputed spherical harmonics
-    int lmax;                      // cut-off for the Fourier expansion
+    int num_hkl;                                     // Number of reflections hkl taken into account
+    struct hkl_data_texture* hkl_list;               // Reflection array
+    struct legendre_tables* legendre_ass_polynomial; // structure with precomputed spherical harmonics
+    int lmax;                                        // cut-off for the Fourier expansion
 
-    double V0;             // Unit cell volume (AA**3)
-    Coords lat[3];         // direct lattice vectors (AA) in the Cartesian crystal frame
-    int flag_barns;        // |F|^2 is in barns whatever the barns parameter is
-    int use_mtex_axes;     // crystal axes z || c, x || a* instead of x || a, b in the xy plane
-    Coords crys_axis[3];   // directions of the lattice vectors a, b, c in the component, (0, 0, 0) if not given
-    double wavelength_min; // Reflections only scattering below this wavelength are not used
+    double cell_volume;           // Unit cell volume (AA**3)
+    Coords lattice_vectors[3];    // direct lattice vectors (AA) in the Cartesian crystal frame
+    int F2_in_barns;              // |F|^2 is in barns whatever the barns parameter is
+    int use_mtex_axes;            // crystal axes z || c, x || a* instead of x || a, b in the xy plane
+    Coords lattice_directions[3]; // directions of the lattice vectors a, b, c in the component, (0, 0, 0) if not given
+    double wavelength_min;        // Reflections only scattering below this wavelength are not used
 
     // precomputed factors
-    double xs2mu; // cross section to mu (in m^-1)
+    double XS_to_mu; // cross section to mu (in m^-1)
 
-    double tol_V;        // terms of V with a smaller modulus are dropped
-    double* sqn;         // sqrt ((l - m)! / (l + m)!) at [l * (lmax + 1) + m]
-    double* plm;         // scaled_associated_legendre (l, m, kct) of the wavevector of the last cache fill, same index
-    double *cm, *sm;     // cos (m kphi) and sin (m kphi) of that wavevector
-    int n_phi_points;    // points of the azimuthal sampling tables of kf
-    int phi_table;       // 1: azimuthal table of kf for each wavevector (lmax >= 20), 0: rejection on probQ directly
-    int max_iter_reject; // tries of the rejection sampling of kf before giving up
+    double V_tolerance;            // terms of V with a smaller modulus are dropped
+    double* legendre_norm;         // sqrt ((l - m)! / (l + m)!) at [l * (lmax + 1) + m]
+    double* plm_ki;                // scaled_associated_legendre (l, m, kct) of the wavevector of the last cache fill, same index
+    double *cos_m_phi, *sin_m_phi; // cos (m kphi) and sin (m kphi) of that wavevector
+    int n_phi_points;              // points of the azimuthal sampling tables of kf
+    int use_phi_table;             // 1: azimuthal table of kf for each wavevector (lmax >= 20), 0: rejection on pole_density directly
+    int max_iter_reject;           // tries of the rejection sampling of kf before giving up
 
-    // everything computed for the last n_saved wavevectors, most recently used first,
+    // everything computed for the last n_cached wavevectors, most recently used first,
     // so that the SPLIT copies of a neutron reuse it
-    int n_saved;
-    struct ki_cache_entry* saved;
+    int n_cached;
+    struct ki_cache_entry* ki_cache;
   };
 
   /////////////////////////////////////////
@@ -209,8 +209,8 @@ SHARE
 
   // Linear interpolation of scaled_associated_legendre in the table of order l
   double
-  plmValue (int l, int m, double x, struct legendre_tables* lgdr) {
-    t_Table* table = lgdr->Plm + l;
+  plmValue (int l, int m, double x, struct legendre_tables* legendre) {
+    t_Table* table = legendre->plm_tables + l;
     long nx = table->rows;
     long ncol = table->columns;
     double dx = 2.0 / (nx - 1);
@@ -226,39 +226,39 @@ SHARE
 
   // Bilinear interpolation in a pole density table
   double
-  interp2D (double x, double y, struct legendre_tables* lgdr, t_Table* table) {
+  interp2D (double x, double y, struct legendre_tables* legendre, t_Table* table) {
     int i, j;
-    double* xp = lgdr->ctAxis;
-    double* yp = lgdr->phiAxis;
-    double* f;
+    double* cos_theta_axis = legendre->cos_theta_axis;
+    double* phi_axis = legendre->phi_axis;
+    double* corner;
 
-    i = (int)((x - xp[0]) / (xp[1] - xp[0]));
-    j = (int)((y - yp[0]) / (yp[1] - yp[0]));
+    i = (int)((x - cos_theta_axis[0]) / (cos_theta_axis[1] - cos_theta_axis[0]));
+    j = (int)((y - phi_axis[0]) / (phi_axis[1] - phi_axis[0]));
 
-    if (i < 0 || i >= lgdr->n_ct - 1) {
-      if (i == lgdr->n_ct - 1 && fabs (x - xp[i]) < 1.0e-6) {
+    if (i < 0 || i >= legendre->n_cos_theta - 1) {
+      if (i == legendre->n_cos_theta - 1 && fabs (x - cos_theta_axis[i]) < 1.0e-6) {
         i = i - 1;
       } else {
         fprintf (stderr, "Texture_process: cos(theta) = %.16e outside the table. Exit!\n", x);
         exit (-1);
       }
-    } else if (i > 0 && x < xp[i]) {
+    } else if (i > 0 && x < cos_theta_axis[i]) {
       i = i - 1;
     }
 
-    if (j < 0 || j >= lgdr->n_phi - 1) {
-      if (j == lgdr->n_phi - 1 && fabs (y - yp[j]) < 1.0e-6) {
+    if (j < 0 || j >= legendre->n_phi - 1) {
+      if (j == legendre->n_phi - 1 && fabs (y - phi_axis[j]) < 1.0e-6) {
         j = j - 1;
       } else {
         fprintf (stderr, "Texture_process: phi = %.16e outside the table. Exit!\n", y);
         exit (-1);
       }
-    } else if (j > 0 && y < yp[j]) {
+    } else if (j > 0 && y < phi_axis[j]) {
       j = j - 1;
     }
 
-    f = table->data + i * lgdr->n_phi + j;
-    return Table_Interp2d (x, y, xp[i], yp[j], xp[i + 1], yp[j + 1], f[0], f[1], f[lgdr->n_phi], f[lgdr->n_phi + 1]);
+    corner = table->data + i * legendre->n_phi + j;
+    return Table_Interp2d (x, y, cos_theta_axis[i], phi_axis[j], cos_theta_axis[i + 1], phi_axis[j + 1], corner[0], corner[1], corner[legendre->n_phi], corner[legendre->n_phi + 1]);
   }
 
   /////////////////////
@@ -269,51 +269,51 @@ SHARE
   initLegendre (int lmax) {
     int j, l, m, nx;
     double x, dx;
-    struct legendre_tables* lgdr;
+    struct legendre_tables* legendre;
 
-    lgdr = (struct legendre_tables*)malloc (sizeof (struct legendre_tables));
-    if (!lgdr) {
+    legendre = (struct legendre_tables*)malloc (sizeof (struct legendre_tables));
+    if (!legendre) {
       fprintf (stderr, "Texture_process: Failed struct malloc() in initLegendre. Exit!\n");
       exit (-1);
     }
-    lgdr->lmax = lmax;
-    lgdr->Plm = (t_Table*)malloc ((lmax + 1) * sizeof (t_Table));
-    if (!lgdr->Plm) {
+    legendre->lmax = lmax;
+    legendre->plm_tables = (t_Table*)malloc ((lmax + 1) * sizeof (t_Table));
+    if (!legendre->plm_tables) {
       fprintf (stderr, "Texture_process: Failed malloc() in initLegendre. Exit!\n");
       exit (-1);
     }
     for (l = 0; l <= lmax; l++) {
       nx = 100 * (l + 1);
       dx = 2.0 / (nx - 1);
-      Table_Init (lgdr->Plm + l, nx, 2 * l + 1);
+      Table_Init (legendre->plm_tables + l, nx, 2 * l + 1);
       for (j = 0; j < nx; j++) {
         x = (j < nx - 1 ? -1.0 + j * dx : 1.0);
         for (m = -l; m <= l; m++) {
-          lgdr->Plm[l].data[j * (2 * l + 1) + l + m] = scaled_associated_legendre (l, m, x);
+          legendre->plm_tables[l].data[j * (2 * l + 1) + l + m] = scaled_associated_legendre (l, m, x);
         }
       }
     }
 
-    lgdr->n_ct = 201;
-    lgdr->n_phi = 601;
-    lgdr->ctAxis = (double*)malloc (lgdr->n_ct * sizeof (double));
-    lgdr->phiAxis = (double*)malloc (lgdr->n_phi * sizeof (double));
-    if (!lgdr->ctAxis || !lgdr->phiAxis) {
+    legendre->n_cos_theta = 201;
+    legendre->n_phi = 601;
+    legendre->cos_theta_axis = (double*)malloc (legendre->n_cos_theta * sizeof (double));
+    legendre->phi_axis = (double*)malloc (legendre->n_phi * sizeof (double));
+    if (!legendre->cos_theta_axis || !legendre->phi_axis) {
       fprintf (stderr, "Texture_process: Failed malloc() in initLegendre. Exit!\n");
       exit (-1);
     }
-    dx = 2.0 / (lgdr->n_ct - 1);
-    for (j = 0; j < lgdr->n_ct - 1; j++) {
-      lgdr->ctAxis[j] = -1.0 + j * dx;
+    dx = 2.0 / (legendre->n_cos_theta - 1);
+    for (j = 0; j < legendre->n_cos_theta - 1; j++) {
+      legendre->cos_theta_axis[j] = -1.0 + j * dx;
     }
-    lgdr->ctAxis[lgdr->n_ct - 1] = 1.0;
-    dx = (2.0 * PI) / (lgdr->n_phi - 1);
-    for (j = 0; j < lgdr->n_phi - 1; j++) {
-      lgdr->phiAxis[j] = -PI + j * dx;
+    legendre->cos_theta_axis[legendre->n_cos_theta - 1] = 1.0;
+    dx = (2.0 * PI) / (legendre->n_phi - 1);
+    for (j = 0; j < legendre->n_phi - 1; j++) {
+      legendre->phi_axis[j] = -PI + j * dx;
     }
-    lgdr->phiAxis[lgdr->n_phi - 1] = PI;
+    legendre->phi_axis[legendre->n_phi - 1] = PI;
 
-    return lgdr;
+    return legendre;
   }
 
   // end legendre
@@ -322,14 +322,14 @@ SHARE
   ////// Cross sections     ///
   /////////////////////////////
 
-  // Total cross section of L at wavevector modulus k, with texture->plm, cm, sm filled for its direction
+  // Total cross section of hkl at wavevector modulus k, with texture->plm_ki, cos_m_phi, sin_m_phi filled for its direction
   double
-  total_hkl_XS (double k, struct hkl_data_texture* L, struct hkl_info_struct_texture* texture) {
+  total_hkl_XS (double k, struct hkl_data_texture* hkl, struct hkl_info_struct_texture* texture) {
     int l, m;
     int n = texture->lmax + 1;
-    double x = (L->G) / (2 * k);
-    double XS, ul, pl, pl_prev, pl_next;
-    double *Ac, *As, *plm;
+    double x = (hkl->G) / (2 * k);
+    double XS, upsilon_l, p_l, p_l_prev, p_l_next;
+    double *XS_cos_coef, *XS_sin_coef, *plm_l;
 
     if (x > 1) {
       return 0;
@@ -337,117 +337,117 @@ SHARE
 
     // XS = 1 + sum_l P_l (x) Upsilon_l (kct, kphi), with the Legendre polynomials P_l from their recurrence
     XS = 1.0;
-    pl_prev = 1.0;
-    pl = x;
+    p_l_prev = 1.0;
+    p_l = x;
     for (l = 1; l <= texture->lmax; l++) {
-      Ac = L->Ac + l * n;
-      As = L->As + l * n;
-      plm = texture->plm + l * n;
-      ul = 0;
+      XS_cos_coef = hkl->XS_cos_coef + l * n;
+      XS_sin_coef = hkl->XS_sin_coef + l * n;
+      plm_l = texture->plm_ki + l * n;
+      upsilon_l = 0;
       for (m = 0; m <= l; m++) {
-        ul += plm[m] * (Ac[m] * texture->cm[m] + As[m] * texture->sm[m]);
+        upsilon_l += plm_l[m] * (XS_cos_coef[m] * texture->cos_m_phi[m] + XS_sin_coef[m] * texture->sin_m_phi[m]);
       }
-      XS += pl * ul;
-      pl_next = ((2 * l + 1) * x * pl - l * pl_prev) / (l + 1);
-      pl_prev = pl;
-      pl = pl_next;
+      XS += p_l * upsilon_l;
+      p_l_next = ((2 * l + 1) * x * p_l - l * p_l_prev) / (l + 1);
+      p_l_prev = p_l;
+      p_l = p_l_next;
     }
 
     if (XS < 0) {
-      L->numNegativeXS += 1;
+      hkl->n_negative_XS += 1;
     }
 
     // this is not the cross section. A different name (reflectivity??)
     // would be appropriate
     // there is a missed factor N*(2*pi)**3/(v0*k**3), which is a constant
     // and then applied only at the end
-    XS *= (L->mult) * (L->F2) / (4 * x);
+    XS *= (hkl->multiplicity) * (hkl->F2) / (4 * x);
 
     return XS;
   }
 
-  // Ac, As of L from its V terms, with scaled_associated_legendre (l, -m) = (-1)^m scaled_associated_legendre (l, m)
+  // XS_cos_coef, XS_sin_coef of hkl from its V terms, with scaled_associated_legendre (l, -m) = (-1)^m scaled_associated_legendre (l, m)
   void
-  xsCoefficients (struct hkl_data_texture* L, int lmax) {
-    int i, l, m, ma;
+  xsCoefficients (struct hkl_data_texture* hkl, int lmax) {
+    int i, l, m, m_abs;
     int n = lmax + 1;
-    double s;
+    double sign;
 
-    L->Ac = (double*)calloc (n * n, sizeof (double));
-    L->As = (double*)calloc (n * n, sizeof (double));
-    if (!L->Ac || !L->As) {
+    hkl->XS_cos_coef = (double*)calloc (n * n, sizeof (double));
+    hkl->XS_sin_coef = (double*)calloc (n * n, sizeof (double));
+    if (!hkl->XS_cos_coef || !hkl->XS_sin_coef) {
       fprintf (stderr, "Texture_process: Failed malloc() in xsCoefficients. Exit!\n");
       exit (-1);
     }
-    for (i = 0; i < L->numV; i++) {
-      l = L->lv[i];
-      m = L->mv[i];
-      ma = abs (m);
-      s = (m < 0 && ma % 2) ? -1 : 1;
-      // cos (phiV - m kphi) = cos phiV cos (m kphi) + sin phiV sin (m kphi)
-      L->Ac[l * n + ma] += s * L->RV[i] * cos (L->phiV[i]);
-      L->As[l * n + ma] += s * (m < 0 ? -1 : 1) * L->RV[i] * sin (L->phiV[i]);
+    for (i = 0; i < hkl->n_V; i++) {
+      l = hkl->V_l[i];
+      m = hkl->V_m[i];
+      m_abs = abs (m);
+      sign = (m < 0 && m_abs % 2) ? -1 : 1;
+      // cos (V_phase - m kphi) = cos V_phase cos (m kphi) + sin V_phase sin (m kphi)
+      hkl->XS_cos_coef[l * n + m_abs] += sign * hkl->V_modulus[i] * cos (hkl->V_phase[i]);
+      hkl->XS_sin_coef[l * n + m_abs] += sign * (m < 0 ? -1 : 1) * hkl->V_modulus[i] * sin (hkl->V_phase[i]);
     }
   }
 
   int
-  computeV (struct odf_coefficients* fc, struct hkl_data_texture* L, double tol) {
-    int i, l, m, n, numV;
-    double Gct, Gphi, cnp, snp, pln, vr, vi;
-    double **R, **Phi;
+  computeV (struct odf_coefficients* odf, struct hkl_data_texture* hkl, double V_tolerance) {
+    int i, l, m, n, n_V;
+    double G_cos_theta, G_phi, cos_nphi, sin_nphi, plm_n, V_real, V_imag;
+    double **V_modulus, **V_phase;
 
-    int lmax = fc->lmax;
+    int lmax = odf->lmax;
 
-    Gct = L->Gct;
-    Gphi = L->Gphi;
+    G_cos_theta = hkl->G_cos_theta;
+    G_phi = hkl->G_phi;
 
-    R = (double**)malloc ((lmax + 1) * sizeof (double*));
+    V_modulus = (double**)malloc ((lmax + 1) * sizeof (double*));
     for (l = 0; l <= lmax; l++) {
-      R[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
+      V_modulus[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
     }
-    Phi = (double**)malloc ((lmax + 1) * sizeof (double*));
+    V_phase = (double**)malloc ((lmax + 1) * sizeof (double*));
     for (l = 0; l <= lmax; l++) {
-      Phi[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
+      V_phase[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
     }
 
     // compute V
 
-    numV = 0;
+    n_V = 0;
     for (l = 0; l <= lmax; l++) {
       for (m = -l; m <= l; m++) {
-        vr = 0;
-        vi = 0;
+        V_real = 0;
+        V_imag = 0;
         for (n = -l; n <= l; n++) {
-          pln = scaled_associated_legendre (l, n, Gct); // this can be interpolated from lgdr
-          cnp = cos (n * Gphi);
-          snp = sin (n * Gphi);
-          vr += pln * ((fc->cr)[l][l + m][l + n] * cnp - (fc->ci)[l][l + m][l + n] * snp);
-          vi += pln * ((fc->cr)[l][l + m][l + n] * snp + (fc->ci)[l][l + m][l + n] * cnp);
+          plm_n = scaled_associated_legendre (l, n, G_cos_theta); // this can be interpolated from legendre_ass_polynomial
+          cos_nphi = cos (n * G_phi);
+          sin_nphi = sin (n * G_phi);
+          V_real += plm_n * ((odf->coef_real)[l][l + m][l + n] * cos_nphi - (odf->coef_imag)[l][l + m][l + n] * sin_nphi);
+          V_imag += plm_n * ((odf->coef_real)[l][l + m][l + n] * sin_nphi + (odf->coef_imag)[l][l + m][l + n] * cos_nphi);
         }
-        R[l][l + m] = sqrt (vr * vr + vi * vi);
-        Phi[l][l + m] = atan2 (vi, vr);
-        if (R[l][l + m] > tol) {
-          numV++;
+        V_modulus[l][l + m] = sqrt (V_real * V_real + V_imag * V_imag);
+        V_phase[l][l + m] = atan2 (V_imag, V_real);
+        if (V_modulus[l][l + m] > V_tolerance) {
+          n_V++;
         }
       }
     }
 
 
-    L->numV = numV;
-    L->lv = (int*)malloc (numV * sizeof (int));
-    L->mv = (int*)malloc (numV * sizeof (int));
-    L->RV = (double*)malloc (numV * sizeof (double));
-    L->phiV = (double*)malloc (numV * sizeof (double));
+    hkl->n_V = n_V;
+    hkl->V_l = (int*)malloc (n_V * sizeof (int));
+    hkl->V_m = (int*)malloc (n_V * sizeof (int));
+    hkl->V_modulus = (double*)malloc (n_V * sizeof (double));
+    hkl->V_phase = (double*)malloc (n_V * sizeof (double));
 
     i = -1;
     for (l = 0; l <= lmax; l++) {
       for (m = -l; m <= l; m++) {
-        if (R[l][l + m] > tol) {
+        if (V_modulus[l][l + m] > V_tolerance) {
           i++;
-          (L->lv)[i] = l;
-          (L->mv)[i] = m;
-          (L->RV)[i] = R[l][l + m];
-          (L->phiV)[i] = Phi[l][l + m];
+          (hkl->V_l)[i] = l;
+          (hkl->V_m)[i] = m;
+          (hkl->V_modulus)[i] = V_modulus[l][l + m];
+          (hkl->V_phase)[i] = V_phase[l][l + m];
         }
       }
     }
@@ -455,11 +455,11 @@ SHARE
 
     // free memory
     for (l = 0; l <= lmax; l++) {
-      free (R[l]);
-      free (Phi[l]);
+      free (V_modulus[l]);
+      free (V_phase[l]);
     }
-    free (R);
-    free (Phi);
+    free (V_modulus);
+    free (V_phase);
 
 
     return 0;
@@ -471,105 +471,105 @@ SHARE
   /// Sampling                  //
   ////////////////////////////////
 
-  // Unit vector of kf at azimuth phi around kih
+  // Unit vector of kf at azimuth phi around ki_unit
   Coords
-  kfDirection (struct kf_phi_table* sp, double phi) {
-    Coords cone = coords_add (coords_scale (sp->t1, sp->stheta * cos (phi)), coords_scale (sp->t2, sp->stheta * sin (phi)));
-    return coords_add (cone, coords_scale (sp->kih, sp->ctheta));
+  kfDirection (struct kf_phi_table* phi_table, double phi) {
+    Coords cone = coords_add (coords_scale (phi_table->perp_1, phi_table->sin_scattering_angle * cos (phi)), coords_scale (phi_table->perp_2, phi_table->sin_scattering_angle * sin (phi)));
+    return coords_add (cone, coords_scale (phi_table->ki_unit, phi_table->cos_scattering_angle));
   }
 
-  // Samples kf for reflection L and wavevector ki by rejection on the pole density of q on the Bragg circle. With
-  // texture->phi_table, the density is tabulated at n points the first time sp is used for a wavevector and bounded by
-  // its largest value there; otherwise it is read from probQ at each try and bounded by the largest value of probQ.
+  // Samples kf for reflection hkl and wavevector ki by rejection on the pole density of q on the Bragg circle. With
+  // texture->use_phi_table, the density is tabulated at n points the first time phi_table is used for a wavevector and bounded by
+  // its largest value there; otherwise it is read from pole_density at each try and bounded by pole_density_max.
   int
-  sampleKprime_hkl (double* kf, Coords ki, struct kf_phi_table* sp, struct hkl_data_texture* L, struct hkl_info_struct_texture* texture) {
-    int it, j;
+  sampleKprime_hkl (double* kf, Coords ki, struct kf_phi_table* phi_table, struct hkl_data_texture* hkl, struct hkl_info_struct_texture* texture) {
+    int i_try, j;
     int n = texture->n_phi_points;
-    double kdg, phi, p, p0, p1;
+    double k_over_G, phi, prob, prob_0, prob_1;
     double dphi = (2.0 * PI) / (n - 1);
-    Coords q, kf_out;
-    Coords dir = coords_set (0, 0, 0);
+    Coords q_unit, kf_out;
+    Coords kf_unit = coords_set (0, 0, 0);
 
-    kdg = coords_len (ki) / (L->G);
-    if (!sp->built) {
-      sp->built = 1;
-      sp->kim = coords_len (ki);
-      sp->kih = coords_scale (ki, 1.0 / sp->kim);
+    k_over_G = coords_len (ki) / (hkl->G);
+    if (!phi_table->built) {
+      phi_table->built = 1;
+      phi_table->ki_modulus = coords_len (ki);
+      phi_table->ki_unit = coords_scale (ki, 1.0 / phi_table->ki_modulus);
 
-      sp->ctheta = 1.0 - 0.5 / (kdg * kdg);
-      sp->stheta = sqrt (1.0 - sp->ctheta * sp->ctheta);
+      phi_table->cos_scattering_angle = 1.0 - 0.5 / (k_over_G * k_over_G);
+      phi_table->sin_scattering_angle = sqrt (1.0 - phi_table->cos_scattering_angle * phi_table->cos_scattering_angle);
 
       // right-handed orthonormal triad
-      normal_vec (&sp->t1.x, &sp->t1.y, &sp->t1.z, sp->kih.x, sp->kih.y, sp->kih.z);
-      sp->t2 = coords_xp (sp->kih, sp->t1);
+      normal_vec (&phi_table->perp_1.x, &phi_table->perp_1.y, &phi_table->perp_1.z, phi_table->ki_unit.x, phi_table->ki_unit.y, phi_table->ki_unit.z);
+      phi_table->perp_2 = coords_xp (phi_table->ki_unit, phi_table->perp_1);
 
-      if (texture->phi_table) {
-        // probability of the unitary scattering vector qh = kdg * (kih - kfh) at the n points, in aa
-        sp->maxProb = -1.0e99;
+      if (texture->use_phi_table) {
+        // probability of the unit scattering vector q_unit = k_over_G * (ki_unit - kf_unit) at the n points, in prob_offset
+        phi_table->max_probability = -1.0e99;
         phi = -PI;
         for (j = 0; j < n - 1; j++) {
-          q = coords_scale (coords_sub (sp->kih, kfDirection (sp, phi)), kdg);
-          sp->aa[j] = interp2D (q.z, atan2 (q.y, q.x), texture->lgdr, &L->probQ);
-          if (sp->aa[j] > sp->maxProb) {
-            sp->maxProb = sp->aa[j];
+          q_unit = coords_scale (coords_sub (phi_table->ki_unit, kfDirection (phi_table, phi)), k_over_G);
+          phi_table->prob_offset[j] = interp2D (q_unit.z, atan2 (q_unit.y, q_unit.x), texture->legendre_ass_polynomial, &hkl->pole_density);
+          if (phi_table->prob_offset[j] > phi_table->max_probability) {
+            phi_table->max_probability = phi_table->prob_offset[j];
           }
           phi += dphi;
         }
-        sp->aa[n - 1] = sp->aa[0];
+        phi_table->prob_offset[n - 1] = phi_table->prob_offset[0];
 
         // linear interpolation between the points
         phi = -PI;
         for (j = 0; j < n - 1; j++) {
-          p0 = sp->aa[j];
-          p1 = sp->aa[j + 1];
-          sp->aa[j] = p0 - phi * (p1 - p0) / dphi;
-          sp->bb[j] = (p1 - p0) / dphi;
+          prob_0 = phi_table->prob_offset[j];
+          prob_1 = phi_table->prob_offset[j + 1];
+          phi_table->prob_offset[j] = prob_0 - phi * (prob_1 - prob_0) / dphi;
+          phi_table->prob_slope[j] = (prob_1 - prob_0) / dphi;
           phi += dphi;
         }
       }
     }
 
     // rejection method
-    for (it = 0; it < texture->max_iter_reject; it++) {
+    for (i_try = 0; i_try < texture->max_iter_reject; i_try++) {
       phi = -PI + 2 * PI * rand01 ();
-      if (texture->phi_table) {
+      if (texture->use_phi_table) {
         j = (int)((PI + phi) / dphi);
-        p = sp->aa[j] + phi * sp->bb[j];
-        if (p / sp->maxProb > rand01 ()) {
-          dir = kfDirection (sp, phi);
+        prob = phi_table->prob_offset[j] + phi * phi_table->prob_slope[j];
+        if (prob / phi_table->max_probability > rand01 ()) {
+          kf_unit = kfDirection (phi_table, phi);
           break;
         }
       } else {
-        dir = kfDirection (sp, phi);
-        q = coords_scale (coords_sub (sp->kih, dir), kdg);
-        p = interp2D (q.z, atan2 (q.y, q.x), texture->lgdr, &L->probQ);
-        if (p > rand01 () * L->probQmax) {
+        kf_unit = kfDirection (phi_table, phi);
+        q_unit = coords_scale (coords_sub (phi_table->ki_unit, kf_unit), k_over_G);
+        prob = interp2D (q_unit.z, atan2 (q_unit.y, q_unit.x), texture->legendre_ass_polynomial, &hkl->pole_density);
+        if (prob > rand01 () * hkl->pole_density_max) {
           break;
         }
       }
     }
-    if (it == texture->max_iter_reject) {
-      fprintf (stderr, "Texture_process: too many iterations sampling hkl %d %d %d. Exit!\n", L->h, L->k, L->l);
+    if (i_try == texture->max_iter_reject) {
+      fprintf (stderr, "Texture_process: too many iterations sampling hkl %d %d %d. Exit!\n", hkl->h, hkl->k, hkl->l);
       exit (-1);
     }
 
-    kf_out = coords_scale (dir, sp->kim);
+    kf_out = coords_scale (kf_unit, phi_table->ki_modulus);
     kf[0] = kf_out.x;
     kf[1] = kf_out.y;
     kf[2] = kf_out.z;
     return 0;
   }
 
-  // Pole density series at (ct, phi)
+  // Pole density series at (cos_theta, phi)
   double
-  poleSeries (double ct, double phi, struct hkl_data_texture* L, struct legendre_tables* lgdr) {
+  poleSeries (double cos_theta, double phi, struct hkl_data_texture* hkl, struct legendre_tables* legendre) {
     int i;
-    double plm;
+    double plm_value;
     double sum = 0;
 
-    for (i = 0; i < L->numV; i++) {
-      plm = plmValue (L->lv[i], L->mv[i], ct, lgdr);
-      sum += L->RV[i] * plm * cos (L->phiV[i] - L->mv[i] * phi);
+    for (i = 0; i < hkl->n_V; i++) {
+      plm_value = plmValue (hkl->V_l[i], hkl->V_m[i], cos_theta, legendre);
+      sum += hkl->V_modulus[i] * plm_value * cos (hkl->V_phase[i] - hkl->V_m[i] * phi);
     }
 
     return sum;
@@ -577,13 +577,13 @@ SHARE
 
   // Allocates and fills a table of poleSeries on the axes of the pole density tables
   void
-  fillPoleTable (t_Table* table, struct hkl_data_texture* L, struct legendre_tables* lgdr) {
+  fillPoleTable (t_Table* table, struct hkl_data_texture* hkl, struct legendre_tables* legendre) {
     int i, j;
 
-    Table_Init (table, lgdr->n_ct, lgdr->n_phi);
-    for (i = 0; i < lgdr->n_ct; i++) {
-      for (j = 0; j < lgdr->n_phi; j++) {
-        table->data[i * lgdr->n_phi + j] = poleSeries (lgdr->ctAxis[i], lgdr->phiAxis[j], L, lgdr);
+    Table_Init (table, legendre->n_cos_theta, legendre->n_phi);
+    for (i = 0; i < legendre->n_cos_theta; i++) {
+      for (j = 0; j < legendre->n_phi; j++) {
+        table->data[i * legendre->n_phi + j] = poleSeries (legendre->cos_theta_axis[i], legendre->phi_axis[j], hkl, legendre);
       }
     }
   }
@@ -627,8 +627,8 @@ SHARE
   void
   read_hkl_table_ncrystal_texture (const char* cfgstr, t_Table* table) {
     unsigned spacegroup, n_atoms;
-    double lattice_a, lattice_b, lattice_c, alpha, beta, gamma, cell_volume, dsp, fsq, F2_scale;
-    int idx, h, k, l, mult, nhkl, nonoriented;
+    double lattice_a, lattice_b, lattice_c, alpha, beta, gamma, cell_volume, d_spacing, F2_ncrystal, F2_scale;
+    int i_hkl, h, k, l, multiplicity, n_hkl, nonoriented;
     ncrystal_scatter_t scat;
     ncrystal_info_t ncobj;
 
@@ -642,8 +642,8 @@ SHARE
     }
 
     ncobj = ncrystal_create_info (cfgstr);
-    nhkl = ncrystal_info_nphases (ncobj) > 0 ? 0 : ncrystal_info_nhkl (ncobj);
-    if (nhkl <= 0 || !ncrystal_info_getstructure (ncobj, &spacegroup, &lattice_a, &lattice_b, &lattice_c, &alpha, &beta, &gamma, &cell_volume, &n_atoms)) {
+    n_hkl = ncrystal_info_nphases (ncobj) > 0 ? 0 : ncrystal_info_nhkl (ncobj);
+    if (n_hkl <= 0 || !ncrystal_info_getstructure (ncobj, &spacegroup, &lattice_a, &lattice_b, &lattice_c, &alpha, &beta, &gamma, &cell_volume, &n_atoms)) {
       fprintf (stderr, "Texture_process: The NCrystal material \"%s\" must have one crystalline phase with reflections. Exit!\n", cfgstr);
       exit (-1);
     }
@@ -651,21 +651,21 @@ SHARE
     // The cross sections assume the density implied by the unit cell
     F2_scale = ncrystal_info_getnumberdensity (ncobj) * cell_volume / n_atoms;
 
-    if (!Table_Init (table, nhkl, 5)) {
+    if (!Table_Init (table, n_hkl, 5)) {
       fprintf (stderr, "Texture_process: Could not allocate reflection table for \"%s\". Exit!\n", cfgstr);
       exit (-1);
     }
-    for (idx = 0; idx < nhkl; idx++) {
-      ncrystal_info_gethkl (ncobj, idx, &h, &k, &l, &mult, &dsp, &fsq);
+    for (i_hkl = 0; i_hkl < n_hkl; i_hkl++) {
+      ncrystal_info_gethkl (ncobj, i_hkl, &h, &k, &l, &multiplicity, &d_spacing, &F2_ncrystal);
       if (h == 0 && k == 0 && l == 0) {
         fprintf (stderr, "Texture_process: The NCrystal material \"%s\" does not provide hkl indices. Exit!\n", cfgstr);
         exit (-1);
       }
-      table->data[idx * 5 + 0] = h;
-      table->data[idx * 5 + 1] = k;
-      table->data[idx * 5 + 2] = l;
-      table->data[idx * 5 + 3] = fsq * F2_scale;
-      table->data[idx * 5 + 4] = mult;
+      table->data[i_hkl * 5 + 0] = h;
+      table->data[i_hkl * 5 + 1] = k;
+      table->data[i_hkl * 5 + 2] = l;
+      table->data[i_hkl * 5 + 3] = F2_ncrystal * F2_scale;
+      table->data[i_hkl * 5 + 4] = multiplicity;
     }
 
     table->header = (char*)malloc (1024);
@@ -682,86 +682,86 @@ SHARE
     ncrystal_unref (&ncobj);
   }
 
-  // Right-handed orthonormal basis: e[0] || v1, e[1] in the plane of v1 and v2
+  // Right-handed orthonormal basis: basis[0] || v1, basis[1] in the plane of v1 and v2
   int
-  directionBasis (Coords v1, Coords v2, Coords* e) {
-    Coords n = coords_xp (v1, v2);
-    if (coords_len (v1) == 0 || coords_len (n) < 1e-12 * coords_len (v1) * coords_len (v2)) {
+  directionBasis (Coords v1, Coords v2, Coords* basis) {
+    Coords normal = coords_xp (v1, v2);
+    if (coords_len (v1) == 0 || coords_len (normal) < 1e-12 * coords_len (v1) * coords_len (v2)) {
       return 0;
     }
-    e[0] = coords_scale (v1, 1.0 / coords_len (v1));
-    e[2] = coords_scale (n, 1.0 / coords_len (n));
-    e[1] = coords_xp (e[2], e[0]);
+    basis[0] = coords_scale (v1, 1.0 / coords_len (v1));
+    basis[2] = coords_scale (normal, 1.0 / coords_len (normal));
+    basis[1] = coords_xp (basis[2], basis[0]);
     return 1;
   }
 
-  // Rotation R that takes crystal direction c1 onto component direction l1, and c2 into the plane of l1 and l2
+  // Rotation that takes crystal_dir_1 onto component_dir_1, and crystal_dir_2 into the plane of component_dir_1 and component_dir_2
   void
-  directionRotation (Coords c1, Coords c2, Coords l1, Coords l2, Rotation R) {
-    Coords e[3], f[3];
-    double ea[3][3], fa[3][3];
+  directionRotation (Coords crystal_dir_1, Coords crystal_dir_2, Coords component_dir_1, Coords component_dir_2, Rotation rotation) {
+    Coords crystal_basis[3], component_basis[3];
+    double crystal_matrix[3][3], component_matrix[3][3];
     int i, j, k;
 
-    if (!directionBasis (c1, c2, e) || !directionBasis (l1, l2, f)) {
+    if (!directionBasis (crystal_dir_1, crystal_dir_2, crystal_basis) || !directionBasis (component_dir_1, component_dir_2, component_basis)) {
       fprintf (stderr, "Texture_process: the directions of the two lattice vectors must be nonzero and not parallel. Exit!\n");
       exit (-1);
     }
     for (k = 0; k < 3; k++) {
-      coords_get (e[k], ea[k], ea[k] + 1, ea[k] + 2);
-      coords_get (f[k], fa[k], fa[k] + 1, fa[k] + 2);
+      coords_get (crystal_basis[k], crystal_matrix[k], crystal_matrix[k] + 1, crystal_matrix[k] + 2);
+      coords_get (component_basis[k], component_matrix[k], component_matrix[k] + 1, component_matrix[k] + 2);
     }
-    // R = sum_k f_k e_k^T
+    // rotation = sum_k component_basis_k crystal_basis_k^T
     for (i = 0; i < 3; i++) {
       for (j = 0; j < 3; j++) {
-        R[i][j] = fa[0][i] * ea[0][j] + fa[1][i] * ea[1][j] + fa[2][i] * ea[2][j];
+        rotation[i][j] = component_matrix[0][i] * crystal_matrix[0][j] + component_matrix[1][i] * crystal_matrix[1][j] + component_matrix[2][i] * crystal_matrix[2][j];
       }
     }
   }
 
-  // Lattice vectors along the three directions crys_axis, with the lengths of lat. The angles between the directions
+  // Lattice vectors along the three directions lattice_directions, with the lengths of lattice_vectors. The angles between the directions
   // must be those between the lattice vectors, and the directions must be right-handed.
   void
   latticeAlongAxes (struct hkl_info_struct_texture* texture) {
-    double tol = 1e-4; // rad
+    double angle_tolerance = 1e-4; // rad
     double angle_lat, angle_dir;
-    Coords dir[3];
+    Coords directions[3];
     int i, i_next, i_last;
-    char name[3] = { 'a', 'b', 'c' };
+    char axis_name[3] = { 'a', 'b', 'c' };
 
     for (i = 0; i < 3; i++) {
-      dir[i] = coords_scale (texture->crys_axis[i], 1.0 / coords_len (texture->crys_axis[i]));
+      directions[i] = coords_scale (texture->lattice_directions[i], 1.0 / coords_len (texture->lattice_directions[i]));
     }
     for (i = 0; i < 3; i++) {
       i_next = (i + 1) % 3;
       i_last = (i + 2) % 3;
-      angle_lat = acos (coords_sp (texture->lat[i_next], texture->lat[i_last]) / (coords_len (texture->lat[i_next]) * coords_len (texture->lat[i_last])));
-      angle_dir = acos (fmax (-1.0, fmin (1.0, coords_sp (dir[i_next], dir[i_last]))));
-      if (fabs (angle_dir - angle_lat) > tol) {
-        fprintf (stderr, "Texture_process: the directions of %c and %c are %g deg apart, but %g deg in the lattice of crystal_fn. Exit!\n", name[i_next],
-                 name[i_last], angle_dir * RAD2DEG, angle_lat * RAD2DEG);
+      angle_lat = acos (coords_sp (texture->lattice_vectors[i_next], texture->lattice_vectors[i_last]) / (coords_len (texture->lattice_vectors[i_next]) * coords_len (texture->lattice_vectors[i_last])));
+      angle_dir = acos (fmax (-1.0, fmin (1.0, coords_sp (directions[i_next], directions[i_last]))));
+      if (fabs (angle_dir - angle_lat) > angle_tolerance) {
+        fprintf (stderr, "Texture_process: the directions of %c and %c are %g deg apart, but %g deg in the lattice of crystal_fn. Exit!\n", axis_name[i_next],
+                 axis_name[i_last], angle_dir * RAD2DEG, angle_lat * RAD2DEG);
         exit (-1);
       }
     }
-    if (coords_sp (dir[0], coords_xp (dir[1], dir[2])) <= 0) {
+    if (coords_sp (directions[0], coords_xp (directions[1], directions[2])) <= 0) {
       fprintf (stderr, "Texture_process: the directions of a, b and c must be right-handed. Exit!\n");
       exit (-1);
     }
     for (i = 0; i < 3; i++) {
-      texture->lat[i] = coords_scale (dir[i], coords_len (texture->lat[i]));
+      texture->lattice_vectors[i] = coords_scale (directions[i], coords_len (texture->lattice_vectors[i]));
     }
   }
 
   int
-  read_hkl_data_texture (char* SC_file, struct hkl_info_struct_texture* texture) {
-    struct hkl_data_texture* list = NULL;
-    int size = 0;
-    t_Table sTable; //
+  read_hkl_data_texture (char* crystal_file, struct hkl_info_struct_texture* texture) {
+    struct hkl_data_texture* hkl_list = NULL;
+    int n_rows = 0;
+    t_Table hkl_table; //
     int i = 0;
     double tmp_x, tmp_y, tmp_z;
-    char** parsing;
+    char** header_values;
     double h = 0, k = 0, l = 0, F2 = 0;
     double Gx, Gy, Gz;
-    int mult = -1;
+    int multiplicity = -1;
     // columns of h, k, l, F, F2, j, counted from 1
     int column_order[6] = { 1, 2, 3, 0, 7, 4 };
     double m_a = 0, m_b = 0, m_c = 0;    // lattice parameter lengths
@@ -773,82 +773,82 @@ SHARE
     double bsx, bsy, bsz;                // Second reciprocal lattice axis
     double csx, csy, csz;                // Third reciprocal lattice axis
     char* filename;
-    char* ext;
-    int i_first, i_second; // the first two lattice vectors placed by crys_axis
-    int n_given;           // number of lattice vectors placed by crys_axis
-    Rotation R;
+    char* extension;
+    int i_first, i_second; // the first two lattice vectors placed by lattice_directions
+    int n_given;           // number of lattice vectors placed by lattice_directions
+    Rotation rotation;
 
-    if (!SC_file || !strlen (SC_file) || !strcmp (SC_file, "NULL") || !strcmp (SC_file, "0")) {
+    if (!crystal_file || !strlen (crystal_file) || !strcmp (crystal_file, "NULL") || !strcmp (crystal_file, "0")) {
       texture->num_hkl = 0;
       return -1;
     }
 
     // Read the table
 
-    ext = strrchr (SC_file, '.');
-    if (ext && !strcasecmp (ext, ".cif")) {
-      filename = cif2ncmat_texture (SC_file);
+    extension = strrchr (crystal_file, '.');
+    if (extension && !strcasecmp (extension, ".cif")) {
+      filename = cif2ncmat_texture (crystal_file);
       if (!filename) {
         return 0;
       }
-      read_hkl_table_ncrystal_texture (filename, &sTable);
+      read_hkl_table_ncrystal_texture (filename, &hkl_table);
       remove (filename);
       free (filename);
-      texture->flag_barns = 1;
-    } else if (strstr (SC_file, ".ncmat") != NULL || strstr (SC_file, "::") != NULL) {
-      read_hkl_table_ncrystal_texture (SC_file, &sTable);
-      texture->flag_barns = 1;
-    } else if (Table_Read (&sTable, SC_file, 1) <= 0) { // read 1st block data from SC_file into sTable
-      fprintf (stderr, "Texture: Error: Could not read reflections from %s\n", SC_file);
+      texture->F2_in_barns = 1;
+    } else if (strstr (crystal_file, ".ncmat") != NULL || strstr (crystal_file, "::") != NULL) {
+      read_hkl_table_ncrystal_texture (crystal_file, &hkl_table);
+      texture->F2_in_barns = 1;
+    } else if (Table_Read (&hkl_table, crystal_file, 1) <= 0) { // read 1st block data from crystal_file into hkl_table
+      fprintf (stderr, "Texture: Error: Could not read reflections from %s\n", crystal_file);
       return 0;
     }
-    if (sTable.columns < 5) {
-      fprintf (stderr, "Texture: Error: The number of columns in %s should be", SC_file);
+    if (hkl_table.columns < 5) {
+      fprintf (stderr, "Texture: Error: The number of columns in %s should be", crystal_file);
       fprintf (stderr, " at least %d for [h,k,l,F2,j]\n", 5);
-      Table_Free (&sTable);
+      Table_Free (&hkl_table);
       return (0);
     }
-    if (!sTable.rows) {
-      fprintf (stderr, "Texture: Error: The number of rows in %s should be at least %d\n", SC_file, 1);
-      Table_Free (&sTable);
+    if (!hkl_table.rows) {
+      fprintf (stderr, "Texture: Error: The number of rows in %s should be at least %d\n", crystal_file, 1);
+      Table_Free (&hkl_table);
       return 0;
     } else {
-      size = sTable.rows;
+      n_rows = hkl_table.rows;
     }
 
     // parsing of header
-    parsing = Table_ParseHeader (sTable.header, "column_h", "column_k", "column_l", "column_F ", "column_F2", "column_j", "lattice_a ", "lattice_b ", "lattice_c ",
+    header_values = Table_ParseHeader (hkl_table.header, "column_h", "column_k", "column_l", "column_F ", "column_F2", "column_j", "lattice_a ", "lattice_b ", "lattice_c ",
                                  "lattice_aa", "lattice_bb", "lattice_cc", NULL);
 
-    if (parsing) {
+    if (header_values) {
       for (i = 0; i < 6; i++) {
-        if (parsing[i])
-          column_order[i] = atoi (parsing[i]);
+        if (header_values[i])
+          column_order[i] = atoi (header_values[i]);
       }
-      if (parsing[6])
-        m_a = atof (parsing[6]);
-      if (parsing[7])
-        m_b = atof (parsing[7]);
-      if (parsing[8])
-        m_c = atof (parsing[8]);
-      if (parsing[9])
-        m_aa = atof (parsing[9]);
-      if (parsing[10])
-        m_bb = atof (parsing[10]);
-      if (parsing[11])
-        m_cc = atof (parsing[11]);
+      if (header_values[6])
+        m_a = atof (header_values[6]);
+      if (header_values[7])
+        m_b = atof (header_values[7]);
+      if (header_values[8])
+        m_c = atof (header_values[8]);
+      if (header_values[9])
+        m_aa = atof (header_values[9]);
+      if (header_values[10])
+        m_bb = atof (header_values[10]);
+      if (header_values[11])
+        m_cc = atof (header_values[11]);
       for (i = 0; i < 12; i++) {
-        if (parsing[i]) {
-          free (parsing[i]);
+        if (header_values[i]) {
+          free (header_values[i]);
         }
       }
-      free (parsing);
+      free (header_values);
     }
 
     // parameters consistency checks
     if (!m_a) {
       fprintf (stderr, "Texture: Error: Wrong a lattice vector definition\n");
-      Table_Free (&sTable);
+      Table_Free (&hkl_table);
       return (0);
     }
 
@@ -872,16 +872,16 @@ SHARE
     // NCrystal: x || a and b in the xy plane, so z || c*
     m_cx = m_c * cos (m_bb * DEG2RAD);
     m_cy = m_c * (cos (m_aa * DEG2RAD) - cos (m_bb * DEG2RAD) * cos (m_cc * DEG2RAD)) / sin (m_cc * DEG2RAD);
-    texture->lat[0] = coords_set (m_a, 0, 0);
-    texture->lat[1] = coords_set (m_b * cos (m_cc * DEG2RAD), m_b * sin (m_cc * DEG2RAD), 0);
-    texture->lat[2] = coords_set (m_cx, m_cy, sqrt (m_c * m_c - m_cx * m_cx - m_cy * m_cy));
+    texture->lattice_vectors[0] = coords_set (m_a, 0, 0);
+    texture->lattice_vectors[1] = coords_set (m_b * cos (m_cc * DEG2RAD), m_b * sin (m_cc * DEG2RAD), 0);
+    texture->lattice_vectors[2] = coords_set (m_cx, m_cy, sqrt (m_c * m_c - m_cx * m_cx - m_cy * m_cy));
 
-    // place the lattice along the given directions of crys_axis, or rotate it to the MTEX axes z || c and x || a*
+    // place the lattice along the given directions of lattice_directions, or rotate it to the MTEX axes z || c and x || a*
     i_first = -1;
     i_second = -1;
     n_given = 0;
     for (i = 0; i < 3; i++) {
-      if (coords_len (texture->crys_axis[i]) > 0) {
+      if (coords_len (texture->lattice_directions[i]) > 0) {
         n_given++;
         if (i_first < 0) {
           i_first = i;
@@ -894,85 +894,85 @@ SHARE
       latticeAlongAxes (texture);
     } else if (texture->use_mtex_axes || n_given == 2) {
       if (texture->use_mtex_axes) {
-        directionRotation (texture->lat[2], coords_xp (texture->lat[1], texture->lat[2]), coords_set (0, 0, 1), coords_set (1, 0, 0), R);
+        directionRotation (texture->lattice_vectors[2], coords_xp (texture->lattice_vectors[1], texture->lattice_vectors[2]), coords_set (0, 0, 1), coords_set (1, 0, 0), rotation);
       } else {
-        directionRotation (texture->lat[i_first], texture->lat[i_second], texture->crys_axis[i_first], texture->crys_axis[i_second], R);
+        directionRotation (texture->lattice_vectors[i_first], texture->lattice_vectors[i_second], texture->lattice_directions[i_first], texture->lattice_directions[i_second], rotation);
       }
       for (i = 0; i < 3; i++) {
-        texture->lat[i] = rot_apply (R, texture->lat[i]);
+        texture->lattice_vectors[i] = rot_apply (rotation, texture->lattice_vectors[i]);
       }
     }
-    coords_get (texture->lat[0], &m_ax, &m_ay, &m_az);
-    coords_get (texture->lat[1], &m_bx, &m_by, &m_bz);
-    coords_get (texture->lat[2], &m_cx, &m_cy, &m_cz);
+    coords_get (texture->lattice_vectors[0], &m_ax, &m_ay, &m_az);
+    coords_get (texture->lattice_vectors[1], &m_bx, &m_by, &m_bz);
+    coords_get (texture->lattice_vectors[2], &m_cx, &m_cy, &m_cz);
 
     // Compute reciprocal lattice vectors.
     vec_prod (tmp_x, tmp_y, tmp_z, m_bx, m_by, m_bz, m_cx, m_cy, m_cz);
-    texture->V0 = fabs (scalar_prod (m_ax, m_ay, m_az, tmp_x, tmp_y, tmp_z));
-    asx = 2 * PI / texture->V0 * tmp_x;
-    asy = 2 * PI / texture->V0 * tmp_y;
-    asz = 2 * PI / texture->V0 * tmp_z;
+    texture->cell_volume = fabs (scalar_prod (m_ax, m_ay, m_az, tmp_x, tmp_y, tmp_z));
+    asx = 2 * PI / texture->cell_volume * tmp_x;
+    asy = 2 * PI / texture->cell_volume * tmp_y;
+    asz = 2 * PI / texture->cell_volume * tmp_z;
 
     vec_prod (tmp_x, tmp_y, tmp_z, m_cx, m_cy, m_cz, m_ax, m_ay, m_az);
-    bsx = 2 * PI / texture->V0 * tmp_x;
-    bsy = 2 * PI / texture->V0 * tmp_y;
-    bsz = 2 * PI / texture->V0 * tmp_z;
+    bsx = 2 * PI / texture->cell_volume * tmp_x;
+    bsy = 2 * PI / texture->cell_volume * tmp_y;
+    bsz = 2 * PI / texture->cell_volume * tmp_z;
 
     vec_prod (tmp_x, tmp_y, tmp_z, m_ax, m_ay, m_az, m_bx, m_by, m_bz);
-    csx = 2 * PI / texture->V0 * tmp_x;
-    csy = 2 * PI / texture->V0 * tmp_y;
-    csz = 2 * PI / texture->V0 * tmp_z;
+    csx = 2 * PI / texture->cell_volume * tmp_x;
+    csy = 2 * PI / texture->cell_volume * tmp_y;
+    csz = 2 * PI / texture->cell_volume * tmp_z;
 
     if (!column_order[0] || !column_order[1] || !column_order[2]) {
       fprintf (stderr, "Texture: Error: Wrong h,k,l column definition\n");
-      Table_Free (&sTable);
+      Table_Free (&hkl_table);
       return (0);
     }
     if (!column_order[3] && !column_order[4]) {
       fprintf (stderr, "Texture: Error: Wrong F,F2 column definition\n");
-      Table_Free (&sTable);
+      Table_Free (&hkl_table);
       return (0);
     }
 
     // allocate hkl_data array
-    list = (struct hkl_data_texture*)malloc (size * sizeof (struct hkl_data_texture));
+    hkl_list = (struct hkl_data_texture*)malloc (n_rows * sizeof (struct hkl_data_texture));
 
     // write the data to data structures
-    for (i = 0; i < size; i++) {
-      h = Table_Index (sTable, i, column_order[0] - 1);
-      k = Table_Index (sTable, i, column_order[1] - 1);
-      l = Table_Index (sTable, i, column_order[2] - 1);
+    for (i = 0; i < n_rows; i++) {
+      h = Table_Index (hkl_table, i, column_order[0] - 1);
+      k = Table_Index (hkl_table, i, column_order[1] - 1);
+      l = Table_Index (hkl_table, i, column_order[2] - 1);
       if (column_order[3]) {
-        F2 = Table_Index (sTable, i, column_order[3] - 1);
+        F2 = Table_Index (hkl_table, i, column_order[3] - 1);
         F2 *= F2;
       } else if (column_order[4]) {
-        F2 = Table_Index (sTable, i, column_order[4] - 1);
+        F2 = Table_Index (hkl_table, i, column_order[4] - 1);
       }
-      mult = Table_Index (sTable, i, column_order[5] - 1);
-      list[i].h = h;
-      list[i].k = k;
-      list[i].l = l;
-      list[i].F2 = F2;
-      list[i].mult = mult;
+      multiplicity = Table_Index (hkl_table, i, column_order[5] - 1);
+      hkl_list[i].h = h;
+      hkl_list[i].k = k;
+      hkl_list[i].l = l;
+      hkl_list[i].F2 = F2;
+      hkl_list[i].multiplicity = multiplicity;
       Gx = h * asx + k * bsx + l * csx;
       Gy = h * asy + k * bsy + l * csy;
       Gz = h * asz + k * bsz + l * csz;
-      list[i].G = sqrt (Gx * Gx + Gy * Gy + Gz * Gz);
-      list[i].Gct = Gz / list[i].G;
-      list[i].Gphi = atan2 (Gy / list[i].G, Gx / list[i].G);
+      hkl_list[i].G = sqrt (Gx * Gx + Gy * Gy + Gz * Gz);
+      hkl_list[i].G_cos_theta = Gz / hkl_list[i].G;
+      hkl_list[i].G_phi = atan2 (Gy / hkl_list[i].G, Gx / hkl_list[i].G);
     }
 
-    Table_Free (&sTable);
+    Table_Free (&hkl_table);
 
     // sort the list with increasing G
-    qsort (list, i, sizeof (struct hkl_data_texture), SX_list_compare_texture);
+    qsort (hkl_list, i, sizeof (struct hkl_data_texture), SX_list_compare_texture);
 
     // Reflections with G > 2k cannot scatter
-    while (texture->wavelength_min > 0 && i > 0 && list[i - 1].G > 4 * PI / texture->wavelength_min) {
+    while (texture->wavelength_min > 0 && i > 0 && hkl_list[i - 1].G > 4 * PI / texture->wavelength_min) {
       i--;
     }
 
-    texture->list = list;
+    texture->hkl_list = hkl_list;
     texture->num_hkl = i;
 
 
@@ -980,31 +980,31 @@ SHARE
   } // read_hkl_data
 
   void
-  allocateFourierCoef (int lmax, struct odf_coefficients* c) {
+  allocateFourierCoef (int lmax, struct odf_coefficients* odf) {
     int l, m;
     if (lmax >= 0) {
-      c->lmax = lmax;
-      c->cr = (double***)malloc ((lmax + 1) * sizeof (double**));
-      c->ci = (double***)malloc ((lmax + 1) * sizeof (double**));
+      odf->lmax = lmax;
+      odf->coef_real = (double***)malloc ((lmax + 1) * sizeof (double**));
+      odf->coef_imag = (double***)malloc ((lmax + 1) * sizeof (double**));
       for (l = 0; l <= lmax; l++) {
-        (c->cr)[l] = (double**)malloc ((2 * l + 1) * sizeof (double*));
-        (c->ci)[l] = (double**)malloc ((2 * l + 1) * sizeof (double*));
+        (odf->coef_real)[l] = (double**)malloc ((2 * l + 1) * sizeof (double*));
+        (odf->coef_imag)[l] = (double**)malloc ((2 * l + 1) * sizeof (double*));
         for (m = -l; m <= l; m++) {
-          (c->cr)[l][m + l] = (double*)malloc ((2 * l + 1) * sizeof (double));
-          (c->ci)[l][m + l] = (double*)malloc ((2 * l + 1) * sizeof (double));
+          (odf->coef_real)[l][m + l] = (double*)malloc ((2 * l + 1) * sizeof (double));
+          (odf->coef_imag)[l][m + l] = (double*)malloc ((2 * l + 1) * sizeof (double));
         }
       }
     } else {
-      c->lmax = -1;
-      c->cr = NULL;
-      c->ci = NULL;
+      odf->lmax = -1;
+      odf->coef_real = NULL;
+      odf->coef_imag = NULL;
     }
   } // allocateFourierCoef
 
   void
-  readFourierCoef (char* filename, struct odf_coefficients* c) {
-    int i, lmax, np, l, m, n, smn, sg;
-    double x1, x2, x3, x4, x5, rmax;
+  readFourierCoef (char* filename, struct odf_coefficients* odf) {
+    int i, lmax, n_rows, l, m, n, sign_mn, sign;
+    double c_real, c_imag, c_real_mirror, c_imag_mirror, deviation, max_deviation;
     t_Table table;
 
     // Note: if the coeeficients have been obtained from mtex
@@ -1018,59 +1018,59 @@ SHARE
     }
 
     lmax = (int)round (Table_Index (table, table.rows - 1, 0));
-    np = (lmax + 1) * (2 * lmax + 1) * (2 * lmax + 3) / 3;
-    if (lmax < 0 || np != table.rows) {
-      fprintf (stderr, "Texture_process: %s has %ld rows, but lmax = %d needs %d. Exit!\n", filename, table.rows, lmax, np);
+    n_rows = (lmax + 1) * (2 * lmax + 1) * (2 * lmax + 3) / 3;
+    if (lmax < 0 || n_rows != table.rows) {
+      fprintf (stderr, "Texture_process: %s has %ld rows, but lmax = %d needs %d. Exit!\n", filename, table.rows, lmax, n_rows);
       exit (-1);
     }
 
-    if (c->lmax >= 0 && lmax > c->lmax) {
-      lmax = c->lmax;
+    if (odf->lmax >= 0 && lmax > odf->lmax) {
+      lmax = odf->lmax;
     }
 
-    allocateFourierCoef (lmax, c);
+    allocateFourierCoef (lmax, odf);
 
-    np = (lmax + 1) * (2 * lmax + 1) * (2 * lmax + 3) / 3;
-    for (i = 0; i < np; i++) {
+    n_rows = (lmax + 1) * (2 * lmax + 1) * (2 * lmax + 3) / 3;
+    for (i = 0; i < n_rows; i++) {
       l = (int)round (Table_Index (table, i, 0));
       n = (int)round (Table_Index (table, i, 1)); // TRANSPOSEE
       m = (int)round (Table_Index (table, i, 2)); // TRANSPOSEE
-      smn = ((m < 0 ? -m : 0) + (n < 0 ? -n : 0)) % 2 ? -1 : 1;
-      (c->cr)[l][l + m][l + n] = smn * Table_Index (table, i, 3);
-      (c->ci)[l][l + m][l + n] = smn * -Table_Index (table, i, 4); // conjugate
+      sign_mn = ((m < 0 ? -m : 0) + (n < 0 ? -n : 0)) % 2 ? -1 : 1;
+      (odf->coef_real)[l][l + m][l + n] = sign_mn * Table_Index (table, i, 3);
+      (odf->coef_imag)[l][l + m][l + n] = sign_mn * -Table_Index (table, i, 4); // conjugate
     }
     Table_Free (&table);
 
     // check reality of ODF
-    rmax = 0;
+    max_deviation = 0;
     for (l = 0; l <= lmax; l++) {
       for (m = -l; m <= l; m++) {
         for (n = -l; n <= l; n++) {
-          x1 = (c->cr)[l][l + m][l + n];
-          x2 = (c->ci)[l][l + m][l + n];
-          x3 = (c->cr)[l][l - m][l - n];
-          x4 = (c->ci)[l][l - m][l - n];
+          c_real = (odf->coef_real)[l][l + m][l + n];
+          c_imag = (odf->coef_imag)[l][l + m][l + n];
+          c_real_mirror = (odf->coef_real)[l][l - m][l - n];
+          c_imag_mirror = (odf->coef_imag)[l][l - m][l - n];
           if (abs (m - n) % 2) {
-            x3 = -x3;
-            x4 = -x4;
+            c_real_mirror = -c_real_mirror;
+            c_imag_mirror = -c_imag_mirror;
           }
-          x5 = sqrt (pow (x1 - x3, 2) + pow (-x2 - x4, 2));
-          if (x5 > rmax) {
-            rmax = x5;
+          deviation = sqrt (pow (c_real - c_real_mirror, 2) + pow (-c_imag - c_imag_mirror, 2));
+          if (deviation > max_deviation) {
+            max_deviation = deviation;
           }
         }
       }
     }
 
-    if (rmax > 1.0e-6) {
-      printf ("Texture_process: %s does not satisfy the reality condition of the ODF (%.6e). Imposing it.\n", filename, rmax);
+    if (max_deviation > 1.0e-6) {
+      printf ("Texture_process: %s does not satisfy the reality condition of the ODF (%.6e). Imposing it.\n", filename, max_deviation);
       for (l = 0; l <= lmax; l++) {
-        (c->ci)[l][l][l] = 0;
+        (odf->coef_imag)[l][l][l] = 0;
         for (m = 0; m <= l; m++) {
           for (n = (m ? -l : 1); n <= l; n++) {
-            sg = abs (m - n) % 2 ? -1 : 1;
-            (c->cr)[l][l - m][l - n] = sg * (c->cr)[l][l + m][l + n];
-            (c->ci)[l][l - m][l - n] = -sg * (c->ci)[l][l + m][l + n];
+            sign = abs (m - n) % 2 ? -1 : 1;
+            (odf->coef_real)[l][l - m][l - n] = sign * (odf->coef_real)[l][l + m][l + n];
+            (odf->coef_imag)[l][l - m][l - n] = -sign * (odf->coef_imag)[l][l + m][l + n];
           }
         }
       }
@@ -1079,7 +1079,7 @@ SHARE
 
   // end Input - Output
 
-  // Cache entry of the wavevector k, moved to the front of texture->saved. When k is not in the cache, the
+  // Cache entry of the wavevector k, moved to the front of texture->ki_cache. When k is not in the cache, the
   // least recently used entry is overwritten with the cross sections of k, and its sampling tables are reset.
   struct ki_cache_entry*
   kiEntry (double* k, struct hkl_info_struct_texture* texture) {
@@ -1087,14 +1087,14 @@ SHARE
     int i_hit = -1; // entry of saved that holds k, -1 if none
     int i_entry;    // entry of saved that is used and moved to the front
     int m;
-    double ki, kict, kiphi, cohXS;
-    struct ki_cache_entry entry;
-    struct ki_cache_entry* sv = texture->saved;
-    struct ki_cache_entry* e;
-    struct hkl_data_texture* L = texture->list;
+    double ki_modulus, ki_cos_theta, ki_phi, coherent_XS;
+    struct ki_cache_entry used_entry;
+    struct ki_cache_entry* cache = texture->ki_cache;
+    struct ki_cache_entry* new_entry;
+    struct hkl_data_texture* hkl_list = texture->hkl_list;
 
-    for (i_saved = 0; i_saved < texture->n_saved; i_saved++) {
-      if (k[0] == sv[i_saved].ki.x && k[1] == sv[i_saved].ki.y && k[2] == sv[i_saved].ki.z) {
+    for (i_saved = 0; i_saved < texture->n_cached; i_saved++) {
+      if (k[0] == cache[i_saved].ki.x && k[1] == cache[i_saved].ki.y && k[2] == cache[i_saved].ki.z) {
         i_hit = i_saved;
         break;
       }
@@ -1104,40 +1104,40 @@ SHARE
       // k is in the cache: reuse its cross sections and sampling tables
       i_entry = i_hit;
     } else {
-      i_entry = texture->n_saved - 1;
-      e = sv + i_entry;
-      e->ki = coords_set (k[0], k[1], k[2]);
+      i_entry = texture->n_cached - 1;
+      new_entry = cache + i_entry;
+      new_entry->ki = coords_set (k[0], k[1], k[2]);
 
       // polar coordinates of the wavevector
-      ki = sqrt (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
-      kict = k[2] / ki;
-      kiphi = atan2 (k[1], k[0]);
-      all_scaled_associated_legendre (texture->lmax, fmin (1.0, fmax (-1.0, kict)), texture->sqn, texture->plm);
+      ki_modulus = sqrt (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
+      ki_cos_theta = k[2] / ki_modulus;
+      ki_phi = atan2 (k[1], k[0]);
+      all_scaled_associated_legendre (texture->lmax, fmin (1.0, fmax (-1.0, ki_cos_theta)), texture->legendre_norm, texture->plm_ki);
       for (m = 0; m <= texture->lmax; m++) {
-        texture->cm[m] = cos (m * kiphi);
-        texture->sm[m] = sin (m * kiphi);
+        texture->cos_m_phi[m] = cos (m * ki_phi);
+        texture->sin_m_phi[m] = sin (m * ki_phi);
       }
 
       // reflections with G > 2 ki cannot scatter
-      e->last_hkl = -1;
-      cohXS = 0;
-      for (i = 0; i < texture->num_hkl && L[i].G <= 2 * ki; i++) {
-        e->last_hkl = i;
-        e->XS_ki[i] = total_hkl_XS (ki, L + i, texture);
-        e->phi[i].built = 0;
-        cohXS += e->XS_ki[i];
+      new_entry->last_hkl = -1;
+      coherent_XS = 0;
+      for (i = 0; i < texture->num_hkl && hkl_list[i].G <= 2 * ki_modulus; i++) {
+        new_entry->last_hkl = i;
+        new_entry->XS_ki[i] = total_hkl_XS (ki_modulus, hkl_list + i, texture);
+        new_entry->phi_tables[i].built = 0;
+        coherent_XS += new_entry->XS_ki[i];
       }
 
-      // multiply by the appropriate factors to get the linear attenuation coefficient cohMu (in m^-1)
-      e->cohMu = cohXS * (texture->xs2mu) * pow ((2 * PI) / ki, 3) / (texture->V0);
+      // multiply by the appropriate factors to get the linear attenuation coefficient coherent_mu (in m^-1)
+      new_entry->coherent_mu = coherent_XS * (texture->XS_to_mu) * pow ((2 * PI) / ki_modulus, 3) / (texture->cell_volume);
     }
 
     // move the used entry to the front
-    entry = sv[i_entry];
-    memmove (sv + 1, sv, i_entry * sizeof (struct ki_cache_entry));
-    sv[0] = entry;
+    used_entry = cache[i_entry];
+    memmove (cache + 1, cache, i_entry * sizeof (struct ki_cache_entry));
+    cache[0] = used_entry;
 
-    return sv;
+    return cache;
   }
 
 
@@ -1163,7 +1163,7 @@ SHARE
     struct hkl_info_struct_texture* texture = data_transfer.pointer_to_a_Texture_physics_storage_struct->hkl_info_storage;
 
     // with SPLIT, the copies of a neutron enter with the same wavevector: kiEntry reuses its cross sections
-    *my = kiEntry (k_initial, texture)->cohMu;
+    *my = kiEntry (k_initial, texture)->coherent_mu;
 
     return 1;
   };
@@ -1172,49 +1172,49 @@ SHARE
   int
   Texture_physics_scattering (double* k_final, double* k_initial, double* weight, union data_transfer_union data_transfer, struct focus_data_struct* focus_data,
                               _class_particle* _particle) {
-    int i, j;
-    double r, sum, accum; /* Locals */
+    int i, i_selected;
+    double random_number, XS_sum, accum; /* Locals */
     double kf[3];                       /* Final wave vector (local) */
 
     struct hkl_info_struct_texture* texture = data_transfer.pointer_to_a_Texture_physics_storage_struct->hkl_info_storage;
 
-    struct hkl_data_texture* L = texture->list; // hkl list
+    struct hkl_data_texture* hkl_list = texture->hkl_list; // hkl list
     // cross sections of this wavevector, normally the front entry left by Texture_physics_my
-    struct ki_cache_entry* e = kiEntry (k_initial, texture);
+    struct ki_cache_entry* cache_entry = kiEntry (k_initial, texture);
 
     // This can be removed, since this component deals only with coherent scattering
     // (instead here the Bragg cutoff may be implemented)
-    if (e->last_hkl < 0 || e->cohMu <= 0) {
+    if (cache_entry->last_hkl < 0 || cache_entry->coherent_mu <= 0) {
       k_final[0] = k_initial[0];
       k_final[1] = k_initial[1];
       k_final[2] = k_initial[2];
       return 0; // Return 0 will use ABSORB in main component (as it is not allowed in a function)
     }
 
-    // e->last_hkl implements Bragg cutoff
-    sum = 0;
-    for (i = 0; i <= e->last_hkl; i++) {
-      sum += e->XS_ki[i];
+    // cache_entry->last_hkl implements Bragg cutoff
+    XS_sum = 0;
+    for (i = 0; i <= cache_entry->last_hkl; i++) {
+      XS_sum += cache_entry->XS_ki[i];
     }
 
-    j = -1;
-    r = rand01 ();
+    i_selected = -1;
+    random_number = rand01 ();
     accum = 0;
-    for (i = 0; i <= e->last_hkl; i++) {
-      accum += e->XS_ki[i] / sum;
-      if (r < accum) {
-        j = i;
+    for (i = 0; i <= cache_entry->last_hkl; i++) {
+      accum += cache_entry->XS_ki[i] / XS_sum;
+      if (random_number < accum) {
+        i_selected = i;
         break;
       }
     }
 
-    if (j == -1) {
+    if (i_selected == -1) {
       fprintf (stderr, "Texture_process: no plane selected for k = %g %g %g. Exit!\n", k_initial[0], k_initial[1], k_initial[2]);
       exit (-1);
     }
 
     // sampling kprime
-    sampleKprime_hkl (kf, e->ki, e->phi + j, L + j, texture);
+    sampleKprime_hkl (kf, cache_entry->ki, cache_entry->phi_tables + i_selected, hkl_list + i_selected, texture);
 
 
 
@@ -1260,20 +1260,20 @@ INITIALIZE
   int n_axes, i_axis;
   int i, i_saved, nread, l, m;
   long j;
-  struct odf_coefficients* fc;
-  struct hkl_data_texture* L;
-  struct ki_cache_entry* e;
+  struct odf_coefficients* odf;
+  struct hkl_data_texture* hkl_list;
+  struct ki_cache_entry* cache_entry;
   // Texture initialize
 
-  texture.flag_barns = 0;
+  texture.F2_in_barns = 0;
   texture.wavelength_min = lambda_min;
   texture.use_mtex_axes = mtex_axes;
-  texture.crys_axis[0] = coords_set (ax, ay, az);
-  texture.crys_axis[1] = coords_set (bx, by, bz);
-  texture.crys_axis[2] = coords_set (cx, cy, cz);
+  texture.lattice_directions[0] = coords_set (ax, ay, az);
+  texture.lattice_directions[1] = coords_set (bx, by, bz);
+  texture.lattice_directions[2] = coords_set (cx, cy, cz);
   n_axes = 0;
   for (i_axis = 0; i_axis < 3; i_axis++) {
-    if (coords_len (texture.crys_axis[i_axis]) > 0) {
+    if (coords_len (texture.lattice_directions[i_axis]) > 0) {
       n_axes++;
     }
   }
@@ -1295,7 +1295,7 @@ INITIALIZE
     exit (-1);
   }
 
-  texture.tol_V = 1.0e-6;
+  texture.V_tolerance = 1.0e-6;
   texture.n_phi_points = 120;
   texture.max_iter_reject = 3000;
 
@@ -1307,99 +1307,99 @@ INITIALIZE
   }
 
   // get fourier coefficients of texture
-  fc = (struct odf_coefficients*)malloc (sizeof (struct odf_coefficients));
-  fc->lmax = texture.lmax;
-  readFourierCoef (fcoef_fn, fc);
-  texture.lmax = fc->lmax;
+  odf = (struct odf_coefficients*)malloc (sizeof (struct odf_coefficients));
+  odf->lmax = texture.lmax;
+  readFourierCoef (fcoef_fn, odf);
+  texture.lmax = odf->lmax;
 
   // precompute legendre associated functions
-  texture.lgdr = initLegendre (fc->lmax);
+  texture.legendre_ass_polynomial = initLegendre (odf->lmax);
 
-  // below lmax = 20 the pole density of kf is read from probQ at each try instead of tabulated for each wavevector
-  texture.phi_table = texture.lmax >= 20;
+  // below lmax = 20 the pole density of kf is read from pole_density at each try instead of tabulated for each wavevector
+  texture.use_phi_table = texture.lmax >= 20;
 
   // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
-  texture.n_saved = 4;
-  texture.saved = (struct ki_cache_entry*)calloc (texture.n_saved, sizeof (struct ki_cache_entry));
-  if (!texture.saved) {
+  texture.n_cached = 4;
+  texture.ki_cache = (struct ki_cache_entry*)calloc (texture.n_cached, sizeof (struct ki_cache_entry));
+  if (!texture.ki_cache) {
     fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
     exit (-1);
   }
-  for (i_saved = 0; i_saved < texture.n_saved; i_saved++) {
-    e = texture.saved + i_saved;
-    e->ki = coords_set (0, 0, 0);
-    e->XS_ki = (double*)calloc (texture.num_hkl, sizeof (double));
-    e->phi = (struct kf_phi_table*)calloc (texture.num_hkl, sizeof (struct kf_phi_table));
-    if (texture.num_hkl > 0 && (!e->XS_ki || !e->phi)) {
+  for (i_saved = 0; i_saved < texture.n_cached; i_saved++) {
+    cache_entry = texture.ki_cache + i_saved;
+    cache_entry->ki = coords_set (0, 0, 0);
+    cache_entry->XS_ki = (double*)calloc (texture.num_hkl, sizeof (double));
+    cache_entry->phi_tables = (struct kf_phi_table*)calloc (texture.num_hkl, sizeof (struct kf_phi_table));
+    if (texture.num_hkl > 0 && (!cache_entry->XS_ki || !cache_entry->phi_tables)) {
       fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
       exit (-1);
     }
-    for (i = 0; i < texture.num_hkl && texture.phi_table; i++) {
-      e->phi[i].aa = (double*)malloc (texture.n_phi_points * sizeof (double));
-      e->phi[i].bb = (double*)malloc (texture.n_phi_points * sizeof (double));
-      if (!e->phi[i].aa || !e->phi[i].bb) {
+    for (i = 0; i < texture.num_hkl && texture.use_phi_table; i++) {
+      cache_entry->phi_tables[i].prob_offset = (double*)malloc (texture.n_phi_points * sizeof (double));
+      cache_entry->phi_tables[i].prob_slope = (double*)malloc (texture.n_phi_points * sizeof (double));
+      if (!cache_entry->phi_tables[i].prob_offset || !cache_entry->phi_tables[i].prob_slope) {
         fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
         exit (-1);
       }
     }
   }
 
-  L = texture.list;
+  hkl_list = texture.hkl_list;
   for (i = 0; i < texture.num_hkl; i++) {
-    L[i].numNegativeXS = 0;
+    hkl_list[i].n_negative_XS = 0;
   }
 
   // V matrices for cross sections
-  L = texture.list;
+  hkl_list = texture.hkl_list;
   for (i = 0; i < texture.num_hkl; i++) {
-    computeV (fc, L + i, texture.tol_V);
+    computeV (odf, hkl_list + i, texture.V_tolerance);
   }
 
   // precompute the probability distribution of Q
-  L = texture.list;
+  hkl_list = texture.hkl_list;
   for (i = 0; i < texture.num_hkl; i++) {
-    fillPoleTable (&L[i].probQ, L + i, texture.lgdr);
-    L[i].probQmax = L[i].probQ.data[0];
-    for (j = 1; j < L[i].probQ.rows * L[i].probQ.columns; j++) {
-      L[i].probQmax = fmax (L[i].probQmax, L[i].probQ.data[j]);
+    fillPoleTable (&hkl_list[i].pole_density, hkl_list + i, texture.legendre_ass_polynomial);
+    hkl_list[i].pole_density_max = hkl_list[i].pole_density.data[0];
+    for (j = 1; j < hkl_list[i].pole_density.rows * hkl_list[i].pole_density.columns; j++) {
+      hkl_list[i].pole_density_max = fmax (hkl_list[i].pole_density_max, hkl_list[i].pole_density.data[j]);
     }
   }
 
   // coefficients of the total cross sections, and the harmonics of one wavevector
-  L = texture.list;
+  hkl_list = texture.hkl_list;
   for (i = 0; i < texture.num_hkl; i++) {
-    xsCoefficients (L + i, texture.lmax);
+    xsCoefficients (hkl_list + i, texture.lmax);
   }
-  texture.sqn = (double*)malloc ((texture.lmax + 1) * (texture.lmax + 1) * sizeof (double));
-  texture.plm = (double*)malloc ((texture.lmax + 1) * (texture.lmax + 1) * sizeof (double));
-  texture.cm = (double*)malloc ((texture.lmax + 1) * sizeof (double));
-  texture.sm = (double*)malloc ((texture.lmax + 1) * sizeof (double));
-  if (!texture.sqn || !texture.plm || !texture.cm || !texture.sm) {
+  texture.legendre_norm = (double*)malloc ((texture.lmax + 1) * (texture.lmax + 1) * sizeof (double));
+  texture.plm_ki = (double*)malloc ((texture.lmax + 1) * (texture.lmax + 1) * sizeof (double));
+  texture.cos_m_phi = (double*)malloc ((texture.lmax + 1) * sizeof (double));
+  texture.sin_m_phi = (double*)malloc ((texture.lmax + 1) * sizeof (double));
+  if (!texture.legendre_norm || !texture.plm_ki || !texture.cos_m_phi || !texture.sin_m_phi) {
     fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
     exit (-1);
   }
-  legendre_scale_factors (texture.lmax, texture.sqn);
+  legendre_scale_factors (texture.lmax, texture.legendre_norm);
 
   // Fourier coefficients of the ODF, not needed after initialization
-  for (l = 0; l <= fc->lmax; l++) {
+  for (l = 0; l <= odf->lmax; l++) {
     for (m = -l; m <= l; m++) {
-      free (fc->cr[l][m + l]);
-      free (fc->ci[l][m + l]);
+      free (odf->coef_real[l][m + l]);
+      free (odf->coef_imag[l][m + l]);
     }
-    free (fc->cr[l]);
-    free (fc->ci[l]);
+    free (odf->coef_real[l]);
+    free (odf->coef_imag[l]);
   }
-  free (fc->cr);
-  free (fc->ci);
-  free (fc);
+  free (odf->coef_real);
+  free (odf->coef_imag);
+  free (odf);
 
   // precomputed factors
-  texture.xs2mu = packing_factor / texture.V0;
+  texture.XS_to_mu = packing_factor / texture.cell_volume;
   // Cross-sections are in barns = 10**-28 m**2, and unit cell volumes are
   // in AA**3 = 10**-30 m**3. Hence a factor of 100 is used to convert
   // scattering lengths to m**-1
-  if (barns || texture.flag_barns) {
-    texture.xs2mu *= 100;
+  if (barns || texture.F2_in_barns) {
+    texture.XS_to_mu *= 100;
   }
 
   if (texture.num_hkl) {
@@ -1448,52 +1448,52 @@ TRACE
 FINALLY
 %{
   int i_hkl, i_saved, l;
-  double numNegativeXS = 0;
+  double n_negative_XS = 0;
   for (i_hkl = 0; i_hkl < texture.num_hkl; i_hkl++) {
-    numNegativeXS += texture.list[i_hkl].numNegativeXS;
+    n_negative_XS += texture.hkl_list[i_hkl].n_negative_XS;
   }
-  if (numNegativeXS > 0) {
-    printf ("Texture_process %s WARNING: the truncated series gave %g negative cross sections.\n", NAME_CURRENT_COMP, numNegativeXS);
+  if (n_negative_XS > 0) {
+    printf ("Texture_process %s WARNING: the truncated series gave %g negative cross sections.\n", NAME_CURRENT_COMP, n_negative_XS);
   }
 
   // Legendre tables and axes of the pole density tables
-  for (l = 0; l <= texture.lgdr->lmax; l++) {
-    Table_Free (texture.lgdr->Plm + l);
+  for (l = 0; l <= texture.legendre_ass_polynomial->lmax; l++) {
+    Table_Free (texture.legendre_ass_polynomial->plm_tables + l);
   }
-  free (texture.lgdr->Plm);
-  free (texture.lgdr->ctAxis);
-  free (texture.lgdr->phiAxis);
-  free (texture.lgdr);
+  free (texture.legendre_ass_polynomial->plm_tables);
+  free (texture.legendre_ass_polynomial->cos_theta_axis);
+  free (texture.legendre_ass_polynomial->phi_axis);
+  free (texture.legendre_ass_polynomial);
 
   // reflections
   for (i_hkl = 0; i_hkl < texture.num_hkl; i_hkl++) {
-    struct hkl_data_texture* L = texture.list + i_hkl;
-    free (L->lv);
-    free (L->mv);
-    free (L->RV);
-    free (L->phiV);
-    Table_Free (&L->probQ);
-    free (L->Ac);
-    free (L->As);
+    struct hkl_data_texture* hkl = texture.hkl_list + i_hkl;
+    free (hkl->V_l);
+    free (hkl->V_m);
+    free (hkl->V_modulus);
+    free (hkl->V_phase);
+    Table_Free (&hkl->pole_density);
+    free (hkl->XS_cos_coef);
+    free (hkl->XS_sin_coef);
   }
-  free (texture.list);
+  free (texture.hkl_list);
 
   // wavevector cache
-  for (i_saved = 0; i_saved < texture.n_saved; i_saved++) {
+  for (i_saved = 0; i_saved < texture.n_cached; i_saved++) {
     for (i_hkl = 0; i_hkl < texture.num_hkl; i_hkl++) {
-      free (texture.saved[i_saved].phi[i_hkl].aa);
-      free (texture.saved[i_saved].phi[i_hkl].bb);
+      free (texture.ki_cache[i_saved].phi_tables[i_hkl].prob_offset);
+      free (texture.ki_cache[i_saved].phi_tables[i_hkl].prob_slope);
     }
-    free (texture.saved[i_saved].phi);
-    free (texture.saved[i_saved].XS_ki);
+    free (texture.ki_cache[i_saved].phi_tables);
+    free (texture.ki_cache[i_saved].XS_ki);
   }
-  free (texture.saved);
+  free (texture.ki_cache);
 
   // Legendre factors and work arrays of the wavevector
-  free (texture.sqn);
-  free (texture.plm);
-  free (texture.cm);
-  free (texture.sm);
+  free (texture.legendre_norm);
+  free (texture.plm_ki);
+  free (texture.cos_m_phi);
+  free (texture.sin_m_phi);
 
   union_release (NAME_CURRENT_COMP);
 %}
