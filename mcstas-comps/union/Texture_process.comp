@@ -322,11 +322,11 @@ SHARE
   ////// Cross sections     ///
   /////////////////////////////
 
-  // Total cross section of L at wavevector modulus k, with info->plm, cm, sm filled for its direction
+  // Total cross section of L at wavevector modulus k, with texture->plm, cm, sm filled for its direction
   double
-  total_hkl_XS (double k, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
+  total_hkl_XS (double k, struct hkl_data_texture* L, struct hkl_info_struct_texture* texture) {
     int l, m;
-    int n = info->lmax + 1;
+    int n = texture->lmax + 1;
     double x = (L->G) / (2 * k);
     double XS, ul, pl, pl_prev, pl_next;
     double *Ac, *As, *plm;
@@ -339,13 +339,13 @@ SHARE
     XS = 1.0;
     pl_prev = 1.0;
     pl = x;
-    for (l = 1; l <= info->lmax; l++) {
+    for (l = 1; l <= texture->lmax; l++) {
       Ac = L->Ac + l * n;
       As = L->As + l * n;
-      plm = info->plm + l * n;
+      plm = texture->plm + l * n;
       ul = 0;
       for (m = 0; m <= l; m++) {
-        ul += plm[m] * (Ac[m] * info->cm[m] + As[m] * info->sm[m]);
+        ul += plm[m] * (Ac[m] * texture->cm[m] + As[m] * texture->sm[m]);
       }
       XS += pl * ul;
       pl_next = ((2 * l + 1) * x * pl - l * pl_prev) / (l + 1);
@@ -479,12 +479,12 @@ SHARE
   }
 
   // Samples kf for reflection L and wavevector ki by rejection on the pole density of q on the Bragg circle. With
-  // info->phi_table, the density is tabulated at n points the first time sp is used for a wavevector and bounded by
+  // texture->phi_table, the density is tabulated at n points the first time sp is used for a wavevector and bounded by
   // its largest value there; otherwise it is read from probQ at each try and bounded by the largest value of probQ.
   int
-  sampleKprime_hkl (double* kf, Coords ki, struct kf_phi_table* sp, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
+  sampleKprime_hkl (double* kf, Coords ki, struct kf_phi_table* sp, struct hkl_data_texture* L, struct hkl_info_struct_texture* texture) {
     int it, j;
-    int n = info->n_phi_points;
+    int n = texture->n_phi_points;
     double kdg, phi, p, p0, p1;
     double dphi = (2.0 * PI) / (n - 1);
     Coords q, kf_out;
@@ -503,13 +503,13 @@ SHARE
       normal_vec (&sp->t1.x, &sp->t1.y, &sp->t1.z, sp->kih.x, sp->kih.y, sp->kih.z);
       sp->t2 = coords_xp (sp->kih, sp->t1);
 
-      if (info->phi_table) {
+      if (texture->phi_table) {
         // probability of the unitary scattering vector qh = kdg * (kih - kfh) at the n points, in aa
         sp->maxProb = -1.0e99;
         phi = -PI;
         for (j = 0; j < n - 1; j++) {
           q = coords_scale (coords_sub (sp->kih, kfDirection (sp, phi)), kdg);
-          sp->aa[j] = interp2D (q.z, atan2 (q.y, q.x), info->lgdr, &L->probQ);
+          sp->aa[j] = interp2D (q.z, atan2 (q.y, q.x), texture->lgdr, &L->probQ);
           if (sp->aa[j] > sp->maxProb) {
             sp->maxProb = sp->aa[j];
           }
@@ -530,9 +530,9 @@ SHARE
     }
 
     // rejection method
-    for (it = 0; it < info->max_iter_reject; it++) {
+    for (it = 0; it < texture->max_iter_reject; it++) {
       phi = -PI + 2 * PI * rand01 ();
-      if (info->phi_table) {
+      if (texture->phi_table) {
         j = (int)((PI + phi) / dphi);
         p = sp->aa[j] + phi * sp->bb[j];
         if (p / sp->maxProb > rand01 ()) {
@@ -542,13 +542,13 @@ SHARE
       } else {
         dir = kfDirection (sp, phi);
         q = coords_scale (coords_sub (sp->kih, dir), kdg);
-        p = interp2D (q.z, atan2 (q.y, q.x), info->lgdr, &L->probQ);
+        p = interp2D (q.z, atan2 (q.y, q.x), texture->lgdr, &L->probQ);
         if (p > rand01 () * L->probQmax) {
           break;
         }
       }
     }
-    if (it == info->max_iter_reject) {
+    if (it == texture->max_iter_reject) {
       fprintf (stderr, "Texture_process: too many iterations sampling hkl %d %d %d. Exit!\n", L->h, L->k, L->l);
       exit (-1);
     }
@@ -721,7 +721,7 @@ SHARE
   // Lattice vectors along the three directions crys_axis, with the lengths of lat. The angles between the directions
   // must be those between the lattice vectors, and the directions must be right-handed.
   void
-  latticeAlongAxes (struct hkl_info_struct_texture* info) {
+  latticeAlongAxes (struct hkl_info_struct_texture* texture) {
     double tol = 1e-4; // rad
     double angle_lat, angle_dir;
     Coords dir[3];
@@ -729,12 +729,12 @@ SHARE
     char name[3] = { 'a', 'b', 'c' };
 
     for (i = 0; i < 3; i++) {
-      dir[i] = coords_scale (info->crys_axis[i], 1.0 / coords_len (info->crys_axis[i]));
+      dir[i] = coords_scale (texture->crys_axis[i], 1.0 / coords_len (texture->crys_axis[i]));
     }
     for (i = 0; i < 3; i++) {
       i_next = (i + 1) % 3;
       i_last = (i + 2) % 3;
-      angle_lat = acos (coords_sp (info->lat[i_next], info->lat[i_last]) / (coords_len (info->lat[i_next]) * coords_len (info->lat[i_last])));
+      angle_lat = acos (coords_sp (texture->lat[i_next], texture->lat[i_last]) / (coords_len (texture->lat[i_next]) * coords_len (texture->lat[i_last])));
       angle_dir = acos (fmax (-1.0, fmin (1.0, coords_sp (dir[i_next], dir[i_last]))));
       if (fabs (angle_dir - angle_lat) > tol) {
         fprintf (stderr, "Texture_process: the directions of %c and %c are %g deg apart, but %g deg in the lattice of crystal_fn. Exit!\n", name[i_next],
@@ -747,12 +747,12 @@ SHARE
       exit (-1);
     }
     for (i = 0; i < 3; i++) {
-      info->lat[i] = coords_scale (dir[i], coords_len (info->lat[i]));
+      texture->lat[i] = coords_scale (dir[i], coords_len (texture->lat[i]));
     }
   }
 
   int
-  read_hkl_data_texture (char* SC_file, struct hkl_info_struct_texture* info) {
+  read_hkl_data_texture (char* SC_file, struct hkl_info_struct_texture* texture) {
     struct hkl_data_texture* list = NULL;
     int size = 0;
     t_Table sTable; //
@@ -779,7 +779,7 @@ SHARE
     Rotation R;
 
     if (!SC_file || !strlen (SC_file) || !strcmp (SC_file, "NULL") || !strcmp (SC_file, "0")) {
-      info->num_hkl = 0;
+      texture->num_hkl = 0;
       return -1;
     }
 
@@ -794,10 +794,10 @@ SHARE
       read_hkl_table_ncrystal_texture (filename, &sTable);
       remove (filename);
       free (filename);
-      info->flag_barns = 1;
+      texture->flag_barns = 1;
     } else if (strstr (SC_file, ".ncmat") != NULL || strstr (SC_file, "::") != NULL) {
       read_hkl_table_ncrystal_texture (SC_file, &sTable);
-      info->flag_barns = 1;
+      texture->flag_barns = 1;
     } else if (Table_Read (&sTable, SC_file, 1) <= 0) { // read 1st block data from SC_file into sTable
       fprintf (stderr, "Texture: Error: Could not read reflections from %s\n", SC_file);
       return 0;
@@ -872,16 +872,16 @@ SHARE
     // NCrystal: x || a and b in the xy plane, so z || c*
     m_cx = m_c * cos (m_bb * DEG2RAD);
     m_cy = m_c * (cos (m_aa * DEG2RAD) - cos (m_bb * DEG2RAD) * cos (m_cc * DEG2RAD)) / sin (m_cc * DEG2RAD);
-    info->lat[0] = coords_set (m_a, 0, 0);
-    info->lat[1] = coords_set (m_b * cos (m_cc * DEG2RAD), m_b * sin (m_cc * DEG2RAD), 0);
-    info->lat[2] = coords_set (m_cx, m_cy, sqrt (m_c * m_c - m_cx * m_cx - m_cy * m_cy));
+    texture->lat[0] = coords_set (m_a, 0, 0);
+    texture->lat[1] = coords_set (m_b * cos (m_cc * DEG2RAD), m_b * sin (m_cc * DEG2RAD), 0);
+    texture->lat[2] = coords_set (m_cx, m_cy, sqrt (m_c * m_c - m_cx * m_cx - m_cy * m_cy));
 
     // place the lattice along the given directions of crys_axis, or rotate it to the MTEX axes z || c and x || a*
     i_first = -1;
     i_second = -1;
     n_given = 0;
     for (i = 0; i < 3; i++) {
-      if (coords_len (info->crys_axis[i]) > 0) {
+      if (coords_len (texture->crys_axis[i]) > 0) {
         n_given++;
         if (i_first < 0) {
           i_first = i;
@@ -891,37 +891,37 @@ SHARE
       }
     }
     if (n_given == 3) {
-      latticeAlongAxes (info);
-    } else if (info->use_mtex_axes || n_given == 2) {
-      if (info->use_mtex_axes) {
-        directionRotation (info->lat[2], coords_xp (info->lat[1], info->lat[2]), coords_set (0, 0, 1), coords_set (1, 0, 0), R);
+      latticeAlongAxes (texture);
+    } else if (texture->use_mtex_axes || n_given == 2) {
+      if (texture->use_mtex_axes) {
+        directionRotation (texture->lat[2], coords_xp (texture->lat[1], texture->lat[2]), coords_set (0, 0, 1), coords_set (1, 0, 0), R);
       } else {
-        directionRotation (info->lat[i_first], info->lat[i_second], info->crys_axis[i_first], info->crys_axis[i_second], R);
+        directionRotation (texture->lat[i_first], texture->lat[i_second], texture->crys_axis[i_first], texture->crys_axis[i_second], R);
       }
       for (i = 0; i < 3; i++) {
-        info->lat[i] = rot_apply (R, info->lat[i]);
+        texture->lat[i] = rot_apply (R, texture->lat[i]);
       }
     }
-    coords_get (info->lat[0], &m_ax, &m_ay, &m_az);
-    coords_get (info->lat[1], &m_bx, &m_by, &m_bz);
-    coords_get (info->lat[2], &m_cx, &m_cy, &m_cz);
+    coords_get (texture->lat[0], &m_ax, &m_ay, &m_az);
+    coords_get (texture->lat[1], &m_bx, &m_by, &m_bz);
+    coords_get (texture->lat[2], &m_cx, &m_cy, &m_cz);
 
     // Compute reciprocal lattice vectors.
     vec_prod (tmp_x, tmp_y, tmp_z, m_bx, m_by, m_bz, m_cx, m_cy, m_cz);
-    info->V0 = fabs (scalar_prod (m_ax, m_ay, m_az, tmp_x, tmp_y, tmp_z));
-    asx = 2 * PI / info->V0 * tmp_x;
-    asy = 2 * PI / info->V0 * tmp_y;
-    asz = 2 * PI / info->V0 * tmp_z;
+    texture->V0 = fabs (scalar_prod (m_ax, m_ay, m_az, tmp_x, tmp_y, tmp_z));
+    asx = 2 * PI / texture->V0 * tmp_x;
+    asy = 2 * PI / texture->V0 * tmp_y;
+    asz = 2 * PI / texture->V0 * tmp_z;
 
     vec_prod (tmp_x, tmp_y, tmp_z, m_cx, m_cy, m_cz, m_ax, m_ay, m_az);
-    bsx = 2 * PI / info->V0 * tmp_x;
-    bsy = 2 * PI / info->V0 * tmp_y;
-    bsz = 2 * PI / info->V0 * tmp_z;
+    bsx = 2 * PI / texture->V0 * tmp_x;
+    bsy = 2 * PI / texture->V0 * tmp_y;
+    bsz = 2 * PI / texture->V0 * tmp_z;
 
     vec_prod (tmp_x, tmp_y, tmp_z, m_ax, m_ay, m_az, m_bx, m_by, m_bz);
-    csx = 2 * PI / info->V0 * tmp_x;
-    csy = 2 * PI / info->V0 * tmp_y;
-    csz = 2 * PI / info->V0 * tmp_z;
+    csx = 2 * PI / texture->V0 * tmp_x;
+    csy = 2 * PI / texture->V0 * tmp_y;
+    csz = 2 * PI / texture->V0 * tmp_z;
 
     if (!column_order[0] || !column_order[1] || !column_order[2]) {
       fprintf (stderr, "Texture: Error: Wrong h,k,l column definition\n");
@@ -968,15 +968,15 @@ SHARE
     qsort (list, i, sizeof (struct hkl_data_texture), SX_list_compare_texture);
 
     // Reflections with G > 2k cannot scatter
-    while (info->wavelength_min > 0 && i > 0 && list[i - 1].G > 4 * PI / info->wavelength_min) {
+    while (texture->wavelength_min > 0 && i > 0 && list[i - 1].G > 4 * PI / texture->wavelength_min) {
       i--;
     }
 
-    info->list = list;
-    info->num_hkl = i;
+    texture->list = list;
+    texture->num_hkl = i;
 
 
-    return info->num_hkl;
+    return texture->num_hkl;
   } // read_hkl_data
 
   void
@@ -1079,21 +1079,21 @@ SHARE
 
   // end Input - Output
 
-  // Cache entry of the wavevector k, moved to the front of info->saved. When k is not in the cache, the
+  // Cache entry of the wavevector k, moved to the front of texture->saved. When k is not in the cache, the
   // least recently used entry is overwritten with the cross sections of k, and its sampling tables are reset.
   struct ki_cache_entry*
-  kiEntry (double* k, struct hkl_info_struct_texture* info) {
+  kiEntry (double* k, struct hkl_info_struct_texture* texture) {
     int i, i_saved;
     int i_hit = -1; // entry of saved that holds k, -1 if none
     int i_entry;    // entry of saved that is used and moved to the front
     int m;
     double ki, kict, kiphi, cohXS;
     struct ki_cache_entry entry;
-    struct ki_cache_entry* sv = info->saved;
+    struct ki_cache_entry* sv = texture->saved;
     struct ki_cache_entry* e;
-    struct hkl_data_texture* L = info->list;
+    struct hkl_data_texture* L = texture->list;
 
-    for (i_saved = 0; i_saved < info->n_saved; i_saved++) {
+    for (i_saved = 0; i_saved < texture->n_saved; i_saved++) {
       if (k[0] == sv[i_saved].ki.x && k[1] == sv[i_saved].ki.y && k[2] == sv[i_saved].ki.z) {
         i_hit = i_saved;
         break;
@@ -1104,7 +1104,7 @@ SHARE
       // k is in the cache: reuse its cross sections and sampling tables
       i_entry = i_hit;
     } else {
-      i_entry = info->n_saved - 1;
+      i_entry = texture->n_saved - 1;
       e = sv + i_entry;
       e->ki = coords_set (k[0], k[1], k[2]);
 
@@ -1112,24 +1112,24 @@ SHARE
       ki = sqrt (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
       kict = k[2] / ki;
       kiphi = atan2 (k[1], k[0]);
-      all_scaled_associated_legendre (info->lmax, fmin (1.0, fmax (-1.0, kict)), info->sqn, info->plm);
-      for (m = 0; m <= info->lmax; m++) {
-        info->cm[m] = cos (m * kiphi);
-        info->sm[m] = sin (m * kiphi);
+      all_scaled_associated_legendre (texture->lmax, fmin (1.0, fmax (-1.0, kict)), texture->sqn, texture->plm);
+      for (m = 0; m <= texture->lmax; m++) {
+        texture->cm[m] = cos (m * kiphi);
+        texture->sm[m] = sin (m * kiphi);
       }
 
       // reflections with G > 2 ki cannot scatter
       e->last_hkl = -1;
       cohXS = 0;
-      for (i = 0; i < info->num_hkl && L[i].G <= 2 * ki; i++) {
+      for (i = 0; i < texture->num_hkl && L[i].G <= 2 * ki; i++) {
         e->last_hkl = i;
-        e->XS_ki[i] = total_hkl_XS (ki, L + i, info);
+        e->XS_ki[i] = total_hkl_XS (ki, L + i, texture);
         e->phi[i].built = 0;
         cohXS += e->XS_ki[i];
       }
 
       // multiply by the appropriate factors to get the linear attenuation coefficient cohMu (in m^-1)
-      e->cohMu = cohXS * (info->xs2mu) * pow ((2 * PI) / ki, 3) / (info->V0);
+      e->cohMu = cohXS * (texture->xs2mu) * pow ((2 * PI) / ki, 3) / (texture->V0);
     }
 
     // move the used entry to the front
@@ -1160,10 +1160,10 @@ SHARE
   int
   Texture_physics_my (double* my, double* k_initial, union data_transfer_union data_transfer, struct focus_data_struct* focus_data, _class_particle* _particle) {
     // k_initial is a pointer to a simple vector with 3 doubles, k[0], k[1], k[2] (wavevector)
-    struct hkl_info_struct_texture* hkl_info = data_transfer.pointer_to_a_Texture_physics_storage_struct->hkl_info_storage;
+    struct hkl_info_struct_texture* texture = data_transfer.pointer_to_a_Texture_physics_storage_struct->hkl_info_storage;
 
     // with SPLIT, the copies of a neutron enter with the same wavevector: kiEntry reuses its cross sections
-    *my = kiEntry (k_initial, hkl_info)->cohMu;
+    *my = kiEntry (k_initial, texture)->cohMu;
 
     return 1;
   };
@@ -1176,11 +1176,11 @@ SHARE
     double r, sum, accum; /* Locals */
     double kf[3];                       /* Final wave vector (local) */
 
-    struct hkl_info_struct_texture* hkl_info = data_transfer.pointer_to_a_Texture_physics_storage_struct->hkl_info_storage;
+    struct hkl_info_struct_texture* texture = data_transfer.pointer_to_a_Texture_physics_storage_struct->hkl_info_storage;
 
-    struct hkl_data_texture* L = hkl_info->list; // hkl list
+    struct hkl_data_texture* L = texture->list; // hkl list
     // cross sections of this wavevector, normally the front entry left by Texture_physics_my
-    struct ki_cache_entry* e = kiEntry (k_initial, hkl_info);
+    struct ki_cache_entry* e = kiEntry (k_initial, texture);
 
     // This can be removed, since this component deals only with coherent scattering
     // (instead here the Bragg cutoff may be implemented)
@@ -1214,7 +1214,7 @@ SHARE
     }
 
     // sampling kprime
-    sampleKprime_hkl (kf, e->ki, e->phi + j, L + j, hkl_info);
+    sampleKprime_hkl (kf, e->ki, e->phi + j, L + j, texture);
 
 
 
@@ -1246,8 +1246,8 @@ DECLARE
   // Declare for this component, to do calculations on the input / store in the transported data
   struct Texture_physics_storage_struct Texture_storage;
 
-  // Variables needed in initialize of this function.
-  struct hkl_info_struct_texture hkl_info_texture;
+  // Texture data, filled in INITIALIZE; Union_master reaches it through the pointer in Texture_storage
+  struct hkl_info_struct_texture texture;
 
   // Needed for transport to the main component, will be the same for all processes
   struct global_process_element_struct global_process_element;
@@ -1260,21 +1260,20 @@ INITIALIZE
   int n_axes, i_axis;
   int i, i_saved, nread, l, m;
   long j;
-  struct hkl_info_struct_texture* info = &hkl_info_texture;
   struct odf_coefficients* fc;
   struct hkl_data_texture* L;
   struct ki_cache_entry* e;
   // Texture initialize
 
-  hkl_info_texture.flag_barns = 0;
-  hkl_info_texture.wavelength_min = lambda_min;
-  hkl_info_texture.use_mtex_axes = mtex_axes;
-  hkl_info_texture.crys_axis[0] = coords_set (ax, ay, az);
-  hkl_info_texture.crys_axis[1] = coords_set (bx, by, bz);
-  hkl_info_texture.crys_axis[2] = coords_set (cx, cy, cz);
+  texture.flag_barns = 0;
+  texture.wavelength_min = lambda_min;
+  texture.use_mtex_axes = mtex_axes;
+  texture.crys_axis[0] = coords_set (ax, ay, az);
+  texture.crys_axis[1] = coords_set (bx, by, bz);
+  texture.crys_axis[2] = coords_set (cx, cy, cz);
   n_axes = 0;
   for (i_axis = 0; i_axis < 3; i_axis++) {
-    if (coords_len (hkl_info_texture.crys_axis[i_axis]) > 0) {
+    if (coords_len (texture.crys_axis[i_axis]) > 0) {
       n_axes++;
     }
   }
@@ -1288,7 +1287,7 @@ INITIALIZE
   }
 
   // cut-off for l. If negative, take the cut-off provided in the Fourier coeff file
-  hkl_info_texture.lmax = lmax_user;
+  texture.lmax = lmax_user;
 
   int use_coef = fcoef_fn && strlen (fcoef_fn) && strcmp (fcoef_fn, "0") && strcmp (fcoef_fn, "NULL");
   if (!use_coef) {
@@ -1296,12 +1295,12 @@ INITIALIZE
     exit (-1);
   }
 
-  info->tol_V = 1.0e-6;
-  info->n_phi_points = 120;
-  info->max_iter_reject = 3000;
+  texture.tol_V = 1.0e-6;
+  texture.n_phi_points = 120;
+  texture.max_iter_reject = 3000;
 
   // crystallographic data
-  nread = read_hkl_data_texture (crystal_fn, info);
+  nread = read_hkl_data_texture (crystal_fn, &texture);
   if (!nread) {
     fprintf (stderr, "Texture_process: %s: no reflections read from %s. Exit!\n", NAME_CURRENT_COMP, crystal_fn);
     exit (-1);
@@ -1309,35 +1308,35 @@ INITIALIZE
 
   // get fourier coefficients of texture
   fc = (struct odf_coefficients*)malloc (sizeof (struct odf_coefficients));
-  fc->lmax = info->lmax;
+  fc->lmax = texture.lmax;
   readFourierCoef (fcoef_fn, fc);
-  info->lmax = fc->lmax;
+  texture.lmax = fc->lmax;
 
   // precompute legendre associated functions
-  info->lgdr = initLegendre (fc->lmax);
+  texture.lgdr = initLegendre (fc->lmax);
 
   // below lmax = 20 the pole density of kf is read from probQ at each try instead of tabulated for each wavevector
-  info->phi_table = info->lmax >= 20;
+  texture.phi_table = texture.lmax >= 20;
 
   // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
-  info->n_saved = 4;
-  info->saved = (struct ki_cache_entry*)calloc (info->n_saved, sizeof (struct ki_cache_entry));
-  if (!info->saved) {
+  texture.n_saved = 4;
+  texture.saved = (struct ki_cache_entry*)calloc (texture.n_saved, sizeof (struct ki_cache_entry));
+  if (!texture.saved) {
     fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
     exit (-1);
   }
-  for (i_saved = 0; i_saved < info->n_saved; i_saved++) {
-    e = info->saved + i_saved;
+  for (i_saved = 0; i_saved < texture.n_saved; i_saved++) {
+    e = texture.saved + i_saved;
     e->ki = coords_set (0, 0, 0);
-    e->XS_ki = (double*)calloc (info->num_hkl, sizeof (double));
-    e->phi = (struct kf_phi_table*)calloc (info->num_hkl, sizeof (struct kf_phi_table));
-    if (info->num_hkl > 0 && (!e->XS_ki || !e->phi)) {
+    e->XS_ki = (double*)calloc (texture.num_hkl, sizeof (double));
+    e->phi = (struct kf_phi_table*)calloc (texture.num_hkl, sizeof (struct kf_phi_table));
+    if (texture.num_hkl > 0 && (!e->XS_ki || !e->phi)) {
       fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
       exit (-1);
     }
-    for (i = 0; i < info->num_hkl && info->phi_table; i++) {
-      e->phi[i].aa = (double*)malloc (info->n_phi_points * sizeof (double));
-      e->phi[i].bb = (double*)malloc (info->n_phi_points * sizeof (double));
+    for (i = 0; i < texture.num_hkl && texture.phi_table; i++) {
+      e->phi[i].aa = (double*)malloc (texture.n_phi_points * sizeof (double));
+      e->phi[i].bb = (double*)malloc (texture.n_phi_points * sizeof (double));
       if (!e->phi[i].aa || !e->phi[i].bb) {
         fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
         exit (-1);
@@ -1345,21 +1344,21 @@ INITIALIZE
     }
   }
 
-  L = info->list;
-  for (i = 0; i < info->num_hkl; i++) {
+  L = texture.list;
+  for (i = 0; i < texture.num_hkl; i++) {
     L[i].numNegativeXS = 0;
   }
 
   // V matrices for cross sections
-  L = info->list;
-  for (i = 0; i < info->num_hkl; i++) {
-    computeV (fc, L + i, info->tol_V);
+  L = texture.list;
+  for (i = 0; i < texture.num_hkl; i++) {
+    computeV (fc, L + i, texture.tol_V);
   }
 
   // precompute the probability distribution of Q
-  L = info->list;
-  for (i = 0; i < info->num_hkl; i++) {
-    fillPoleTable (&L[i].probQ, L + i, info->lgdr);
+  L = texture.list;
+  for (i = 0; i < texture.num_hkl; i++) {
+    fillPoleTable (&L[i].probQ, L + i, texture.lgdr);
     L[i].probQmax = L[i].probQ.data[0];
     for (j = 1; j < L[i].probQ.rows * L[i].probQ.columns; j++) {
       L[i].probQmax = fmax (L[i].probQmax, L[i].probQ.data[j]);
@@ -1367,19 +1366,19 @@ INITIALIZE
   }
 
   // coefficients of the total cross sections, and the harmonics of one wavevector
-  L = info->list;
-  for (i = 0; i < info->num_hkl; i++) {
-    xsCoefficients (L + i, info->lmax);
+  L = texture.list;
+  for (i = 0; i < texture.num_hkl; i++) {
+    xsCoefficients (L + i, texture.lmax);
   }
-  info->sqn = (double*)malloc ((info->lmax + 1) * (info->lmax + 1) * sizeof (double));
-  info->plm = (double*)malloc ((info->lmax + 1) * (info->lmax + 1) * sizeof (double));
-  info->cm = (double*)malloc ((info->lmax + 1) * sizeof (double));
-  info->sm = (double*)malloc ((info->lmax + 1) * sizeof (double));
-  if (!info->sqn || !info->plm || !info->cm || !info->sm) {
+  texture.sqn = (double*)malloc ((texture.lmax + 1) * (texture.lmax + 1) * sizeof (double));
+  texture.plm = (double*)malloc ((texture.lmax + 1) * (texture.lmax + 1) * sizeof (double));
+  texture.cm = (double*)malloc ((texture.lmax + 1) * sizeof (double));
+  texture.sm = (double*)malloc ((texture.lmax + 1) * sizeof (double));
+  if (!texture.sqn || !texture.plm || !texture.cm || !texture.sm) {
     fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
     exit (-1);
   }
-  legendre_scale_factors (info->lmax, info->sqn);
+  legendre_scale_factors (texture.lmax, texture.sqn);
 
   // Fourier coefficients of the ODF, not needed after initialization
   for (l = 0; l <= fc->lmax; l++) {
@@ -1395,22 +1394,22 @@ INITIALIZE
   free (fc);
 
   // precomputed factors
-  hkl_info_texture.xs2mu = packing_factor / hkl_info_texture.V0;
+  texture.xs2mu = packing_factor / texture.V0;
   // Cross-sections are in barns = 10**-28 m**2, and unit cell volumes are
   // in AA**3 = 10**-30 m**3. Hence a factor of 100 is used to convert
   // scattering lengths to m**-1
-  if (barns || hkl_info_texture.flag_barns) {
-    hkl_info_texture.xs2mu *= 100;
+  if (barns || texture.flag_barns) {
+    texture.xs2mu *= 100;
   }
 
-  if (hkl_info_texture.num_hkl) {
-    printf ("Texture_process: %s: Read %d reflections from file '%s'\n", NAME_CURRENT_COMP, hkl_info_texture.num_hkl, crystal_fn);
+  if (texture.num_hkl) {
+    printf ("Texture_process: %s: Read %d reflections from file '%s'\n", NAME_CURRENT_COMP, texture.num_hkl, crystal_fn);
   } else {
     printf ("Texture_process: %s: No reflections read from file. No scattering will take place.\n", NAME_CURRENT_COMP);
   }
 
   // Initialize done in the component
-  Texture_storage.hkl_info_storage = &hkl_info_texture;
+  Texture_storage.hkl_info_storage = &texture;
 
   // First initialise This_process with default values:
   scattering_process_struct_init (&This_process);
@@ -1449,27 +1448,26 @@ TRACE
 FINALLY
 %{
   int i_hkl, i_saved, l;
-  struct hkl_info_struct_texture* hkl_info = This_process.data_transfer.pointer_to_a_Texture_physics_storage_struct->hkl_info_storage;
   double numNegativeXS = 0;
-  for (i_hkl = 0; i_hkl < hkl_info->num_hkl; i_hkl++) {
-    numNegativeXS += hkl_info->list[i_hkl].numNegativeXS;
+  for (i_hkl = 0; i_hkl < texture.num_hkl; i_hkl++) {
+    numNegativeXS += texture.list[i_hkl].numNegativeXS;
   }
   if (numNegativeXS > 0) {
     printf ("Texture_process %s WARNING: the truncated series gave %g negative cross sections.\n", NAME_CURRENT_COMP, numNegativeXS);
   }
 
   // Legendre tables and axes of the pole density tables
-  for (l = 0; l <= hkl_info->lgdr->lmax; l++) {
-    Table_Free (hkl_info->lgdr->Plm + l);
+  for (l = 0; l <= texture.lgdr->lmax; l++) {
+    Table_Free (texture.lgdr->Plm + l);
   }
-  free (hkl_info->lgdr->Plm);
-  free (hkl_info->lgdr->ctAxis);
-  free (hkl_info->lgdr->phiAxis);
-  free (hkl_info->lgdr);
+  free (texture.lgdr->Plm);
+  free (texture.lgdr->ctAxis);
+  free (texture.lgdr->phiAxis);
+  free (texture.lgdr);
 
   // reflections
-  for (i_hkl = 0; i_hkl < hkl_info->num_hkl; i_hkl++) {
-    struct hkl_data_texture* L = hkl_info->list + i_hkl;
+  for (i_hkl = 0; i_hkl < texture.num_hkl; i_hkl++) {
+    struct hkl_data_texture* L = texture.list + i_hkl;
     free (L->lv);
     free (L->mv);
     free (L->RV);
@@ -1478,24 +1476,24 @@ FINALLY
     free (L->Ac);
     free (L->As);
   }
-  free (hkl_info->list);
+  free (texture.list);
 
   // wavevector cache
-  for (i_saved = 0; i_saved < hkl_info->n_saved; i_saved++) {
-    for (i_hkl = 0; i_hkl < hkl_info->num_hkl; i_hkl++) {
-      free (hkl_info->saved[i_saved].phi[i_hkl].aa);
-      free (hkl_info->saved[i_saved].phi[i_hkl].bb);
+  for (i_saved = 0; i_saved < texture.n_saved; i_saved++) {
+    for (i_hkl = 0; i_hkl < texture.num_hkl; i_hkl++) {
+      free (texture.saved[i_saved].phi[i_hkl].aa);
+      free (texture.saved[i_saved].phi[i_hkl].bb);
     }
-    free (hkl_info->saved[i_saved].phi);
-    free (hkl_info->saved[i_saved].XS_ki);
+    free (texture.saved[i_saved].phi);
+    free (texture.saved[i_saved].XS_ki);
   }
-  free (hkl_info->saved);
+  free (texture.saved);
 
   // Legendre factors and work arrays of the wavevector
-  free (hkl_info->sqn);
-  free (hkl_info->plm);
-  free (hkl_info->cm);
-  free (hkl_info->sm);
+  free (texture.sqn);
+  free (texture.plm);
+  free (texture.cm);
+  free (texture.sm);
 
   union_release (NAME_CURRENT_COMP);
 %}
