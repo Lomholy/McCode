@@ -1264,7 +1264,6 @@ INITIALIZE
   struct odf_coefficients* fc;
   struct hkl_data_texture* L;
   struct ki_cache_entry* e;
-  int use_coef = fcoef_fn && strlen (fcoef_fn) && strcmp (fcoef_fn, "0") && strcmp (fcoef_fn, "NULL");
   // Texture initialize
 
   hkl_info_texture.flag_barns = 0;
@@ -1291,6 +1290,7 @@ INITIALIZE
   // cut-off for l. If negative, take the cut-off provided in the Fourier coeff file
   hkl_info_texture.lmax = lmax_user;
 
+  int use_coef = fcoef_fn && strlen (fcoef_fn) && strcmp (fcoef_fn, "0") && strcmp (fcoef_fn, "NULL");
   if (!use_coef) {
     fprintf (stderr, "Texture_process: give the Fourier coefficients of the texture in fcoef_fn. Exit!\n");
     exit (-1);
@@ -1311,7 +1311,6 @@ INITIALIZE
   fc = (struct odf_coefficients*)malloc (sizeof (struct odf_coefficients));
   fc->lmax = info->lmax;
   readFourierCoef (fcoef_fn, fc);
-  // the cut-off actually used: the file's lmax, or lmax_user if that is smaller
   info->lmax = fc->lmax;
 
   // precompute legendre associated functions
