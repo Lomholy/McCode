@@ -49,7 +49,7 @@
 * by 90 deg about z.
 *
 * The coefficients of an orientation list, e.g. from EBSD, or of orientations drawn from
-* tinyexpr expressions, are computed beforehand with share/texture-coefficients.c.
+* rotation expressions, are computed beforehand with share/texture-coefficients.py.
 *
 * Algorithm:
 * Described elsewhere, see e.g. <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>

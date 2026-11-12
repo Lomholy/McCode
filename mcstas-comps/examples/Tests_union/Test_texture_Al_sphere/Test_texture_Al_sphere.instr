@@ -34,8 +34,8 @@
 * The texture is read from odf_file, by default Al_mtexdata_alu_ODF.txt in the McStas data
 * folder: the Fourier coefficients of the polycrystalline aluminium EBSD map of MTEX
 * (mtexdata alu, Al_mtexdata_alu_EBSD.txt), smoothed by a Gaussian kernel of 12 deg and cut
-* at lmax = 12, computed with share/texture-coefficients.c:
-*   texture-coefficients out=Al_mtexdata_alu_ODF.txt a=4.04958 mtex_axes=1 orientation_sigma=12 lmax=12 ebsd=Al_mtexdata_alu_EBSD.txt
+* at lmax = 12, computed with share/texture-coefficients.py:
+*   python3 texture-coefficients.py --out Al_mtexdata_alu_ODF.txt --a 4.04958 --mtex_axes 1 --orientation_sigma 12 --lmax 12 --ebsd Al_mtexdata_alu_EBSD.txt
 * lmax_user = 0 gives the untextured powder.
 *
 * use_powder=1 replaces the sphere by one of the same size with Powder_process reading
