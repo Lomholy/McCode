@@ -38,6 +38,27 @@
 *   python3 texture-coefficients.py --out Al_mtexdata_alu_ODF.txt --a 4.04958 --mtex_axes 1 --orientation_sigma 12 --lmax 12 --ebsd Al_mtexdata_alu_EBSD.txt
 * lmax_user = 0 gives the untextured powder.
 *
+* half_cone=1 instead writes, in INITIALIZE, the coefficients of a texture that fills only the
+* right half (x > 0) of the (111) Debye-Scherrer cone, with the intensity of the whole cone of
+* the powder, for a monochromatic beam in the band where only (111) scatters, from 4.09 AA,
+* e.g. source_lmin = source_lmax = 4.3. The file Test_texture_Al_sphere_half_cone_<rank>.txt is
+* written by the shell command
+*   python3 $MCSTAS/share/texture-coefficients.py --a 4.04958 --orientation_sigma <orientation_sigma>
+*     --rot_x_expr "-90-180*u1" --rot_y_expr "acos(1-u2/4)*180/pi" --rot_z_expr "0"
+*     --ax -sqrt(2) --ay sqrt(3) --az -1 --bx -sqrt(2) --by -sqrt(3) --bz -1
+* with 10000 orientations drawn with the default seed, so it needs python3 with numpy.
+* Only the direction of the {111} pole that scatters matters: the crystal axes (a along
+* (-sqrt 2, sqrt 3, -1), b along (-sqrt 2, -sqrt 3, -1) in the process frame) put [111] along -x,
+* and the process is placed at ROTATED (0, -90, 0), so that its x axis is the beam. rot_y_expr
+* tilts [111] away from -beam evenly over the cap cos(ry) > 3/4 (41.4 deg), and rot_x_expr turns
+* it about the beam over the right half. The (111) Bragg cone lies within 23 deg of -beam, and the
+* other {111} poles of a grain are at least 70.5 deg from [111], so only [111] can scatter, with
+* the pole density 2 on the right half of the cone and 0 on the left. This holds without the
+* kernel: orientation_sigma smears the poles across the boundary to the left, and smears the
+* other poles of the grain, which lie 29 deg from -beam at the edge of the cap, onto the cone.
+* With orientation_sigma = 6 and lmax_user = -1, the cone has about 1.2 times the intensity of
+* the powder cone, 78% of it on the right; the excess vanishes for orientation_sigma <= 2.
+*
 * use_powder=1 replaces the sphere by one of the same size with Powder_process reading
 * crystal, which must then be a LAZ file. With crystal = "Al.laz", sphere_det_single of
 * lmax_user=0 agrees within the statistical error with that of use_powder=1. Only single scattering compares: multiple scattering in a textured
@@ -47,10 +68,13 @@
 *
 * %Test: Detector: sphere_det_I=1.28146e-05
 * %Test: use_powder=1 crystal=Al.laz Detector: sphere_det_single_I=1.18552e-05
+* %Test: half_cone=1 crystal=Al.laz source_lmin=4.3 source_lmax=4.3 orientation_sigma=6 lmax_user=-1 Detector: sphere_det_single_I=4.02767e-06
 * %Test: source_lmin=4.05 source_lmax=4.68 Detector: q_logger_I=2.34518e-06
 *
 * %Parameters
 * odf_file:   [string] Fourier coefficients of the texture, fcoef_fn of Texture_process
+* half_cone:  [1]    1: write and use the coefficients of the right half of the (111) cone instead, see above
+* orientation_sigma: [deg] Standard deviation of the kernel of the half_cone texture
 * crystal:    [string] Crystal structure file of Texture_process, an NCrystal material or a LAZ file
 * use_powder: [1]    1: Powder_process reading crystal instead of Texture_process
 * lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
@@ -62,12 +86,17 @@
 *
 * %End
 *******************************************************************************/
-DEFINE INSTRUMENT Test_texture_Al_sphere(string odf_file="Al_mtexdata_alu_ODF.txt", string crystal="Al_sg225.ncmat", int use_powder=0, int lmax_user=12, lambda_min=1, source_lmin=1, source_lmax=10)
+DEFINE INSTRUMENT Test_texture_Al_sphere(string odf_file="Al_mtexdata_alu_ODF.txt", int half_cone=0, orientation_sigma=6, string crystal="Al_sg225.ncmat", int use_powder=0, int lmax_user=12, lambda_min=1, source_lmin=1, source_lmax=10)
 
 DECLARE
 %{
   double sample_r;
   char* powder_file;
+  char* texture_file;
+  char half_cone_file[256];
+  double axis_a[3];
+  double axis_b[3];
+  double process_tilt;
   double det_r;
   int scattered;
 %}
@@ -76,6 +105,39 @@ INITIALIZE
 %{
   sample_r = 0.005;
   det_r = 1;
+
+  // texture of Texture_process: odf_file, or for half_cone = 1 the coefficients written by texture-coefficients.py,
+  // with the crystal axes and process placement that put [111] along -x of the process, whose x axis is the beam
+  texture_file = odf_file;
+  axis_a[0] = axis_a[1] = axis_a[2] = 0;
+  axis_b[0] = axis_b[1] = axis_b[2] = 0;
+  process_tilt = 0;
+  if (half_cone) {
+    char* resources = getenv ("MCSTAS") ? getenv ("MCSTAS") : MCSTAS;
+    char command[4096];
+    int rank = 0;
+  #ifdef USE_MPI
+    rank = mpi_node_rank;
+  #endif
+    axis_a[0] = -sqrt (2);
+    axis_a[1] = sqrt (3);
+    axis_a[2] = -1;
+    axis_b[0] = -sqrt (2);
+    axis_b[1] = -sqrt (3);
+    axis_b[2] = -1;
+    process_tilt = -90;
+    snprintf (half_cone_file, sizeof (half_cone_file), "Test_texture_Al_sphere_half_cone_%d.txt", rank);
+    snprintf (command, sizeof (command),
+              "python3 \"%s%cshare%ctexture-coefficients.py\" --out \"%s\" --a 4.04958 --orientation_sigma %.17g"
+              " --rot_x_expr \"-90-180*u1\" --rot_y_expr \"acos(1-u2/4)*180/pi\" --rot_z_expr 0"
+              " --ax %.17g --ay %.17g --az %.17g --bx %.17g --by %.17g --bz %.17g",
+              resources, MC_PATHSEP_C, MC_PATHSEP_C, half_cone_file, orientation_sigma, axis_a[0], axis_a[1], axis_a[2], axis_b[0], axis_b[1], axis_b[2]);
+    if (system (command)) {
+      fprintf (stderr, "Test_texture_Al_sphere: the command failed, which needs python3 with numpy:\n%s\n", command);
+      exit (-1);
+    }
+    texture_file = half_cone_file;
+  }
 
   // Powder_process only reads crystal for use_powder = 1, as it does not read NCrystal materials
   powder_file = "NULL";
@@ -113,8 +175,10 @@ COMPONENT arm_sample = Arm(
 
 COMPONENT texture = Texture_process(
     crystal_fn = crystal, barns = 1,
-    fcoef_fn = odf_file, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = 1
+    fcoef_fn = texture_file, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = !half_cone,
+    ax = axis_a[0], ay = axis_a[1], az = axis_a[2], bx = axis_b[0], by = axis_b[1], bz = axis_b[2]
 ) AT (0, 0, 0) RELATIVE arm_sample
+ROTATED (0, process_tilt, 0) RELATIVE arm_sample
 
 COMPONENT texture_mat = Union_make_material(
     my_absorption = 0, process_string = "texture"
