@@ -1079,128 +1079,6 @@ SHARE
 
   // end Input - Output
 
-  ////////////////////////////////////////
-  ////// initialization             //////
-  ////////////////////////////////////////
-
-  int
-  initData (char* coef_fn, char* crystal_fn, struct hkl_info_struct_texture* info) {
-    int i, i_saved, nread, l, m;
-    long j;
-    struct odf_coefficients* fc;
-    struct hkl_data_texture* L;
-    struct ki_cache_entry* e;
-    int use_coef = coef_fn && strlen (coef_fn) && strcmp (coef_fn, "0") && strcmp (coef_fn, "NULL");
-
-    if (!use_coef) {
-      fprintf (stderr, "Texture_process: give the Fourier coefficients of the texture in fcoef_fn. Exit!\n");
-      exit (-1);
-    }
-
-    info->tol_V = 1.0e-6;
-    info->n_phi_points = 120;
-    info->max_iter_reject = 3000;
-
-    // crystallographic data
-    nread = read_hkl_data_texture (crystal_fn, info);
-    if (!nread) {
-      printf ("initData: read_hkl_data_texture returns error\n");
-      return 1;
-    }
-
-    // get fourier coefficients of texture
-    fc = (struct odf_coefficients*)malloc (sizeof (struct odf_coefficients));
-    fc->lmax = info->lmax;
-    readFourierCoef (coef_fn, fc);
-    // the cut-off actually used: the file's lmax, or lmax_user if that is smaller
-    info->lmax = fc->lmax;
-
-    // precompute legendre associated functions
-    info->lgdr = initLegendre (fc->lmax);
-
-    // below lmax = 20 the pole density of kf is read from probQ at each try instead of tabulated for each wavevector
-    info->phi_table = info->lmax >= 20;
-
-    // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
-    info->n_saved = 4;
-    info->saved = (struct ki_cache_entry*)calloc (info->n_saved, sizeof (struct ki_cache_entry));
-    if (!info->saved) {
-      fprintf (stderr, "Texture_process: Failed malloc() in initData. Exit!\n");
-      exit (-1);
-    }
-    for (i_saved = 0; i_saved < info->n_saved; i_saved++) {
-      e = info->saved + i_saved;
-      e->ki = coords_set (0, 0, 0);
-      e->XS_ki = (double*)calloc (info->num_hkl, sizeof (double));
-      e->phi = (struct kf_phi_table*)calloc (info->num_hkl, sizeof (struct kf_phi_table));
-      if (info->num_hkl > 0 && (!e->XS_ki || !e->phi)) {
-        fprintf (stderr, "Texture_process: Failed malloc() in initData. Exit!\n");
-        exit (-1);
-      }
-      for (i = 0; i < info->num_hkl && info->phi_table; i++) {
-        e->phi[i].aa = (double*)malloc (info->n_phi_points * sizeof (double));
-        e->phi[i].bb = (double*)malloc (info->n_phi_points * sizeof (double));
-        if (!e->phi[i].aa || !e->phi[i].bb) {
-          fprintf (stderr, "Texture_process: Failed malloc() in initData. Exit!\n");
-          exit (-1);
-        }
-      }
-    }
-
-    L = info->list;
-    for (i = 0; i < info->num_hkl; i++) {
-      L[i].numNegativeXS = 0;
-    }
-
-    // V matrices for cross sections
-    L = info->list;
-    for (i = 0; i < info->num_hkl; i++) {
-      computeV (fc, L + i, info->tol_V);
-    }
-
-    // precompute the probability distribution of Q
-    L = info->list;
-    for (i = 0; i < info->num_hkl; i++) {
-      fillPoleTable (&L[i].probQ, L + i, info->lgdr);
-      L[i].probQmax = L[i].probQ.data[0];
-      for (j = 1; j < L[i].probQ.rows * L[i].probQ.columns; j++) {
-        L[i].probQmax = fmax (L[i].probQmax, L[i].probQ.data[j]);
-      }
-    }
-
-    // coefficients of the total cross sections, and the harmonics of one wavevector
-    L = info->list;
-    for (i = 0; i < info->num_hkl; i++) {
-      xsCoefficients (L + i, info->lmax);
-    }
-    info->sqn = (double*)malloc ((info->lmax + 1) * (info->lmax + 1) * sizeof (double));
-    info->plm = (double*)malloc ((info->lmax + 1) * (info->lmax + 1) * sizeof (double));
-    info->cm = (double*)malloc ((info->lmax + 1) * sizeof (double));
-    info->sm = (double*)malloc ((info->lmax + 1) * sizeof (double));
-    if (!info->sqn || !info->plm || !info->cm || !info->sm) {
-      fprintf (stderr, "Texture_process: Failed malloc() in initData. Exit!\n");
-      exit (-1);
-    }
-    legendre_scale_factors (info->lmax, info->sqn);
-
-    // Fourier coefficients of the ODF, not needed after initialization
-    for (l = 0; l <= fc->lmax; l++) {
-      for (m = -l; m <= l; m++) {
-        free (fc->cr[l][m + l]);
-        free (fc->ci[l][m + l]);
-      }
-      free (fc->cr[l]);
-      free (fc->ci[l]);
-    }
-    free (fc->cr);
-    free (fc->ci);
-    free (fc);
-
-    return 0;
-  }
-
-  // end initialization
-
   // Cache entry of the wavevector k, moved to the front of info->saved. When k is not in the cache, the
   // least recently used entry is overwritten with the cross sections of k, and its sampling tables are reset.
   struct ki_cache_entry*
@@ -1380,6 +1258,13 @@ INITIALIZE
 %{
   struct union_state_struct* union_state_p = union_acquire ();
   int n_axes, i_axis;
+  int i, i_saved, nread, l, m;
+  long j;
+  struct hkl_info_struct_texture* info = &hkl_info_texture;
+  struct odf_coefficients* fc;
+  struct hkl_data_texture* L;
+  struct ki_cache_entry* e;
+  int use_coef = fcoef_fn && strlen (fcoef_fn) && strcmp (fcoef_fn, "0") && strcmp (fcoef_fn, "NULL");
   // Texture initialize
 
   hkl_info_texture.flag_barns = 0;
@@ -1406,11 +1291,109 @@ INITIALIZE
   // cut-off for l. If negative, take the cut-off provided in the Fourier coeff file
   hkl_info_texture.lmax = lmax_user;
 
-  // initialize data
-  if (initData (fcoef_fn, crystal_fn, &hkl_info_texture)) {
-    printf ("Texture_process: %s: Error in initData: Aborting.\n", NAME_CURRENT_COMP);
+  if (!use_coef) {
+    fprintf (stderr, "Texture_process: give the Fourier coefficients of the texture in fcoef_fn. Exit!\n");
     exit (-1);
   }
+
+  info->tol_V = 1.0e-6;
+  info->n_phi_points = 120;
+  info->max_iter_reject = 3000;
+
+  // crystallographic data
+  nread = read_hkl_data_texture (crystal_fn, info);
+  if (!nread) {
+    fprintf (stderr, "Texture_process: %s: no reflections read from %s. Exit!\n", NAME_CURRENT_COMP, crystal_fn);
+    exit (-1);
+  }
+
+  // get fourier coefficients of texture
+  fc = (struct odf_coefficients*)malloc (sizeof (struct odf_coefficients));
+  fc->lmax = info->lmax;
+  readFourierCoef (fcoef_fn, fc);
+  // the cut-off actually used: the file's lmax, or lmax_user if that is smaller
+  info->lmax = fc->lmax;
+
+  // precompute legendre associated functions
+  info->lgdr = initLegendre (fc->lmax);
+
+  // below lmax = 20 the pole density of kf is read from probQ at each try instead of tabulated for each wavevector
+  info->phi_table = info->lmax >= 20;
+
+  // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
+  info->n_saved = 4;
+  info->saved = (struct ki_cache_entry*)calloc (info->n_saved, sizeof (struct ki_cache_entry));
+  if (!info->saved) {
+    fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
+    exit (-1);
+  }
+  for (i_saved = 0; i_saved < info->n_saved; i_saved++) {
+    e = info->saved + i_saved;
+    e->ki = coords_set (0, 0, 0);
+    e->XS_ki = (double*)calloc (info->num_hkl, sizeof (double));
+    e->phi = (struct kf_phi_table*)calloc (info->num_hkl, sizeof (struct kf_phi_table));
+    if (info->num_hkl > 0 && (!e->XS_ki || !e->phi)) {
+      fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
+      exit (-1);
+    }
+    for (i = 0; i < info->num_hkl && info->phi_table; i++) {
+      e->phi[i].aa = (double*)malloc (info->n_phi_points * sizeof (double));
+      e->phi[i].bb = (double*)malloc (info->n_phi_points * sizeof (double));
+      if (!e->phi[i].aa || !e->phi[i].bb) {
+        fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
+        exit (-1);
+      }
+    }
+  }
+
+  L = info->list;
+  for (i = 0; i < info->num_hkl; i++) {
+    L[i].numNegativeXS = 0;
+  }
+
+  // V matrices for cross sections
+  L = info->list;
+  for (i = 0; i < info->num_hkl; i++) {
+    computeV (fc, L + i, info->tol_V);
+  }
+
+  // precompute the probability distribution of Q
+  L = info->list;
+  for (i = 0; i < info->num_hkl; i++) {
+    fillPoleTable (&L[i].probQ, L + i, info->lgdr);
+    L[i].probQmax = L[i].probQ.data[0];
+    for (j = 1; j < L[i].probQ.rows * L[i].probQ.columns; j++) {
+      L[i].probQmax = fmax (L[i].probQmax, L[i].probQ.data[j]);
+    }
+  }
+
+  // coefficients of the total cross sections, and the harmonics of one wavevector
+  L = info->list;
+  for (i = 0; i < info->num_hkl; i++) {
+    xsCoefficients (L + i, info->lmax);
+  }
+  info->sqn = (double*)malloc ((info->lmax + 1) * (info->lmax + 1) * sizeof (double));
+  info->plm = (double*)malloc ((info->lmax + 1) * (info->lmax + 1) * sizeof (double));
+  info->cm = (double*)malloc ((info->lmax + 1) * sizeof (double));
+  info->sm = (double*)malloc ((info->lmax + 1) * sizeof (double));
+  if (!info->sqn || !info->plm || !info->cm || !info->sm) {
+    fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
+    exit (-1);
+  }
+  legendre_scale_factors (info->lmax, info->sqn);
+
+  // Fourier coefficients of the ODF, not needed after initialization
+  for (l = 0; l <= fc->lmax; l++) {
+    for (m = -l; m <= l; m++) {
+      free (fc->cr[l][m + l]);
+      free (fc->ci[l][m + l]);
+    }
+    free (fc->cr[l]);
+    free (fc->ci[l]);
+  }
+  free (fc->cr);
+  free (fc->ci);
+  free (fc);
 
   // precomputed factors
   hkl_info_texture.xs2mu = packing_factor / hkl_info_texture.V0;
