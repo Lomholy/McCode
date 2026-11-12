@@ -1077,23 +1077,6 @@ SHARE
     }
   } // readFourierCoef
 
-  void
-  freeFourierCoef (struct odf_coefficients* c) {
-    int l, m;
-    if (c->cr != NULL) {
-      for (l = 0; l <= (c->lmax); l++) {
-        for (m = -l; m <= l; m++) {
-          free (c->cr[l][m + l]);
-          free (c->ci[l][m + l]);
-        }
-        free (c->cr[l]);
-        free (c->ci[l]);
-      }
-      free (c->cr);
-      free (c->ci);
-    }
-  } // freeFourierCoef
-
   // end Input - Output
 
   ////////////////////////////////////////
@@ -1102,7 +1085,7 @@ SHARE
 
   int
   initData (char* coef_fn, char* crystal_fn, struct hkl_info_struct_texture* info) {
-    int i, i_saved, nread;
+    int i, i_saved, nread, l, m;
     long j;
     struct odf_coefficients* fc;
     struct hkl_data_texture* L;
@@ -1200,87 +1183,23 @@ SHARE
     }
     legendre_scale_factors (info->lmax, info->sqn);
 
-    // free memory of fourier coefficient, not needed anymore
-    freeFourierCoef (fc);
+    // Fourier coefficients of the ODF, not needed after initialization
+    for (l = 0; l <= fc->lmax; l++) {
+      for (m = -l; m <= l; m++) {
+        free (fc->cr[l][m + l]);
+        free (fc->ci[l][m + l]);
+      }
+      free (fc->cr[l]);
+      free (fc->ci[l]);
+    }
+    free (fc->cr);
+    free (fc->ci);
     free (fc);
 
     return 0;
   }
 
   // end initialization
-
-  ////////////////////////////////////
-  ///  free memory                ////
-  ////////////////////////////////////
-
-  int
-  free_legendre (struct legendre_tables* lgdr) {
-    int l;
-
-    if (lgdr == NULL) {
-      return 0;
-    }
-
-    for (l = 0; l <= lgdr->lmax; l++) {
-      Table_Free (lgdr->Plm + l);
-    }
-    free (lgdr->Plm);
-    free (lgdr->ctAxis);
-    free (lgdr->phiAxis);
-
-    return 0;
-  }
-
-  int
-  free_hkl_data_texture (struct hkl_data_texture* L) {
-    if (L == NULL) {
-      return 0;
-    }
-
-    free (L->lv);
-    free (L->mv);
-    free (L->RV);
-    free (L->phiV);
-
-    Table_Free (&L->probQ);
-    free (L->Ac);
-    free (L->As);
-
-    return 0;
-  }
-
-  int
-  free_texture (struct hkl_info_struct_texture* hkl_info) {
-    int i, i_saved;
-
-    if (hkl_info == NULL) {
-      return 0;
-    }
-
-    free_legendre (hkl_info->lgdr);
-    free (hkl_info->lgdr);
-    for (i = 0; i < hkl_info->num_hkl; i++) {
-      free_hkl_data_texture (hkl_info->list + i);
-    }
-    free (hkl_info->list);
-    for (i_saved = 0; i_saved < hkl_info->n_saved; i_saved++) {
-      for (i = 0; i < hkl_info->num_hkl; i++) {
-        free (hkl_info->saved[i_saved].phi[i].aa);
-        free (hkl_info->saved[i_saved].phi[i].bb);
-      }
-      free (hkl_info->saved[i_saved].phi);
-      free (hkl_info->saved[i_saved].XS_ki);
-    }
-    free (hkl_info->saved);
-    free (hkl_info->sqn);
-    free (hkl_info->plm);
-    free (hkl_info->cm);
-    free (hkl_info->sm);
-
-    return 0;
-  }
-
-  // end free memory
 
   // Cache entry of the wavevector k, moved to the front of info->saved. When k is not in the cache, the
   // least recently used entry is overwritten with the cross sections of k, and its sampling tables are reset.
@@ -1547,17 +1466,55 @@ TRACE
 
 FINALLY
 %{
-  int i;
+  int i_hkl, i_saved, l;
   struct hkl_info_struct_texture* hkl_info = This_process.data_transfer.pointer_to_a_Texture_physics_storage_struct->hkl_info_storage;
   double numNegativeXS = 0;
-  for (i = 0; i < hkl_info->num_hkl; i++) {
-    numNegativeXS += hkl_info->list[i].numNegativeXS;
+  for (i_hkl = 0; i_hkl < hkl_info->num_hkl; i_hkl++) {
+    numNegativeXS += hkl_info->list[i_hkl].numNegativeXS;
   }
   if (numNegativeXS > 0) {
     printf ("Texture_process %s WARNING: the truncated series gave %g negative cross sections.\n", NAME_CURRENT_COMP, numNegativeXS);
   }
-  // deallocate allocated memory, etc.
-  free_texture (hkl_info);
+
+  // Legendre tables and axes of the pole density tables
+  for (l = 0; l <= hkl_info->lgdr->lmax; l++) {
+    Table_Free (hkl_info->lgdr->Plm + l);
+  }
+  free (hkl_info->lgdr->Plm);
+  free (hkl_info->lgdr->ctAxis);
+  free (hkl_info->lgdr->phiAxis);
+  free (hkl_info->lgdr);
+
+  // reflections
+  for (i_hkl = 0; i_hkl < hkl_info->num_hkl; i_hkl++) {
+    struct hkl_data_texture* L = hkl_info->list + i_hkl;
+    free (L->lv);
+    free (L->mv);
+    free (L->RV);
+    free (L->phiV);
+    Table_Free (&L->probQ);
+    free (L->Ac);
+    free (L->As);
+  }
+  free (hkl_info->list);
+
+  // wavevector cache
+  for (i_saved = 0; i_saved < hkl_info->n_saved; i_saved++) {
+    for (i_hkl = 0; i_hkl < hkl_info->num_hkl; i_hkl++) {
+      free (hkl_info->saved[i_saved].phi[i_hkl].aa);
+      free (hkl_info->saved[i_saved].phi[i_hkl].bb);
+    }
+    free (hkl_info->saved[i_saved].phi);
+    free (hkl_info->saved[i_saved].XS_ki);
+  }
+  free (hkl_info->saved);
+
+  // Legendre factors and work arrays of the wavevector
+  free (hkl_info->sqn);
+  free (hkl_info->plm);
+  free (hkl_info->cm);
+  free (hkl_info->sm);
+
   union_release (NAME_CURRENT_COMP);
 %}
 
