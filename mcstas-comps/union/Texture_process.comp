@@ -176,7 +176,7 @@ SHARE
 
   struct legendre {
     int lmax;
-    t_Table* Plm; // per l: plgndr_mod on a uniform grid in x, with one column per m
+    t_Table* Plm; // per l: scaled_associated_legendre on a uniform grid in x, with one column per m
     // axes of the pole density tables, uniform in cos(theta) and phi
     int n_ct, n_phi;
     double* ctAxis;
@@ -188,7 +188,7 @@ SHARE
     int mult;             // Multiplicity of the line
     double F2;            // Value of square of structure factor
     double G, Gct, Gphi;  // polar coordinates of G [Gct=cos(theta)]
-    // total cross section: sum_m plgndr_mod (l, m, kct) (Ac cos (m kphi) + As sin (m kphi)) at [l * (lmax + 1) + m], m >= 0
+    // total cross section: sum_m scaled_associated_legendre (l, m, kct) (Ac cos (m kphi) + As sin (m kphi)) at [l * (lmax + 1) + m], m >= 0
     double *Ac, *As;
     // To obtain cross sections
     int numV;
@@ -224,7 +224,7 @@ SHARE
 
     double tol_V;        // terms of V with a smaller modulus are dropped
     double* sqn;         // sqrt ((l - m)! / (l + m)!) at [l * (lmax + 1) + m]
-    double* plm;         // plgndr_mod (l, m, kct) of the wavevector of the last cache fill, same index
+    double* plm;         // scaled_associated_legendre (l, m, kct) of the wavevector of the last cache fill, same index
     double *cm, *sm;     // cos (m kphi) and sin (m kphi) of that wavevector
     int n_phi_points;    // points of the azimuthal sampling tables of kf
     int phi_table;       // 1: azimuthal table of kf for each wavevector (lmax >= 20), 0: rejection on probQ directly
@@ -295,7 +295,7 @@ SHARE
       for (j = 0; j < nx; j++) {
         x = (j < nx - 1 ? -1.0 + j * dx : 1.0);
         for (m = -l; m <= l; m++) {
-          lgdr->Plm[l].data[j * (2 * l + 1) + l + m] = plgndr_mod (l, m, x);
+          lgdr->Plm[l].data[j * (2 * l + 1) + l + m] = scaled_associated_legendre (l, m, x);
         }
       }
     }
@@ -372,7 +372,7 @@ SHARE
     return XS;
   }
 
-  // Ac, As of L from its V terms, with plgndr_mod (l, -m) = (-1)^m plgndr_mod (l, m)
+  // Ac, As of L from its V terms, with scaled_associated_legendre (l, -m) = (-1)^m scaled_associated_legendre (l, m)
   void
   xsCoefficients (struct hkl_data_texture* L, int lmax) {
     int i, l, m, ma;
@@ -424,7 +424,7 @@ SHARE
         vr = 0;
         vi = 0;
         for (n = -l; n <= l; n++) {
-          pln = plgndr_mod (l, n, Gct); // this can be interpolated from lgdr
+          pln = scaled_associated_legendre (l, n, Gct); // this can be interpolated from lgdr
           cnp = cos (n * Gphi);
           snp = sin (n * Gphi);
           vr += pln * ((fc->cr)[l][l + m][l + n] * cnp - (fc->ci)[l][l + m][l + n] * snp);
@@ -1204,7 +1204,7 @@ SHARE
     }
 
     // quadrature points on the sphere, exact for the products of two harmonics of order <= lmax
-    gaussLegendre (nx, xg, wg);
+    gauss_legendre_quadrature (nx, xg, wg);
     for (i = 0; i < nx; i++) {
       st = sqrt (1 - xg[i] * xg[i]);
       for (j = 0; j < nphi; j++) {
@@ -1212,19 +1212,19 @@ SHARE
         wq[i * nphi + j] = wg[i] * 2 * PI / nphi;
       }
     }
-    legendreNorms (lmax, sqn);
+    legendre_scale_factors (lmax, sqn);
 
     for (i = 0; i < nOrient; i++) {
-      addHarmonics (orient[i], lmax, nq, hq, sqn, p, Fr, Fi);
+      add_rotated_harmonics (orient[i], lmax, nq, hq, sqn, p, Fr, Fi);
     }
 
     nsym = latticeRotations (info, ops);
     for (i = 0; i < nsym; i++) {
-      addHarmonics (ops[i], lmax, nq, hq, sqn, p, Sr, Si);
+      add_rotated_harmonics (ops[i], lmax, nq, hq, sqn, p, Sr, Si);
     }
 
     rot_set_rotation (g, 0, 0, 0);
-    addHarmonics (g, lmax, nq, hq, sqn, p, Gr, Gi);
+    add_rotated_harmonics (g, lmax, nq, hq, sqn, p, Gr, Gi);
 
     for (k = 0; k < nh; k++) {
       Fr[k] /= nOrient;
@@ -1237,8 +1237,8 @@ SHARE
     for (l = 0; l <= lmax; l++) {
       d = 2 * l + 1;
       kappa = exp (-l * (l + 1) * sigma * sigma / 2);
-      projectHarmonics (l, lmax, nq, wq, Fr, Fi, Gr, Gi, Ar, Ai);
-      projectHarmonics (l, lmax, nq, wq, Sr, Si, Gr, Gi, Br, Bi);
+      harmonic_projection_matrix (l, lmax, nq, wq, Fr, Fi, Gr, Gi, Ar, Ai);
+      harmonic_projection_matrix (l, lmax, nq, wq, Sr, Si, Gr, Gi, Br, Bi);
       for (m = 0; m < d; m++) {
         for (n = 0; n < d; n++) {
           sr = 0;
@@ -1412,7 +1412,7 @@ SHARE
     }
   } // SX_list_compare
 
-  // Linear interpolation of plgndr_mod in the table of order l
+  // Linear interpolation of scaled_associated_legendre in the table of order l
   double
   plmValue (int l, int m, double x, struct legendre* lgdr) {
     t_Table* table = lgdr->Plm + l;
@@ -1588,7 +1588,7 @@ SHARE
       fprintf (stderr, "Texture_process: Failed malloc() in initData. Exit!\n");
       exit (-1);
     }
-    legendreNorms (info->lmax, info->sqn);
+    legendre_scale_factors (info->lmax, info->sqn);
 
     // free memory of fourier coefficient, not needed anymore
     freeFourierCoef (fc);
@@ -1705,7 +1705,7 @@ SHARE
       ki = sqrt (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
       kict = k[2] / ki;
       kiphi = atan2 (k[1], k[0]);
-      allPlgndrMod (info->lmax, fmin (1.0, fmax (-1.0, kict)), info->sqn, info->plm);
+      all_scaled_associated_legendre (info->lmax, fmin (1.0, fmax (-1.0, kict)), info->sqn, info->plm);
       for (m = 0; m <= info->lmax; m++) {
         info->cm[m] = cos (m * kiphi);
         info->sm[m] = sin (m * kiphi);

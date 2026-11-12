@@ -22,184 +22,179 @@
 #define SPECIAL_FUNCTIONS_LIB_C
 
 double
-plgndr (int l, int m, double x) {
-  double fact, pll, pmm, pmmp1, somx2;
-  int i, ll;
+associated_legendre (int l, int m, double x) {
+  double odd_factor, p_lm, p_mm, p_m1m, sin_theta;
+  int i, degree;
 
   if (m < 0 || m > l || fabs (x) > 1.0) {
-    printf ("Bad arguments in routine plgndr\n");
+    printf ("Bad arguments in routine associated_legendre\n");
     printf ("m: %d l: %d x: %f\n", m, l, x);
     printf ("Exiting...\n");
     exit (-1);
   }
-  // Compute Pmm
-  pmm = 1.0;
+  // P_m^m = (-1)^m (2m - 1)!! sin(theta)^m
+  p_mm = 1.0;
   if (m > 0) {
-    somx2 = sqrt ((1.0 - x) * (1.0 + x));
-    fact = 1.0;
+    sin_theta = sqrt ((1.0 - x) * (1.0 + x));
+    odd_factor = 1.0;
     for (i = 1; i <= m; i++) {
-      pmm *= -fact * somx2;
-      fact += 2.0;
+      p_mm *= -odd_factor * sin_theta;
+      odd_factor += 2.0;
     }
   }
   if (l == m) {
-    return pmm;
+    return p_mm;
   } else {
-    // Compute Pmm+1
-    pmmp1 = x * (2 * m + 1) * pmm;
+    // P_(m+1)^m
+    p_m1m = x * (2 * m + 1) * p_mm;
     if (l == (m + 1))
-      return pmmp1;
+      return p_m1m;
     else {
-      // Compute Plm, l > m + 1.
-      for (ll = m + 2; ll <= l; ll++) {
-        pll = (x * (2 * ll - 1) * pmmp1 - (ll + m - 1) * pmm) / (ll - m);
-        pmm = pmmp1;
-        pmmp1 = pll;
+      // P_l^m for l > m + 1 by recurrence in the degree
+      for (degree = m + 2; degree <= l; degree++) {
+        p_lm = (x * (2 * degree - 1) * p_m1m - (degree + m - 1) * p_mm) / (degree - m);
+        p_mm = p_m1m;
+        p_m1m = p_lm;
       }
-      return pll;
+      return p_lm;
     }
   }
 }
 
-// legendre associated functions normalized for computations (see notes)
 double
-plgndr_mod (int l, int m, double x) {
+scaled_associated_legendre (int l, int m, double x) {
   int k;
-  int ma = abs (m);
-  double plm, norm = 1.0;
-  for (k = l + ma; k > l - ma; k--) {
-    norm /= k;
+  int abs_m = abs (m);
+  double value, factorial_ratio = 1.0;
+  for (k = l + abs_m; k > l - abs_m; k--) {
+    factorial_ratio /= k;
   }
-  plm = sqrt (norm) * plgndr (l, ma, x);
-  if (m < 0 && ma % 2) {
-    plm = -plm;
+  value = sqrt (factorial_ratio) * associated_legendre (l, abs_m, x);
+  if (m < 0 && abs_m % 2) {
+    value = -value;
   }
-  return plm;
+  return value;
 }
 
-// Gauss-Legendre nodes x and weights w of order n on [-1, 1]
 void
-gaussLegendre (int n, double* x, double* w) {
-  int i, j, it;
-  double z, z1, p1, p2, p3, pp = 1;
+gauss_legendre_quadrature (int n, double* nodes, double* weights) {
+  int i, degree, iteration;
+  double z, z_previous, p_n, p_n1, p_n2, derivative = 1;
 
   for (i = 0; i < (n + 1) / 2; i++) {
+    // Newton iteration for the i-th root of P_n, from an asymptotic first guess
     z = cos (PI * (i + 0.75) / (n + 0.5));
-    for (it = 0; it < 100; it++) {
-      p1 = 1;
-      p2 = 0;
-      for (j = 1; j <= n; j++) {
-        p3 = p2;
-        p2 = p1;
-        p1 = ((2 * j - 1) * z * p2 - (j - 1) * p3) / j;
+    for (iteration = 0; iteration < 100; iteration++) {
+      p_n = 1;
+      p_n1 = 0;
+      for (degree = 1; degree <= n; degree++) {
+        p_n2 = p_n1;
+        p_n1 = p_n;
+        p_n = ((2 * degree - 1) * z * p_n1 - (degree - 1) * p_n2) / degree;
       }
-      pp = n * (z * p1 - p2) / (z * z - 1);
-      z1 = z;
-      z = z1 - p1 / pp;
-      if (fabs (z - z1) < 1e-15) {
+      derivative = n * (z * p_n - p_n1) / (z * z - 1);
+      z_previous = z;
+      z = z_previous - p_n / derivative;
+      if (fabs (z - z_previous) < 1e-15) {
         break;
       }
     }
-    x[i] = -z;
-    x[n - 1 - i] = z;
-    w[i] = w[n - 1 - i] = 2 / ((1 - z * z) * pp * pp);
+    nodes[i] = -z;
+    nodes[n - 1 - i] = z;
+    weights[i] = weights[n - 1 - i] = 2 / ((1 - z * z) * derivative * derivative);
   }
 }
 
-// sqn[l * (lmax + 1) + m] = sqrt ((l - m)! / (l + m)!) for 0 <= m <= l <= lmax
 void
-legendreNorms (int lmax, double* sqn) {
+legendre_scale_factors (int lmax, double* scale) {
   int l, m, k;
-  double norm;
+  double factorial_ratio;
 
   for (l = 0; l <= lmax; l++) {
     for (m = 0; m <= l; m++) {
-      norm = 1.0;
+      factorial_ratio = 1.0;
       for (k = l + m; k > l - m; k--) {
-        norm /= k;
+        factorial_ratio /= k;
       }
-      sqn[l * (lmax + 1) + m] = sqrt (norm);
+      scale[l * (lmax + 1) + m] = sqrt (factorial_ratio);
     }
   }
 }
 
-// plgndr_mod (l, m, x) for 0 <= m <= l <= lmax at p[l * (lmax + 1) + m], with sqn = sqrt ((l - m)! / (l + m)!) at the same index
 void
-allPlgndrMod (int lmax, double x, double* sqn, double* p) {
+all_scaled_associated_legendre (int lmax, double x, double* scale, double* values) {
   int l, m, n = lmax + 1;
-  double pmm = 1.0, somx2 = sqrt ((1.0 - x) * (1.0 + x));
+  double p_mm = 1.0, sin_theta = sqrt ((1.0 - x) * (1.0 + x));
 
   for (m = 0; m <= lmax; m++) {
     if (m > 0) {
-      pmm *= -(2 * m - 1) * somx2;
+      p_mm *= -(2 * m - 1) * sin_theta;
     }
-    p[m * n + m] = pmm;
+    values[m * n + m] = p_mm;
     if (m < lmax) {
-      p[(m + 1) * n + m] = x * (2 * m + 1) * pmm;
+      values[(m + 1) * n + m] = x * (2 * m + 1) * p_mm;
     }
     for (l = m + 2; l <= lmax; l++) {
-      p[l * n + m] = (x * (2 * l - 1) * p[(l - 1) * n + m] - (l + m - 1) * p[(l - 2) * n + m]) / (l - m);
+      values[l * n + m] = (x * (2 * l - 1) * values[(l - 1) * n + m] - (l + m - 1) * values[(l - 2) * n + m]) / (l - m);
     }
   }
   for (l = 0; l <= lmax; l++) {
     for (m = 0; m <= l; m++) {
-      p[l * n + m] *= sqn[l * n + m];
+      values[l * n + m] *= scale[l * n + m];
     }
   }
 }
 
-// Adds N_lm (R h_q) = plgndr_mod (l, m, cos theta) exp (i m phi) for 0 <= m <= l <= lmax to (Fr, Fi)[(l * (lmax + 1) + m) * nq + q]
 void
-addHarmonics (Rotation R, int lmax, int nq, Coords* hq, double* sqn, double* p, double* Fr, double* Fi) {
-  int q, l, m, k;
-  double phi, cm, sm;
-  Coords v;
+add_rotated_harmonics (Rotation rotation, int lmax, int n_points, Coords* points, double* scale, double* legendre_values, double* harmonic_re,
+                       double* harmonic_im) {
+  int point, l, m, lm;
+  double phi, cos_m_phi, sin_m_phi;
+  Coords direction;
 
-  for (q = 0; q < nq; q++) {
-    v = rot_apply (R, hq[q]);
-    allPlgndrMod (lmax, fmin (1.0, fmax (-1.0, v.z)), sqn, p);
-    phi = atan2 (v.y, v.x);
+  for (point = 0; point < n_points; point++) {
+    direction = rot_apply (rotation, points[point]);
+    all_scaled_associated_legendre (lmax, fmin (1.0, fmax (-1.0, direction.z)), scale, legendre_values);
+    phi = atan2 (direction.y, direction.x);
     for (m = 0; m <= lmax; m++) {
-      cm = cos (m * phi);
-      sm = sin (m * phi);
+      cos_m_phi = cos (m * phi);
+      sin_m_phi = sin (m * phi);
       for (l = m; l <= lmax; l++) {
-        k = l * (lmax + 1) + m;
-        Fr[k * nq + q] += p[k] * cm;
-        Fi[k * nq + q] += p[k] * sm;
+        lm = l * (lmax + 1) + m;
+        harmonic_re[lm * n_points + point] += legendre_values[lm] * cos_m_phi;
+        harmonic_im[lm * n_points + point] += legendre_values[lm] * sin_m_phi;
       }
     }
   }
 }
 
-// Value at quadrature point q of a harmonic stored by addHarmonics, with N_l,-m = (-1)^m conj (N_lm)
 void
-harmonicValue (int l, int m, int lmax, int nq, int q, double* Fr, double* Fi, double* re, double* im) {
-  int k = (l * (lmax + 1) + abs (m)) * nq + q;
-  double s = (m < 0 && abs (m) % 2) ? -1 : 1;
+stored_harmonic (int l, int m, int lmax, int n_points, int point, double* harmonic_re, double* harmonic_im, double* re, double* im) {
+  int index = (l * (lmax + 1) + abs (m)) * n_points + point;
+  double sign = (m < 0 && abs (m) % 2) ? -1 : 1;
 
-  *re = s * Fr[k];
-  *im = (m < 0 ? -s : s) * Fi[k];
+  *re = sign * harmonic_re[index];
+  *im = (m < 0 ? -sign : sign) * harmonic_im[index];
 }
 
-// W_mn = (2l + 1) / (4 pi) sum_q w_q F_lm (h_q) conj (G_ln (h_q)) at W[(l + m) * (2l + 1) + l + n]: the matrix with
-// F_lm (h) = sum_n W_mn G_ln (h), for G_ln the unrotated harmonics
 void
-projectHarmonics (int l, int lmax, int nq, double* wq, double* Fr, double* Fi, double* Gr, double* Gi, double* Wr, double* Wi) {
-  int m, n, q, d = 2 * l + 1;
-  double fr, fi, gr, gi, sr, si;
+harmonic_projection_matrix (int l, int lmax, int n_points, double* weights, double* rotated_re, double* rotated_im, double* reference_re,
+                            double* reference_im, double* matrix_re, double* matrix_im) {
+  int m, n, point, size = 2 * l + 1;
+  double rotated_value_re, rotated_value_im, reference_value_re, reference_value_im, sum_re, sum_im;
 
   for (m = -l; m <= l; m++) {
     for (n = -l; n <= l; n++) {
-      sr = 0;
-      si = 0;
-      for (q = 0; q < nq; q++) {
-        harmonicValue (l, m, lmax, nq, q, Fr, Fi, &fr, &fi);
-        harmonicValue (l, n, lmax, nq, q, Gr, Gi, &gr, &gi);
-        sr += wq[q] * (fr * gr + fi * gi);
-        si += wq[q] * (fi * gr - fr * gi);
+      sum_re = 0;
+      sum_im = 0;
+      for (point = 0; point < n_points; point++) {
+        stored_harmonic (l, m, lmax, n_points, point, rotated_re, rotated_im, &rotated_value_re, &rotated_value_im);
+        stored_harmonic (l, n, lmax, n_points, point, reference_re, reference_im, &reference_value_re, &reference_value_im);
+        sum_re += weights[point] * (rotated_value_re * reference_value_re + rotated_value_im * reference_value_im);
+        sum_im += weights[point] * (rotated_value_im * reference_value_re - rotated_value_re * reference_value_im);
       }
-      Wr[(l + m) * d + l + n] = d / (4 * PI) * sr;
-      Wi[(l + m) * d + l + n] = d / (4 * PI) * si;
+      matrix_re[(l + m) * size + l + n] = size / (4 * PI) * sum_re;
+      matrix_im[(l + m) * size + l + n] = size / (4 * PI) * sum_im;
     }
   }
 }
