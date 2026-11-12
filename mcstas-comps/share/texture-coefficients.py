@@ -9,6 +9,9 @@ Origin: Niels Bohr Institute @ UCPH
 
 Writes the Fourier coefficients of an orientation distribution function (ODF) to the
 file that Texture_process reads as fcoef_fn, with the five columns l m n Real(Clmn) Imag(Clmn).
+When --out ends in .bin, the file is binary instead, about 3.5 times smaller: only
+Real(Clmn) and Imag(Clmn) of each row, as two little-endian 8-byte doubles, without header,
+in the row order of the text file, from which Texture_process recovers l, m, n and lmax.
 The ODF is given by a list of orientations, either an orientation list such as an EBSD
 map, or orientations drawn from three expressions. Needs Python 3 and numpy.
 
@@ -182,6 +185,9 @@ def write_coefficients(filename, coefficients, comment):
             sign = -1 if (max(-m, 0) + max(-n, 0)) % 2 else 1
             value = C[l + m, l + n]
             rows.append((l, n, m, sign * value.real, -sign * value.imag))
+    if filename.endswith(".bin"):
+        np.asarray(rows)[:, 3:].astype("<f8").tofile(filename)
+        return
     header = comment + "\nwritten by texture-coefficients.py for fcoef_fn of Texture_process\nl m n Real(Clmn) Imag(Clmn)"
     np.savetxt(filename, rows, fmt=["%d", "%d", "%d", "%.17g", "%.17g"], header=header)
 
@@ -235,7 +241,7 @@ def draw_expression_orientations(expressions, n_orientations, constants, seed):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--out", required=True, help="file to write")
+    parser.add_argument("--out", required=True, help="file to write; binary when it ends in .bin")
     parser.add_argument("--a", type=float, required=True, help="lattice parameter a [AA]")
     parser.add_argument("--b", type=float, default=0, help="lattice parameter b [AA], default a")
     parser.add_argument("--c", type=float, default=0, help="lattice parameter c [AA], default b")
