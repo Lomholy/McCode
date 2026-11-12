@@ -1246,8 +1246,8 @@ DECLARE
   // Declare for this component, to do calculations on the input / store in the transported data
   struct Texture_physics_storage_struct Texture_storage;
 
-  // Variables needed in initialize of this function.
-  struct hkl_info_struct_texture hkl_info_texture;
+  // Texture data, filled in INITIALIZE; Union_master reaches it through the pointer in Texture_storage
+  struct hkl_info_struct_texture process;
 
   // Needed for transport to the main component, will be the same for all processes
   struct global_process_element_struct global_process_element;
@@ -1260,21 +1260,20 @@ INITIALIZE
   int n_axes, i_axis;
   int i, i_saved, nread, l, m;
   long j;
-  struct hkl_info_struct_texture* info = &hkl_info_texture;
   struct odf_coefficients* fc;
   struct hkl_data_texture* L;
   struct ki_cache_entry* e;
   // Texture initialize
 
-  hkl_info_texture.flag_barns = 0;
-  hkl_info_texture.wavelength_min = lambda_min;
-  hkl_info_texture.use_mtex_axes = mtex_axes;
-  hkl_info_texture.crys_axis[0] = coords_set (ax, ay, az);
-  hkl_info_texture.crys_axis[1] = coords_set (bx, by, bz);
-  hkl_info_texture.crys_axis[2] = coords_set (cx, cy, cz);
+  process.flag_barns = 0;
+  process.wavelength_min = lambda_min;
+  process.use_mtex_axes = mtex_axes;
+  process.crys_axis[0] = coords_set (ax, ay, az);
+  process.crys_axis[1] = coords_set (bx, by, bz);
+  process.crys_axis[2] = coords_set (cx, cy, cz);
   n_axes = 0;
   for (i_axis = 0; i_axis < 3; i_axis++) {
-    if (coords_len (hkl_info_texture.crys_axis[i_axis]) > 0) {
+    if (coords_len (process.crys_axis[i_axis]) > 0) {
       n_axes++;
     }
   }
@@ -1288,7 +1287,7 @@ INITIALIZE
   }
 
   // cut-off for l. If negative, take the cut-off provided in the Fourier coeff file
-  hkl_info_texture.lmax = lmax_user;
+  process.lmax = lmax_user;
 
   int use_coef = fcoef_fn && strlen (fcoef_fn) && strcmp (fcoef_fn, "0") && strcmp (fcoef_fn, "NULL");
   if (!use_coef) {
@@ -1296,12 +1295,12 @@ INITIALIZE
     exit (-1);
   }
 
-  info->tol_V = 1.0e-6;
-  info->n_phi_points = 120;
-  info->max_iter_reject = 3000;
+  process.tol_V = 1.0e-6;
+  process.n_phi_points = 120;
+  process.max_iter_reject = 3000;
 
   // crystallographic data
-  nread = read_hkl_data_texture (crystal_fn, info);
+  nread = read_hkl_data_texture (crystal_fn, &process);
   if (!nread) {
     fprintf (stderr, "Texture_process: %s: no reflections read from %s. Exit!\n", NAME_CURRENT_COMP, crystal_fn);
     exit (-1);
@@ -1309,35 +1308,35 @@ INITIALIZE
 
   // get fourier coefficients of texture
   fc = (struct odf_coefficients*)malloc (sizeof (struct odf_coefficients));
-  fc->lmax = info->lmax;
+  fc->lmax = process.lmax;
   readFourierCoef (fcoef_fn, fc);
-  info->lmax = fc->lmax;
+  process.lmax = fc->lmax;
 
   // precompute legendre associated functions
-  info->lgdr = initLegendre (fc->lmax);
+  process.lgdr = initLegendre (fc->lmax);
 
   // below lmax = 20 the pole density of kf is read from probQ at each try instead of tabulated for each wavevector
-  info->phi_table = info->lmax >= 20;
+  process.phi_table = process.lmax >= 20;
 
   // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
-  info->n_saved = 4;
-  info->saved = (struct ki_cache_entry*)calloc (info->n_saved, sizeof (struct ki_cache_entry));
-  if (!info->saved) {
+  process.n_saved = 4;
+  process.saved = (struct ki_cache_entry*)calloc (process.n_saved, sizeof (struct ki_cache_entry));
+  if (!process.saved) {
     fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
     exit (-1);
   }
-  for (i_saved = 0; i_saved < info->n_saved; i_saved++) {
-    e = info->saved + i_saved;
+  for (i_saved = 0; i_saved < process.n_saved; i_saved++) {
+    e = process.saved + i_saved;
     e->ki = coords_set (0, 0, 0);
-    e->XS_ki = (double*)calloc (info->num_hkl, sizeof (double));
-    e->phi = (struct kf_phi_table*)calloc (info->num_hkl, sizeof (struct kf_phi_table));
-    if (info->num_hkl > 0 && (!e->XS_ki || !e->phi)) {
+    e->XS_ki = (double*)calloc (process.num_hkl, sizeof (double));
+    e->phi = (struct kf_phi_table*)calloc (process.num_hkl, sizeof (struct kf_phi_table));
+    if (process.num_hkl > 0 && (!e->XS_ki || !e->phi)) {
       fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
       exit (-1);
     }
-    for (i = 0; i < info->num_hkl && info->phi_table; i++) {
-      e->phi[i].aa = (double*)malloc (info->n_phi_points * sizeof (double));
-      e->phi[i].bb = (double*)malloc (info->n_phi_points * sizeof (double));
+    for (i = 0; i < process.num_hkl && process.phi_table; i++) {
+      e->phi[i].aa = (double*)malloc (process.n_phi_points * sizeof (double));
+      e->phi[i].bb = (double*)malloc (process.n_phi_points * sizeof (double));
       if (!e->phi[i].aa || !e->phi[i].bb) {
         fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
         exit (-1);
@@ -1345,21 +1344,21 @@ INITIALIZE
     }
   }
 
-  L = info->list;
-  for (i = 0; i < info->num_hkl; i++) {
+  L = process.list;
+  for (i = 0; i < process.num_hkl; i++) {
     L[i].numNegativeXS = 0;
   }
 
   // V matrices for cross sections
-  L = info->list;
-  for (i = 0; i < info->num_hkl; i++) {
-    computeV (fc, L + i, info->tol_V);
+  L = process.list;
+  for (i = 0; i < process.num_hkl; i++) {
+    computeV (fc, L + i, process.tol_V);
   }
 
   // precompute the probability distribution of Q
-  L = info->list;
-  for (i = 0; i < info->num_hkl; i++) {
-    fillPoleTable (&L[i].probQ, L + i, info->lgdr);
+  L = process.list;
+  for (i = 0; i < process.num_hkl; i++) {
+    fillPoleTable (&L[i].probQ, L + i, process.lgdr);
     L[i].probQmax = L[i].probQ.data[0];
     for (j = 1; j < L[i].probQ.rows * L[i].probQ.columns; j++) {
       L[i].probQmax = fmax (L[i].probQmax, L[i].probQ.data[j]);
@@ -1367,19 +1366,19 @@ INITIALIZE
   }
 
   // coefficients of the total cross sections, and the harmonics of one wavevector
-  L = info->list;
-  for (i = 0; i < info->num_hkl; i++) {
-    xsCoefficients (L + i, info->lmax);
+  L = process.list;
+  for (i = 0; i < process.num_hkl; i++) {
+    xsCoefficients (L + i, process.lmax);
   }
-  info->sqn = (double*)malloc ((info->lmax + 1) * (info->lmax + 1) * sizeof (double));
-  info->plm = (double*)malloc ((info->lmax + 1) * (info->lmax + 1) * sizeof (double));
-  info->cm = (double*)malloc ((info->lmax + 1) * sizeof (double));
-  info->sm = (double*)malloc ((info->lmax + 1) * sizeof (double));
-  if (!info->sqn || !info->plm || !info->cm || !info->sm) {
+  process.sqn = (double*)malloc ((process.lmax + 1) * (process.lmax + 1) * sizeof (double));
+  process.plm = (double*)malloc ((process.lmax + 1) * (process.lmax + 1) * sizeof (double));
+  process.cm = (double*)malloc ((process.lmax + 1) * sizeof (double));
+  process.sm = (double*)malloc ((process.lmax + 1) * sizeof (double));
+  if (!process.sqn || !process.plm || !process.cm || !process.sm) {
     fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
     exit (-1);
   }
-  legendre_scale_factors (info->lmax, info->sqn);
+  legendre_scale_factors (process.lmax, process.sqn);
 
   // Fourier coefficients of the ODF, not needed after initialization
   for (l = 0; l <= fc->lmax; l++) {
@@ -1395,22 +1394,22 @@ INITIALIZE
   free (fc);
 
   // precomputed factors
-  hkl_info_texture.xs2mu = packing_factor / hkl_info_texture.V0;
+  process.xs2mu = packing_factor / process.V0;
   // Cross-sections are in barns = 10**-28 m**2, and unit cell volumes are
   // in AA**3 = 10**-30 m**3. Hence a factor of 100 is used to convert
   // scattering lengths to m**-1
-  if (barns || hkl_info_texture.flag_barns) {
-    hkl_info_texture.xs2mu *= 100;
+  if (barns || process.flag_barns) {
+    process.xs2mu *= 100;
   }
 
-  if (hkl_info_texture.num_hkl) {
-    printf ("Texture_process: %s: Read %d reflections from file '%s'\n", NAME_CURRENT_COMP, hkl_info_texture.num_hkl, crystal_fn);
+  if (process.num_hkl) {
+    printf ("Texture_process: %s: Read %d reflections from file '%s'\n", NAME_CURRENT_COMP, process.num_hkl, crystal_fn);
   } else {
     printf ("Texture_process: %s: No reflections read from file. No scattering will take place.\n", NAME_CURRENT_COMP);
   }
 
   // Initialize done in the component
-  Texture_storage.hkl_info_storage = &hkl_info_texture;
+  Texture_storage.hkl_info_storage = &process;
 
   // First initialise This_process with default values:
   scattering_process_struct_init (&This_process);
