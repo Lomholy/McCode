@@ -107,7 +107,7 @@ SHARE
   #define TEXTURE_PROCESS_DECL
 
   // azimuthal sampling table of kf for one reflection and one wavevector
-  struct phiTable {
+  struct kf_phi_table {
     int built;             // 0 until the table is computed for the wavevector of its cache entry
     Coords kih;            // unit vector of ki
     Coords t1, t2;         // complete kih to a right-handed basis (t1,t2,kih)
@@ -118,20 +118,20 @@ SHARE
   };
 
   // everything computed for one wavevector
-  struct kiCache {
+  struct ki_cache_entry {
     Coords ki;
-    int last_hkl;          // index of the last reflection below the Bragg cutoff, -1 if none
-    double cohMu;          // linear attenuation coefficient (m^-1)
-    double* XS_ki;         // cross section of each reflection alone
-    struct phiTable* phi;  // sampling table of each reflection
+    int last_hkl;             // index of the last reflection below the Bragg cutoff, -1 if none
+    double cohMu;             // linear attenuation coefficient (m^-1)
+    double* XS_ki;            // cross section of each reflection alone
+    struct kf_phi_table* phi; // sampling table of each reflection
   };
 
-  struct fourier_coef {
+  struct odf_coefficients {
     int lmax;
     double ***cr, ***ci;
   };
 
-  struct legendre {
+  struct legendre_tables {
     int lmax;
     t_Table* Plm; // per l: scaled_associated_legendre on a uniform grid in x, with one column per m
     // axes of the pole density tables, uniform in cos(theta) and phi
@@ -163,7 +163,7 @@ SHARE
     // data structures
     int num_hkl;                   // Number of reflections hkl taken into account
     struct hkl_data_texture* list; // Reflection array
-    struct legendre* lgdr;         // structure with precomputed spherical harmonics
+    struct legendre_tables* lgdr;  // structure with precomputed spherical harmonics
     int lmax;                      // cut-off for the Fourier expansion
 
     double V0;             // Unit cell volume (AA**3)
@@ -187,7 +187,7 @@ SHARE
     // everything computed for the last n_saved wavevectors, most recently used first,
     // so that the SPLIT copies of a neutron reuse it
     int n_saved;
-    struct kiCache* saved;
+    struct ki_cache_entry* saved;
   };
 
   /////////////////////////////////////////
@@ -209,7 +209,7 @@ SHARE
 
   // Linear interpolation of scaled_associated_legendre in the table of order l
   double
-  plmValue (int l, int m, double x, struct legendre* lgdr) {
+  plmValue (int l, int m, double x, struct legendre_tables* lgdr) {
     t_Table* table = lgdr->Plm + l;
     long nx = table->rows;
     long ncol = table->columns;
@@ -226,7 +226,7 @@ SHARE
 
   // Bilinear interpolation in a pole density table
   double
-  interp2D (double x, double y, struct legendre* lgdr, t_Table* table) {
+  interp2D (double x, double y, struct legendre_tables* lgdr, t_Table* table) {
     int i, j;
     double* xp = lgdr->ctAxis;
     double* yp = lgdr->phiAxis;
@@ -265,13 +265,13 @@ SHARE
   /// legendre     ////
   /////////////////////
 
-  struct legendre*
+  struct legendre_tables*
   initLegendre (int lmax) {
     int j, l, m, nx;
     double x, dx;
-    struct legendre* lgdr;
+    struct legendre_tables* lgdr;
 
-    lgdr = (struct legendre*)malloc (sizeof (struct legendre));
+    lgdr = (struct legendre_tables*)malloc (sizeof (struct legendre_tables));
     if (!lgdr) {
       fprintf (stderr, "Texture_process: Failed struct malloc() in initLegendre. Exit!\n");
       exit (-1);
@@ -391,7 +391,7 @@ SHARE
   }
 
   int
-  computeV (struct fourier_coef* fc, struct hkl_data_texture* L, double tol) {
+  computeV (struct odf_coefficients* fc, struct hkl_data_texture* L, double tol) {
     int i, l, m, n, numV;
     double Gct, Gphi, cnp, snp, pln, vr, vi;
     double **R, **Phi;
@@ -473,7 +473,7 @@ SHARE
 
   // Unit vector of kf at azimuth phi around kih
   Coords
-  kfDirection (struct phiTable* sp, double phi) {
+  kfDirection (struct kf_phi_table* sp, double phi) {
     Coords cone = coords_add (coords_scale (sp->t1, sp->stheta * cos (phi)), coords_scale (sp->t2, sp->stheta * sin (phi)));
     return coords_add (cone, coords_scale (sp->kih, sp->ctheta));
   }
@@ -482,7 +482,7 @@ SHARE
   // info->phi_table, the density is tabulated at n points the first time sp is used for a wavevector and bounded by
   // its largest value there; otherwise it is read from probQ at each try and bounded by the largest value of probQ.
   int
-  sampleKprime_hkl (double* kf, Coords ki, struct phiTable* sp, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
+  sampleKprime_hkl (double* kf, Coords ki, struct kf_phi_table* sp, struct hkl_data_texture* L, struct hkl_info_struct_texture* info) {
     int it, j;
     int n = info->n_phi_points;
     double kdg, phi, p, p0, p1;
@@ -562,7 +562,7 @@ SHARE
 
   // Pole density series at (ct, phi)
   double
-  poleSeries (double ct, double phi, struct hkl_data_texture* L, struct legendre* lgdr) {
+  poleSeries (double ct, double phi, struct hkl_data_texture* L, struct legendre_tables* lgdr) {
     int i;
     double plm;
     double sum = 0;
@@ -577,7 +577,7 @@ SHARE
 
   // Allocates and fills a table of poleSeries on the axes of the pole density tables
   void
-  fillPoleTable (t_Table* table, struct hkl_data_texture* L, struct legendre* lgdr) {
+  fillPoleTable (t_Table* table, struct hkl_data_texture* L, struct legendre_tables* lgdr) {
     int i, j;
 
     Table_Init (table, lgdr->n_ct, lgdr->n_phi);
@@ -980,7 +980,7 @@ SHARE
   } // read_hkl_data
 
   void
-  allocateFourierCoef (int lmax, struct fourier_coef* c) {
+  allocateFourierCoef (int lmax, struct odf_coefficients* c) {
     int l, m;
     if (lmax >= 0) {
       c->lmax = lmax;
@@ -1002,7 +1002,7 @@ SHARE
   } // allocateFourierCoef
 
   void
-  readFourierCoef (char* filename, struct fourier_coef* c) {
+  readFourierCoef (char* filename, struct odf_coefficients* c) {
     int i, lmax, np, l, m, n, smn, sg;
     double x1, x2, x3, x4, x5, rmax;
     t_Table table;
@@ -1078,7 +1078,7 @@ SHARE
   } // readFourierCoef
 
   void
-  freeFourierCoef (struct fourier_coef* c) {
+  freeFourierCoef (struct odf_coefficients* c) {
     int l, m;
     if (c->cr != NULL) {
       for (l = 0; l <= (c->lmax); l++) {
@@ -1104,9 +1104,9 @@ SHARE
   initData (char* coef_fn, char* crystal_fn, struct hkl_info_struct_texture* info) {
     int i, i_saved, nread;
     long j;
-    struct fourier_coef* fc;
+    struct odf_coefficients* fc;
     struct hkl_data_texture* L;
-    struct kiCache* e;
+    struct ki_cache_entry* e;
     int use_coef = coef_fn && strlen (coef_fn) && strcmp (coef_fn, "0") && strcmp (coef_fn, "NULL");
 
     if (!use_coef) {
@@ -1126,7 +1126,7 @@ SHARE
     }
 
     // get fourier coefficients of texture
-    fc = (struct fourier_coef*)malloc (sizeof (struct fourier_coef));
+    fc = (struct odf_coefficients*)malloc (sizeof (struct odf_coefficients));
     fc->lmax = info->lmax;
     readFourierCoef (coef_fn, fc);
     // the cut-off actually used: the file's lmax, or lmax_user if that is smaller
@@ -1140,7 +1140,7 @@ SHARE
 
     // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
     info->n_saved = 4;
-    info->saved = (struct kiCache*)calloc (info->n_saved, sizeof (struct kiCache));
+    info->saved = (struct ki_cache_entry*)calloc (info->n_saved, sizeof (struct ki_cache_entry));
     if (!info->saved) {
       fprintf (stderr, "Texture_process: Failed malloc() in initData. Exit!\n");
       exit (-1);
@@ -1149,7 +1149,7 @@ SHARE
       e = info->saved + i_saved;
       e->ki = coords_set (0, 0, 0);
       e->XS_ki = (double*)calloc (info->num_hkl, sizeof (double));
-      e->phi = (struct phiTable*)calloc (info->num_hkl, sizeof (struct phiTable));
+      e->phi = (struct kf_phi_table*)calloc (info->num_hkl, sizeof (struct kf_phi_table));
       if (info->num_hkl > 0 && (!e->XS_ki || !e->phi)) {
         fprintf (stderr, "Texture_process: Failed malloc() in initData. Exit!\n");
         exit (-1);
@@ -1214,7 +1214,7 @@ SHARE
   ////////////////////////////////////
 
   int
-  free_legendre (struct legendre* lgdr) {
+  free_legendre (struct legendre_tables* lgdr) {
     int l;
 
     if (lgdr == NULL) {
@@ -1284,16 +1284,16 @@ SHARE
 
   // Cache entry of the wavevector k, moved to the front of info->saved. When k is not in the cache, the
   // least recently used entry is overwritten with the cross sections of k, and its sampling tables are reset.
-  struct kiCache*
+  struct ki_cache_entry*
   kiEntry (double* k, struct hkl_info_struct_texture* info) {
     int i, i_saved;
     int i_hit = -1; // entry of saved that holds k, -1 if none
     int i_entry;    // entry of saved that is used and moved to the front
     int m;
     double ki, kict, kiphi, cohXS;
-    struct kiCache entry;
-    struct kiCache* sv = info->saved;
-    struct kiCache* e;
+    struct ki_cache_entry entry;
+    struct ki_cache_entry* sv = info->saved;
+    struct ki_cache_entry* e;
     struct hkl_data_texture* L = info->list;
 
     for (i_saved = 0; i_saved < info->n_saved; i_saved++) {
@@ -1337,7 +1337,7 @@ SHARE
 
     // move the used entry to the front
     entry = sv[i_entry];
-    memmove (sv + 1, sv, i_entry * sizeof (struct kiCache));
+    memmove (sv + 1, sv, i_entry * sizeof (struct ki_cache_entry));
     sv[0] = entry;
 
     return sv;
@@ -1383,7 +1383,7 @@ SHARE
 
     struct hkl_data_texture* L = hkl_info->list; // hkl list
     // cross sections of this wavevector, normally the front entry left by Texture_physics_my
-    struct kiCache* e = kiEntry (k_initial, hkl_info);
+    struct ki_cache_entry* e = kiEntry (k_initial, hkl_info);
 
     // This can be removed, since this component deals only with coherent scattering
     // (instead here the Bragg cutoff may be implemented)
