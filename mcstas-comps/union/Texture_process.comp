@@ -190,36 +190,76 @@ SHARE
     struct kiCache* saved;
   };
 
-  // function declarations
+  /////////////////////////////////////////
+  // auxiliary functions
+  //////////////////////////////////////////
 
-  // legendre
-  struct legendre* initLegendre (int lmax);
-  // intialization
-  int initData (char* coef_fn, char* crystal_fn, struct hkl_info_struct_texture* info);
-  // cross sections
-  double total_hkl_XS (double k, struct hkl_data_texture* L, struct hkl_info_struct_texture* info);
-  void xsCoefficients (struct hkl_data_texture* L, int lmax);
-  int computeV (struct fourier_coef* fc, struct hkl_data_texture* L, double tol);
-  // sampling
-  int sampleKprime_hkl (double* kf, Coords ki, struct phiTable* sp, struct hkl_data_texture* L, struct hkl_info_struct_texture* info);
-  struct kiCache* kiEntry (double* k, struct hkl_info_struct_texture* info);
-  double poleSeries (double ct, double phi, struct hkl_data_texture* L, struct legendre* lgdr);
-  void fillPoleTable (t_Table* table, struct hkl_data_texture* L, struct legendre* lgdr);
-  // Input - Output
-  int read_hkl_data_texture (char* SC_file, struct hkl_info_struct_texture* info);
-  void readFourierCoef (char* filename, struct fourier_coef* c);
-  void allocateFourierCoef (int lmax, struct fourier_coef* c);
-  void freeFourierCoef (struct fourier_coef* c);
-  // auxiliary
-  int SX_list_compare_texture (void const* a, void const* b);
-  double plmValue (int l, int m, double x, struct legendre* lgdr);
-  double interp2D (double x, double y, struct legendre* lgdr, t_Table* table);
-  // free texture memory
-  int free_texture (struct hkl_info_struct_texture* hkl_info);
-  int free_hkl_data_texture (struct hkl_data_texture* list);
-  int free_legendre (struct legendre* lgdr);
+  int
+  SX_list_compare_texture (void const* a, void const* b) {
+    struct hkl_data_texture const* pa = a;
+    struct hkl_data_texture const* pb = b;
+    double s = pa->G - pb->G;
 
-  // end function declarations
+    if (!s) {
+      return 0;
+    } else {
+      return (s < 0 ? -1 : 1);
+    }
+  } // SX_list_compare
+
+  // Linear interpolation of scaled_associated_legendre in the table of order l
+  double
+  plmValue (int l, int m, double x, struct legendre* lgdr) {
+    t_Table* table = lgdr->Plm + l;
+    long nx = table->rows;
+    long ncol = table->columns;
+    double dx = 2.0 / (nx - 1);
+    long j;
+
+    x = fmin (1.0, fmax (-1.0, x));
+    j = (long)((x + 1.0) / dx);
+    if (j > nx - 2) {
+      j = nx - 2;
+    }
+    return Table_Interp1d (x, -1.0 + j * dx, table->data[j * ncol + l + m], -1.0 + (j + 1) * dx, table->data[(j + 1) * ncol + l + m]);
+  }
+
+  // Bilinear interpolation in a pole density table
+  double
+  interp2D (double x, double y, struct legendre* lgdr, t_Table* table) {
+    int i, j;
+    double* xp = lgdr->ctAxis;
+    double* yp = lgdr->phiAxis;
+    double* f;
+
+    i = (int)((x - xp[0]) / (xp[1] - xp[0]));
+    j = (int)((y - yp[0]) / (yp[1] - yp[0]));
+
+    if (i < 0 || i >= lgdr->n_ct - 1) {
+      if (i == lgdr->n_ct - 1 && fabs (x - xp[i]) < 1.0e-6) {
+        i = i - 1;
+      } else {
+        fprintf (stderr, "Texture_process: cos(theta) = %.16e outside the table. Exit!\n", x);
+        exit (-1);
+      }
+    } else if (i > 0 && x < xp[i]) {
+      i = i - 1;
+    }
+
+    if (j < 0 || j >= lgdr->n_phi - 1) {
+      if (j == lgdr->n_phi - 1 && fabs (y - yp[j]) < 1.0e-6) {
+        j = j - 1;
+      } else {
+        fprintf (stderr, "Texture_process: phi = %.16e outside the table. Exit!\n", y);
+        exit (-1);
+      }
+    } else if (j > 0 && y < yp[j]) {
+      j = j - 1;
+    }
+
+    f = table->data + i * lgdr->n_phi + j;
+    return Table_Interp2d (x, y, xp[i], yp[j], xp[i + 1], yp[j + 1], f[0], f[1], f[lgdr->n_phi], f[lgdr->n_phi + 1]);
+  }
 
   /////////////////////
   /// legendre     ////
@@ -940,6 +980,28 @@ SHARE
   } // read_hkl_data
 
   void
+  allocateFourierCoef (int lmax, struct fourier_coef* c) {
+    int l, m;
+    if (lmax >= 0) {
+      c->lmax = lmax;
+      c->cr = (double***)malloc ((lmax + 1) * sizeof (double**));
+      c->ci = (double***)malloc ((lmax + 1) * sizeof (double**));
+      for (l = 0; l <= lmax; l++) {
+        (c->cr)[l] = (double**)malloc ((2 * l + 1) * sizeof (double*));
+        (c->ci)[l] = (double**)malloc ((2 * l + 1) * sizeof (double*));
+        for (m = -l; m <= l; m++) {
+          (c->cr)[l][m + l] = (double*)malloc ((2 * l + 1) * sizeof (double));
+          (c->ci)[l][m + l] = (double*)malloc ((2 * l + 1) * sizeof (double));
+        }
+      }
+    } else {
+      c->lmax = -1;
+      c->cr = NULL;
+      c->ci = NULL;
+    }
+  } // allocateFourierCoef
+
+  void
   readFourierCoef (char* filename, struct fourier_coef* c) {
     int i, lmax, np, l, m, n, smn, sg;
     double x1, x2, x3, x4, x5, rmax;
@@ -1016,28 +1078,6 @@ SHARE
   } // readFourierCoef
 
   void
-  allocateFourierCoef (int lmax, struct fourier_coef* c) {
-    int l, m;
-    if (lmax >= 0) {
-      c->lmax = lmax;
-      c->cr = (double***)malloc ((lmax + 1) * sizeof (double**));
-      c->ci = (double***)malloc ((lmax + 1) * sizeof (double**));
-      for (l = 0; l <= lmax; l++) {
-        (c->cr)[l] = (double**)malloc ((2 * l + 1) * sizeof (double*));
-        (c->ci)[l] = (double**)malloc ((2 * l + 1) * sizeof (double*));
-        for (m = -l; m <= l; m++) {
-          (c->cr)[l][m + l] = (double*)malloc ((2 * l + 1) * sizeof (double));
-          (c->ci)[l][m + l] = (double*)malloc ((2 * l + 1) * sizeof (double));
-        }
-      }
-    } else {
-      c->lmax = -1;
-      c->cr = NULL;
-      c->ci = NULL;
-    }
-  } // allocateFourierCoef
-
-  void
   freeFourierCoef (struct fourier_coef* c) {
     int l, m;
     if (c->cr != NULL) {
@@ -1055,77 +1095,6 @@ SHARE
   } // freeFourierCoef
 
   // end Input - Output
-
-  /////////////////////////////////////////
-  // auxiliary functions
-  //////////////////////////////////////////
-
-  int
-  SX_list_compare_texture (void const* a, void const* b) {
-    struct hkl_data_texture const* pa = a;
-    struct hkl_data_texture const* pb = b;
-    double s = pa->G - pb->G;
-
-    if (!s) {
-      return 0;
-    } else {
-      return (s < 0 ? -1 : 1);
-    }
-  } // SX_list_compare
-
-  // Linear interpolation of scaled_associated_legendre in the table of order l
-  double
-  plmValue (int l, int m, double x, struct legendre* lgdr) {
-    t_Table* table = lgdr->Plm + l;
-    long nx = table->rows;
-    long ncol = table->columns;
-    double dx = 2.0 / (nx - 1);
-    long j;
-
-    x = fmin (1.0, fmax (-1.0, x));
-    j = (long)((x + 1.0) / dx);
-    if (j > nx - 2) {
-      j = nx - 2;
-    }
-    return Table_Interp1d (x, -1.0 + j * dx, table->data[j * ncol + l + m], -1.0 + (j + 1) * dx, table->data[(j + 1) * ncol + l + m]);
-  }
-
-  // Bilinear interpolation in a pole density table
-  double
-  interp2D (double x, double y, struct legendre* lgdr, t_Table* table) {
-    int i, j;
-    double* xp = lgdr->ctAxis;
-    double* yp = lgdr->phiAxis;
-    double* f;
-
-    i = (int)((x - xp[0]) / (xp[1] - xp[0]));
-    j = (int)((y - yp[0]) / (yp[1] - yp[0]));
-
-    if (i < 0 || i >= lgdr->n_ct - 1) {
-      if (i == lgdr->n_ct - 1 && fabs (x - xp[i]) < 1.0e-6) {
-        i = i - 1;
-      } else {
-        fprintf (stderr, "Texture_process: cos(theta) = %.16e outside the table. Exit!\n", x);
-        exit (-1);
-      }
-    } else if (i > 0 && x < xp[i]) {
-      i = i - 1;
-    }
-
-    if (j < 0 || j >= lgdr->n_phi - 1) {
-      if (j == lgdr->n_phi - 1 && fabs (y - yp[j]) < 1.0e-6) {
-        j = j - 1;
-      } else {
-        fprintf (stderr, "Texture_process: phi = %.16e outside the table. Exit!\n", y);
-        exit (-1);
-      }
-    } else if (j > 0 && y < yp[j]) {
-      j = j - 1;
-    }
-
-    f = table->data + i * lgdr->n_phi + j;
-    return Table_Interp2d (x, y, xp[i], yp[j], xp[i + 1], yp[j + 1], f[0], f[1], f[lgdr->n_phi], f[lgdr->n_phi + 1]);
-  }
 
   ////////////////////////////////////////
   ////// initialization             //////
@@ -1245,37 +1214,6 @@ SHARE
   ////////////////////////////////////
 
   int
-  free_texture (struct hkl_info_struct_texture* hkl_info) {
-    int i, i_saved;
-
-    if (hkl_info == NULL) {
-      return 0;
-    }
-
-    free_legendre (hkl_info->lgdr);
-    free (hkl_info->lgdr);
-    for (i = 0; i < hkl_info->num_hkl; i++) {
-      free_hkl_data_texture (hkl_info->list + i);
-    }
-    free (hkl_info->list);
-    for (i_saved = 0; i_saved < hkl_info->n_saved; i_saved++) {
-      for (i = 0; i < hkl_info->num_hkl; i++) {
-        free (hkl_info->saved[i_saved].phi[i].aa);
-        free (hkl_info->saved[i_saved].phi[i].bb);
-      }
-      free (hkl_info->saved[i_saved].phi);
-      free (hkl_info->saved[i_saved].XS_ki);
-    }
-    free (hkl_info->saved);
-    free (hkl_info->sqn);
-    free (hkl_info->plm);
-    free (hkl_info->cm);
-    free (hkl_info->sm);
-
-    return 0;
-  }
-
-  int
   free_legendre (struct legendre* lgdr) {
     int l;
 
@@ -1307,6 +1245,37 @@ SHARE
     Table_Free (&L->probQ);
     free (L->Ac);
     free (L->As);
+
+    return 0;
+  }
+
+  int
+  free_texture (struct hkl_info_struct_texture* hkl_info) {
+    int i, i_saved;
+
+    if (hkl_info == NULL) {
+      return 0;
+    }
+
+    free_legendre (hkl_info->lgdr);
+    free (hkl_info->lgdr);
+    for (i = 0; i < hkl_info->num_hkl; i++) {
+      free_hkl_data_texture (hkl_info->list + i);
+    }
+    free (hkl_info->list);
+    for (i_saved = 0; i_saved < hkl_info->n_saved; i_saved++) {
+      for (i = 0; i < hkl_info->num_hkl; i++) {
+        free (hkl_info->saved[i_saved].phi[i].aa);
+        free (hkl_info->saved[i_saved].phi[i].bb);
+      }
+      free (hkl_info->saved[i_saved].phi);
+      free (hkl_info->saved[i_saved].XS_ki);
+    }
+    free (hkl_info->saved);
+    free (hkl_info->sqn);
+    free (hkl_info->plm);
+    free (hkl_info->cm);
+    free (hkl_info->sm);
 
     return 0;
   }
