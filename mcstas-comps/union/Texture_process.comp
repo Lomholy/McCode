@@ -51,6 +51,14 @@
 * The coefficients of an orientation list, e.g. from EBSD, or of orientations drawn from
 * rotation expressions, are computed beforehand with share/texture-coefficients.py.
 *
+* fcoef_fn is a text file with the five columns l m n Real(Clmn) Imag(Clmn), or, with the
+* extension .bin, a binary file of the same coefficients that is about 3.5 times smaller.
+* The binary file holds only Real(Clmn) and Imag(Clmn) of each row, as two little-endian 8-byte
+* doubles, without header, in the row order of the text file: l = 0 ... lmax, and for each l
+* the second column from -l to l, and for each of those the third column from -l to l. lmax
+* follows from the file size, 16 (lmax + 1) (2 lmax + 1) (2 lmax + 3) / 3 bytes.
+* texture-coefficients.py writes it when --out ends in .bin.
+*
 * Algorithm:
 * Described elsewhere, see e.g. <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>
 * The calculations are detailed in V. Laliena, M. A. Vicente-Alvarez and J. Campo,
@@ -61,7 +69,7 @@
 * packing_factor:    [1]      How dense is the material compared to optimal 0-1
 * interact_fraction: [1]      How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
 * crystal_fn:        [s]      Crystallographic information: a reflection file (LAZ, LAU), a CIF file, or an NCrystal cfg-string (containing ".ncmat" or "::")
-* fcoef_fn:          [s]      Path to a text file containing the Fourier coefficients of the ODF. It must have five columns: l m n Real(Clmn) Imag(Clmn)
+* fcoef_fn:          [s]      Path to a file containing the Fourier coefficients of the ODF: a text file with the five columns l m n Real(Clmn) Imag(Clmn), or a binary file with the extension .bin, see above
 * lmax_user:         [1]      Cut-off for the Fourier series. If negative, the program uses all the coefficients provided in the file fcoef_fn. Values above the lmax of fcoef_fn also use all of them.
 * barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for CIF files and NCrystal cfg-strings
 * lambda_min:        [AA]     Reflections that only scatter below this wavelength are not used, which saves one table per l for each of them. 0 keeps all reflections
@@ -1001,6 +1009,51 @@ SHARE
     }
   } // allocateFourierCoef
 
+  // Fills table with the rows l m n Real(Clmn) Imag(Clmn) of a binary coefficient file, see fcoef_fn
+  void
+  readFourierCoefBinary (char* filename, t_Table* table) {
+    long n_bytes, n_rows, i_row;
+    size_t n_read; // doubles read for one row
+    int lmax, l, n, m;
+    FILE* file = Open_File (filename, "rb", NULL);
+
+    if (!file) {
+      fprintf (stderr, "Texture_process: Could not open %s. Exit!\n", filename);
+      exit (-1);
+    }
+    fseek (file, 0, SEEK_END);
+    n_bytes = ftell (file);
+    rewind (file);
+    n_rows = n_bytes / (2 * sizeof (double));
+    lmax = 0;
+    while ((lmax + 1) * (2 * lmax + 1) * (2 * lmax + 3) / 3 < n_rows) {
+      lmax++;
+    }
+    if (n_rows < 1 || n_bytes != n_rows * 2 * (long)sizeof (double) || (lmax + 1) * (2 * lmax + 1) * (2 * lmax + 3) / 3 != n_rows) {
+      fprintf (stderr, "Texture_process: %s has %ld bytes, which is not 16 (lmax + 1) (2 lmax + 1) (2 lmax + 3) / 3 for any lmax. Exit!\n", filename, n_bytes);
+      exit (-1);
+    }
+
+    Table_Init (table, n_rows, 5);
+    i_row = 0;
+    for (l = 0; l <= lmax; l++) {
+      for (n = -l; n <= l; n++) {
+        for (m = -l; m <= l; m++) {
+          table->data[i_row * table->columns + 0] = l;
+          table->data[i_row * table->columns + 1] = n;
+          table->data[i_row * table->columns + 2] = m;
+          n_read = fread (table->data + i_row * table->columns + 3, sizeof (double), 2, file);
+          if (n_read != 2) {
+            fprintf (stderr, "Texture_process: Could not read %s. Exit!\n", filename);
+            exit (-1);
+          }
+          i_row++;
+        }
+      }
+    }
+    fclose (file);
+  }
+
   void
   readFourierCoef (char* filename, struct odf_coefficients* odf) {
     int i, lmax, n_rows, l, m, n, sign_mn, sign;
@@ -1011,7 +1064,12 @@ SHARE
     // with l2-normalization option, they have to be multiplied
     // by sqrt(2*l+1)
 
-    Table_Read (&table, filename, 1);
+    char* extension = strrchr (filename, '.');
+    if (extension && !strcmp (extension, ".bin")) {
+      readFourierCoefBinary (filename, &table);
+    } else {
+      Table_Read (&table, filename, 1);
+    }
     if (table.rows < 1 || table.columns != 5) {
       fprintf (stderr, "Texture_process: %s must have five columns: l m n Real(Clmn) Imag(Clmn). Exit!\n", filename);
       exit (-1);

@@ -44,15 +44,15 @@
 *     --lmax <lmax_user> --ebsd $MCSTAS/data/Al_mtexdata_alu_EBSD.txt
 * which needs python3 with numpy. With the defaults it gives the texture of Al_mtexdata_alu_ODF.txt.
 *
-* half_cone=1 instead writes, in INITIALIZE, the coefficients of a texture that fills only the
-* right half (x > 0) of the (111) Debye-Scherrer cone, with the intensity of the whole cone of
-* the powder, for a monochromatic beam in the band where only (111) scatters, from 4.09 AA,
-* e.g. source_lmin = source_lmax = 4.3. The file Test_texture_Al_sphere_texture_<rank>.txt is
-* written by the shell command
-*   python3 $MCSTAS/share/texture-coefficients.py --a 4.04958 --orientation_sigma <orientation_sigma> --lmax <lmax_user>
+* half_cone=1 instead reads Al_half_cone_111_ODF.bin of the McStas data folder, the binary coefficients of a texture
+* that fills only the right half (x > 0) of the (111) Debye-Scherrer cone, with the intensity of the
+* whole cone of the powder, for a monochromatic beam in the band where only (111) scatters, from
+* 4.09 AA, e.g. source_lmin = source_lmax = 4.3. The file was written by
+*   python3 $MCSTAS/share/texture-coefficients.py --out Al_half_cone_111_ODF.bin --a 4.04958 --orientation_sigma 6 --lmax -1
 *     --rot_x_expr "-90-180*u1" --rot_y_expr "acos(1-u2/4)*180/pi" --rot_z_expr "0"
 *     --ax -sqrt(2) --ay sqrt(3) --az -1 --bx -sqrt(2) --by -sqrt(3) --bz -1
-* with 10000 orientations drawn with the default seed, so it needs python3 with numpy.
+* with 10000 orientations drawn with the default seed, which gives lmax = 36. Run it again for
+* another kernel width; lmax_user below 36 cuts the series of the file.
 * Only the direction of the {111} pole that scatters matters: the crystal axes (a along
 * (-sqrt 2, sqrt 3, -1), b along (-sqrt 2, -sqrt 3, -1) in the process frame) put [111] along -x,
 * and the process is placed at ROTATED (0, -90, 0), so that its x axis is the beam. rot_y_expr
@@ -63,7 +63,8 @@
 * kernel: orientation_sigma smears the poles across the boundary to the left, and smears the
 * other poles of the grain, which lie 29 deg from -beam at the edge of the cap, onto the cone.
 * With orientation_sigma = 6 and lmax_user = -1, the cone has about 1.2 times the intensity of
-* the powder cone, 78% of it on the right; the excess vanishes for orientation_sigma <= 2.
+* the powder cone, 78% of it on the right; the excess vanishes for orientation_sigma <= 2
+* (files written with a smaller --orientation_sigma).
 *
 * use_powder=1 replaces the sphere by one of the same size with Powder_process reading
 * crystal, which must then be a LAZ file. With crystal = "Al.laz", sphere_det_single of
@@ -75,14 +76,14 @@
 * %Test: Detector: sphere_det_I=1.28146e-05
 * %Test: use_ebsd=1 Detector: sphere_det_I=1.28146e-05
 * %Test: use_powder=1 crystal=Al.laz Detector: sphere_det_single_I=1.18552e-05
-* %Test: half_cone=1 crystal=Al.laz source_lmin=4.3 source_lmax=4.3 orientation_sigma=6 lmax_user=-1 Detector: sphere_det_single_I=4.02767e-06
+* %Test: half_cone=1 crystal=Al.laz source_lmin=4.3 source_lmax=4.3 lmax_user=-1 Detector: sphere_det_single_I=4.02767e-06
 * %Test: source_lmin=4.05 source_lmax=4.68 Detector: q_logger_I=2.34518e-06
 *
 * %Parameters
 * odf_file:   [string] Fourier coefficients of the texture, fcoef_fn of Texture_process
 * use_ebsd:   [1]    1: convert Al_mtexdata_alu_EBSD.txt and use its coefficients instead, see above
-* half_cone:  [1]    1: write and use the coefficients of the right half of the (111) cone instead, see above
-* orientation_sigma: [deg] Standard deviation of the kernel of the use_ebsd and half_cone textures
+* half_cone:  [1]    1: use Al_half_cone_111_ODF.bin, the right half of the (111) cone, instead, see above
+* orientation_sigma: [deg] Standard deviation of the kernel of the use_ebsd texture
 * crystal:    [string] Crystal structure file of Texture_process, an NCrystal material or a LAZ file
 * use_powder: [1]    1: Powder_process reading crystal instead of Texture_process
 * lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
@@ -114,8 +115,8 @@ INITIALIZE
   sample_r = 0.005;
   det_r = 1;
 
-  // texture of Texture_process: odf_file, or the coefficients written by texture-coefficients.py from the EBSD map (use_ebsd = 1)
-  // or the half cone expressions (half_cone = 1), with the crystal axes and process placement of the half cone that put [111]
+  // texture of Texture_process: odf_file, the coefficients written by texture-coefficients.py from the EBSD map (use_ebsd = 1),
+  // or the half cone file (half_cone = 1), with the crystal axes and process placement of the half cone that put [111]
   // along -x of the process, whose x axis is the beam
   texture_file = odf_file;
   axis_a[0] = axis_a[1] = axis_a[2] = 0;
@@ -129,27 +130,20 @@ INITIALIZE
     axis_b[1] = -sqrt (3);
     axis_b[2] = -1;
     process_tilt = -90;
+    texture_file = "Al_half_cone_111_ODF.bin";
   }
-  if (use_ebsd || half_cone) {
+  if (use_ebsd && !half_cone) {
     char* resources = getenv ("MCSTAS") ? getenv ("MCSTAS") : MCSTAS;
-    char orientations[2048];
     char command[4096];
     int rank = 0;
   #ifdef USE_MPI
     rank = mpi_node_rank;
   #endif
-    if (half_cone) {
-      snprintf (orientations, sizeof (orientations),
-                "--rot_x_expr \"-90-180*u1\" --rot_y_expr \"acos(1-u2/4)*180/pi\" --rot_z_expr 0"
-                " --ax %.17g --ay %.17g --az %.17g --bx %.17g --by %.17g --bz %.17g",
-                axis_a[0], axis_a[1], axis_a[2], axis_b[0], axis_b[1], axis_b[2]);
-    } else {
-      snprintf (orientations, sizeof (orientations), "--mtex_axes 1 --ebsd \"%s%cdata%cAl_mtexdata_alu_EBSD.txt\"", resources, MC_PATHSEP_C,
-                MC_PATHSEP_C);
-    }
     snprintf (coefficient_file, sizeof (coefficient_file), "Test_texture_Al_sphere_texture_%d.txt", rank);
-    snprintf (command, sizeof (command), "python3 \"%s%cshare%ctexture-coefficients.py\" --out \"%s\" --a 4.04958 --orientation_sigma %.17g --lmax %d %s",
-              resources, MC_PATHSEP_C, MC_PATHSEP_C, coefficient_file, orientation_sigma, lmax_user, orientations);
+    snprintf (command, sizeof (command),
+              "python3 \"%s%cshare%ctexture-coefficients.py\" --out \"%s\" --a 4.04958 --orientation_sigma %.17g --lmax %d"
+              " --mtex_axes 1 --ebsd \"%s%cdata%cAl_mtexdata_alu_EBSD.txt\"",
+              resources, MC_PATHSEP_C, MC_PATHSEP_C, coefficient_file, orientation_sigma, lmax_user, resources, MC_PATHSEP_C, MC_PATHSEP_C);
     if (system (command)) {
       fprintf (stderr, "Test_texture_Al_sphere: the command failed, which needs python3 with numpy:\n%s\n", command);
       exit (-1);
