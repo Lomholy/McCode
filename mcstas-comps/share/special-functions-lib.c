@@ -9,8 +9,7 @@
 * Date: 12/11/2026
 * Origin: University of Zaragoza, Niels Bohr Institute @ UCPH
 *
-* Associated Legendre functions, spherical harmonics and Gauss-Legendre
-* quadrature. See special-functions-lib.h.
+* Associated Legendre functions. See special-functions-lib.h.
 *
 *******************************************************************************/
 
@@ -77,35 +76,6 @@ scaled_associated_legendre (int l, int m, double x) {
 }
 
 void
-gauss_legendre_quadrature (int n, double* nodes, double* weights) {
-  int i, degree, iteration;
-  double z, z_previous, p_n, p_n1, p_n2, derivative = 1;
-
-  for (i = 0; i < (n + 1) / 2; i++) {
-    // Newton iteration for the i-th root of P_n, from an asymptotic first guess
-    z = cos (PI * (i + 0.75) / (n + 0.5));
-    for (iteration = 0; iteration < 100; iteration++) {
-      p_n = 1;
-      p_n1 = 0;
-      for (degree = 1; degree <= n; degree++) {
-        p_n2 = p_n1;
-        p_n1 = p_n;
-        p_n = ((2 * degree - 1) * z * p_n1 - (degree - 1) * p_n2) / degree;
-      }
-      derivative = n * (z * p_n - p_n1) / (z * z - 1);
-      z_previous = z;
-      z = z_previous - p_n / derivative;
-      if (fabs (z - z_previous) < 1e-15) {
-        break;
-      }
-    }
-    nodes[i] = -z;
-    nodes[n - 1 - i] = z;
-    weights[i] = weights[n - 1 - i] = 2 / ((1 - z * z) * derivative * derivative);
-  }
-}
-
-void
 legendre_scale_factors (int lmax, double* scale) {
   int l, m, k;
   double factorial_ratio;
@@ -141,60 +111,6 @@ all_scaled_associated_legendre (int lmax, double x, double* scale, double* value
   for (l = 0; l <= lmax; l++) {
     for (m = 0; m <= l; m++) {
       values[l * n + m] *= scale[l * n + m];
-    }
-  }
-}
-
-void
-add_rotated_harmonics (Rotation rotation, int lmax, int n_points, Coords* points, double* scale, double* legendre_values, double* harmonic_re,
-                       double* harmonic_im) {
-  int point, l, m, lm;
-  double phi, cos_m_phi, sin_m_phi;
-  Coords direction;
-
-  for (point = 0; point < n_points; point++) {
-    direction = rot_apply (rotation, points[point]);
-    all_scaled_associated_legendre (lmax, fmin (1.0, fmax (-1.0, direction.z)), scale, legendre_values);
-    phi = atan2 (direction.y, direction.x);
-    for (m = 0; m <= lmax; m++) {
-      cos_m_phi = cos (m * phi);
-      sin_m_phi = sin (m * phi);
-      for (l = m; l <= lmax; l++) {
-        lm = l * (lmax + 1) + m;
-        harmonic_re[lm * n_points + point] += legendre_values[lm] * cos_m_phi;
-        harmonic_im[lm * n_points + point] += legendre_values[lm] * sin_m_phi;
-      }
-    }
-  }
-}
-
-void
-stored_harmonic (int l, int m, int lmax, int n_points, int point, double* harmonic_re, double* harmonic_im, double* re, double* im) {
-  int index = (l * (lmax + 1) + abs (m)) * n_points + point;
-  double sign = (m < 0 && abs (m) % 2) ? -1 : 1;
-
-  *re = sign * harmonic_re[index];
-  *im = (m < 0 ? -sign : sign) * harmonic_im[index];
-}
-
-void
-harmonic_projection_matrix (int l, int lmax, int n_points, double* weights, double* rotated_re, double* rotated_im, double* reference_re,
-                            double* reference_im, double* matrix_re, double* matrix_im) {
-  int m, n, point, size = 2 * l + 1;
-  double rotated_value_re, rotated_value_im, reference_value_re, reference_value_im, sum_re, sum_im;
-
-  for (m = -l; m <= l; m++) {
-    for (n = -l; n <= l; n++) {
-      sum_re = 0;
-      sum_im = 0;
-      for (point = 0; point < n_points; point++) {
-        stored_harmonic (l, m, lmax, n_points, point, rotated_re, rotated_im, &rotated_value_re, &rotated_value_im);
-        stored_harmonic (l, n, lmax, n_points, point, reference_re, reference_im, &reference_value_re, &reference_value_im);
-        sum_re += weights[point] * (rotated_value_re * reference_value_re + rotated_value_im * reference_value_im);
-        sum_im += weights[point] * (rotated_value_im * reference_value_re - rotated_value_re * reference_value_im);
-      }
-      matrix_re[(l + m) * size + l + n] = size / (4 * PI) * sum_re;
-      matrix_im[(l + m) * size + l + n] = size / (4 * PI) * sum_im;
     }
   }
 }

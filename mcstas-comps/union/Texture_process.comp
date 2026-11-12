@@ -33,7 +33,7 @@
 * ncrystal_cif2ncmat directly and use the resulting NCMAT file to set this. Each family of reflections is described by one of its members, so the
 * ODF must have the crystal symmetry applied.
 *
-* The ODF and the orientations of ebsd_fn rotate the Cartesian crystal axes into the axes of
+* The ODF rotates the Cartesian crystal axes into the axes of
 * the component. By default the crystal axes are those of NCrystal: x || a, b in the xy plane,
 * so z || c*. mtex_axes = 1 takes the default axes of MTEX instead: z || c, x || a*. Both are
 * the same for cubic, tetragonal and orthorhombic lattices; for hexagonal and trigonal
@@ -48,34 +48,8 @@
 * axes are used. For example, ax = 0, ay = 1, az = 0, bx = -1, by = 0, bz = 0 turns the crystal axes
 * by 90 deg about z.
 *
-* An orientation list in ebsd_fn gives the ODF as the orientations smoothed by a Gaussian
-* kernel on the rotation group, with the Fourier coefficients kappa_l = exp(-l(l+1) sigma^2 / 2).
-* It is averaged over the proper rotations of the lattice given by crystal_fn, which is the
-* point group of most metals (fcc, bcc, hcp). Each orientation has the same weight, and the
-* computation time grows as the number of orientations times lmax^4.
-*
-* rot_x_expr, rot_y_expr and rot_z_expr give the orientations instead as three tinyexpr expressions
-* for the angles in deg of rotations of the crystal axes about the x, y and z axes of the component,
-* composed as ROTATED (rx, ry, rz) composes them: g = Rx (rx) Ry (ry) Rz (rz). The rotation about z
-* acts first and the one about x last, all about the fixed axes of the component. The expressions
-* use the random numbers u1, u2, u3 in [0, 1], drawn anew for each of the n_orientations
-* orientations, the constants p1...p6, and pi. The
-* orientations are then smoothed and averaged as those of ebsd_fn. They are drawn with the random
-* generator of McStas, seeded from the seed of the simulation (-s), so a fixed seed gives the same
-* texture in every run and on every MPI node. Different seeds give different draws of the same
-* texture, which differ by a noise that decreases with n_orientations. For example, a fibre texture
-* with the crystal axis a tilted from x by a Gaussian of standard deviation p1 deg and turned
-* uniformly about x:
-*   rot_x_expr = "360*u3", rot_y_expr = "p1*sqrt(-2*log(1-u1))*cos(2*pi*u2)", rot_z_expr = "0".
-* The noise of the drawn texture falls as 1/sqrt(n_orientations) and grows as orientation_sigma
-* decreases, so the number of orientations needed grows about as orientation_sigma^-3. For
-* rot_x_expr = "p1*sqrt(-2*log(1-u1))*cos(2*pi*u2)", rot_y_expr = "0", rot_z_expr = "360*u3"
-* with p1 = 5 in Test_texture_Al_sphere (Al), the noise stays below a statistical error of
-* about 5% of the intensity on 30 x 30 deg patches of sphere_det with 1000 orientations at
-* orientation_sigma = 10 deg, and needs about 30000 at 3 deg (with lmax_user = 30); the default
-* 10000 thus suffices down to about 5 deg. A k times smaller statistical error needs about k^2
-* times more orientations. INITIALIZE takes about 37 s for 10000 orientations at 10 deg
-* (lmax = 22) and 200 s at 3 deg (lmax_user = 30), growing as n_orientations * lmax^4.
+* The coefficients of an orientation list, e.g. from EBSD, or of orientations drawn from
+* tinyexpr expressions, are computed beforehand with share/texture-coefficients.c.
 *
 * Algorithm:
 * Described elsewhere, see e.g. <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>
@@ -88,22 +62,10 @@
 * interact_fraction: [1]      How large a part of the scattering events should use this process 0-1 (sum of all processes in material = 1)
 * crystal_fn:        [s]      Crystallographic information: a reflection file (LAZ, LAU), a CIF file, or an NCrystal cfg-string (containing ".ncmat" or "::")
 * fcoef_fn:          [s]      Path to a text file containing the Fourier coefficients of the ODF. It must have five columns: l m n Real(Clmn) Imag(Clmn)
-* ebsd_fn:           [s]      Path to an orientation list, e.g. from EBSD, used instead of fcoef_fn. Each row starts with the Bunge Euler angles phi1 Phi phi2 in radians of one orientation, crystal to sample; further columns are ignored
-* rot_x_expr:        [s]      tinyexpr expression for the angle (deg) of the rotation of the crystal axes about x, applied last, in u1, u2, u3, p1...p6. Used instead of fcoef_fn and ebsd_fn, and needs rot_y_expr and rot_z_expr. Empty: not used; "0" is the angle 0
-* rot_y_expr:        [s]      Same for the rotation about y, applied after the one about z and before the one about x
-* rot_z_expr:        [s]      Same for the rotation about z, applied first
-* n_orientations:    [1]      Number of orientations drawn from rot_x_expr, rot_y_expr and rot_z_expr
-* p1:                [1]      Constant available in the rotation expressions
-* p2:                [1]      Constant available in the rotation expressions
-* p3:                [1]      Constant available in the rotation expressions
-* p4:                [1]      Constant available in the rotation expressions
-* p5:                [1]      Constant available in the rotation expressions
-* p6:                [1]      Constant available in the rotation expressions
-* orientation_sigma: [deg]    Standard deviation of the Gaussian kernel that smooths the orientations of ebsd_fn or of the rotation expressions
-* lmax_user:         [1]      Cut-off for the Fourier series. If negative, the program uses all the coefficients provided in the file fcoef_fn. Values above the lmax of fcoef_fn also use all of them. For ebsd_fn and the rotation expressions, a negative value gives the l where the kernel has fallen to 1e-3
+* lmax_user:         [1]      Cut-off for the Fourier series. If negative, the program uses all the coefficients provided in the file fcoef_fn. Values above the lmax of fcoef_fn also use all of them.
 * barns:             [1]      Flag to indicate if |F|^2 from 'crystal_fn' is in barns or fm^2. barns=1 for laz and isotropic constant elastic scattering (reflections=NULL), barns=0 for lau type files. Always barns for CIF files and NCrystal cfg-strings
 * lambda_min:        [AA]     Reflections that only scatter below this wavelength are not used, which saves one table per l for each of them. 0 keeps all reflections
-* mtex_axes:         [1]      0: crystal axes of NCrystal (x || a, b in the xy plane), 1: default crystal axes of MTEX (z || c, x || a*), for an ODF or orientations given in them
+* mtex_axes:         [1]      0: crystal axes of NCrystal (x || a, b in the xy plane), 1: default crystal axes of MTEX (z || c, x || a*), for an ODF given in them
 * ax:                [1]      x of the direction of the lattice vector a in the component. Give two or three of a, b and c, or none; not with mtex_axes = 1
 * ay:                [1]      y of the direction of a
 * az:                [1]      z of the direction of a
@@ -125,10 +87,8 @@
 
 DEFINE COMPONENT Texture_process // Remember to change the name of process here
 
-SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, string ebsd_fn=0, orientation_sigma=10, int lmax_user=-1, int mtex_axes=0,
+SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, int lmax_user=-1, int mtex_axes=0,
             ax=0, ay=0, az=0, bx=0, by=0, bz=0, cx=0, cy=0, cz=0,
-            string rot_x_expr="", string rot_y_expr="", string rot_z_expr="", int n_orientations=10000,
-            p1=0, p2=0, p3=0, p4=0, p5=0, p6=0,
             barns = 0, interact_fraction = -1, packing_factor = 1, lambda_min = 0,
 	        string init="")
 
@@ -142,9 +102,6 @@ SHARE
   %include "read_table-lib"
   %include "special-functions-lib"
   %include "mccode-ncrystal-lib"
-
-  %include "tinyexpr.h"
-  %include "tinyexpr.c"
 
   #ifndef TEXTURE_PROCESS_DECL
   #define TEXTURE_PROCESS_DECL
@@ -214,9 +171,6 @@ SHARE
     int flag_barns;        // |F|^2 is in barns whatever the barns parameter is
     int use_mtex_axes;     // crystal axes z || c, x || a* instead of x || a, b in the xy plane
     Coords crys_axis[3];   // directions of the lattice vectors a, b, c in the component, (0, 0, 0) if not given
-    char* rot_expr[3];     // expressions of the rotation angles about x, y, z, NULL if not given
-    long n_orient;         // number of orientations drawn from rot_expr
-    double expr_p[6];      // p1...p6 of rot_expr
     double wavelength_min; // Reflections only scattering below this wavelength are not used
 
     // precomputed factors
@@ -241,7 +195,7 @@ SHARE
   // legendre
   struct legendre* initLegendre (int lmax);
   // intialization
-  int initData (char* coef_fn, char* ebsd_fn, double orientation_sigma, char* crystal_fn, struct hkl_info_struct_texture* info);
+  int initData (char* coef_fn, char* crystal_fn, struct hkl_info_struct_texture* info);
   // cross sections
   double total_hkl_XS (double k, struct hkl_data_texture* L, struct hkl_info_struct_texture* info);
   void xsCoefficients (struct hkl_data_texture* L, int lmax);
@@ -1100,299 +1054,6 @@ SHARE
     }
   } // freeFourierCoef
 
-  // Proper rotations of the Cartesian crystal frame that map the lattice onto itself
-  int
-  latticeRotations (struct hkl_info_struct_texture* info, Rotation* ops) {
-    double A[3][3], B[3][3], AM[3][3];
-    double vol, dev, det;
-    int M[3][3], code, i, j, k, n = 0;
-    Coords r;
-
-    vol = coords_sp (info->lat[0], coords_xp (info->lat[1], info->lat[2]));
-    for (j = 0; j < 3; j++) {
-      A[0][j] = info->lat[j].x;
-      A[1][j] = info->lat[j].y;
-      A[2][j] = info->lat[j].z;
-      // rows of the inverse of A
-      r = coords_scale (coords_xp (info->lat[(j + 1) % 3], info->lat[(j + 2) % 3]), 1.0 / vol);
-      B[j][0] = r.x;
-      B[j][1] = r.y;
-      B[j][2] = r.z;
-    }
-
-    // integer matrices M with entries -1, 0, 1 in the lattice basis, R = A M A^-1
-    for (code = 0; code < 19683; code++) {
-      k = code;
-      for (i = 0; i < 3; i++) {
-        for (j = 0; j < 3; j++) {
-          M[i][j] = k % 3 - 1;
-          k /= 3;
-        }
-      }
-      for (i = 0; i < 3; i++) {
-        for (j = 0; j < 3; j++) {
-          AM[i][j] = A[i][0] * M[0][j] + A[i][1] * M[1][j] + A[i][2] * M[2][j];
-        }
-      }
-      for (i = 0; i < 3; i++) {
-        for (j = 0; j < 3; j++) {
-          ops[n][i][j] = AM[i][0] * B[0][j] + AM[i][1] * B[1][j] + AM[i][2] * B[2][j];
-        }
-      }
-      dev = 0;
-      for (i = 0; i < 3; i++) {
-        for (j = 0; j < 3; j++) {
-          dev += fabs (ops[n][0][i] * ops[n][0][j] + ops[n][1][i] * ops[n][1][j] + ops[n][2][i] * ops[n][2][j] - (i == j));
-        }
-      }
-      det = ops[n][0][0] * (ops[n][1][1] * ops[n][2][2] - ops[n][1][2] * ops[n][2][1])
-            - ops[n][0][1] * (ops[n][1][0] * ops[n][2][2] - ops[n][1][2] * ops[n][2][0])
-            + ops[n][0][2] * (ops[n][1][0] * ops[n][2][1] - ops[n][1][1] * ops[n][2][0]);
-      if (dev < 1e-6 && det > 0) {
-        n++;
-      }
-    }
-    return n;
-  }
-
-  // Fourier coefficients of the ODF of the nOrient orientations in orient, smoothed by the kernel exp (-l (l + 1) sigma^2 / 2)
-  // and averaged over the lattice rotations: C_lmn = (2l + 1) kappa_l [avg_i W (g_i) avg_s W (s)]_mn, where
-  // N_lm (g h) = sum_n W (g)_mn N_ln (h). source names the origin of the orientations in the summary line.
-  // ponytail: cost grows as nOrient * lmax^4; bin the orientations first if large maps are too slow
-  void
-  orientationFourierCoef (Rotation* orient, long nOrient, double sigma, char* source, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
-    int lmax, nx, nphi, nq, nh, nsym, i, j, l, m, n, k, d;
-    double *xg, *wg, *wq, *sqn, *p, *Fr, *Fi, *Gr, *Gi, *Sr, *Si, *Ar, *Ai, *Br, *Bi;
-    double kappa, st, sr, si;
-    Coords* hq;
-    Rotation g, ops[48];
-
-    if (nOrient < 1) {
-      fprintf (stderr, "Texture_process: %s gives no orientations. Exit!\n", source);
-      exit (-1);
-    }
-    if (sigma <= 0) {
-      fprintf (stderr, "Texture_process: orientation_sigma must be positive. Exit!\n");
-      exit (-1);
-    }
-
-    lmax = c->lmax >= 0 ? c->lmax : (int)ceil (sqrt (2 * log (1000.0)) / sigma);
-    nx = lmax + 2;
-    nphi = 2 * lmax + 4;
-    nq = nx * nphi;
-    nh = (lmax + 1) * (lmax + 1) * nq;
-
-    xg = (double*)malloc (nx * sizeof (double));
-    wg = (double*)malloc (nx * sizeof (double));
-    wq = (double*)malloc (nq * sizeof (double));
-    hq = (Coords*)malloc (nq * sizeof (Coords));
-    sqn = (double*)malloc ((lmax + 1) * (lmax + 1) * sizeof (double));
-    p = (double*)malloc ((lmax + 1) * (lmax + 1) * sizeof (double));
-    Fr = (double*)calloc (nh, sizeof (double));
-    Fi = (double*)calloc (nh, sizeof (double));
-    Gr = (double*)calloc (nh, sizeof (double));
-    Gi = (double*)calloc (nh, sizeof (double));
-    Sr = (double*)calloc (nh, sizeof (double));
-    Si = (double*)calloc (nh, sizeof (double));
-    Ar = (double*)malloc ((2 * lmax + 1) * (2 * lmax + 1) * sizeof (double));
-    Ai = (double*)malloc ((2 * lmax + 1) * (2 * lmax + 1) * sizeof (double));
-    Br = (double*)malloc ((2 * lmax + 1) * (2 * lmax + 1) * sizeof (double));
-    Bi = (double*)malloc ((2 * lmax + 1) * (2 * lmax + 1) * sizeof (double));
-    if (!xg || !wg || !wq || !hq || !sqn || !p || !Fr || !Fi || !Gr || !Gi || !Sr || !Si || !Ar || !Ai || !Br || !Bi) {
-      fprintf (stderr, "Texture_process: Failed malloc() in orientationFourierCoef. Exit!\n");
-      exit (-1);
-    }
-
-    // quadrature points on the sphere, exact for the products of two harmonics of order <= lmax
-    gauss_legendre_quadrature (nx, xg, wg);
-    for (i = 0; i < nx; i++) {
-      st = sqrt (1 - xg[i] * xg[i]);
-      for (j = 0; j < nphi; j++) {
-        hq[i * nphi + j] = coords_set (st * cos (2 * PI * j / nphi), st * sin (2 * PI * j / nphi), xg[i]);
-        wq[i * nphi + j] = wg[i] * 2 * PI / nphi;
-      }
-    }
-    legendre_scale_factors (lmax, sqn);
-
-    for (i = 0; i < nOrient; i++) {
-      add_rotated_harmonics (orient[i], lmax, nq, hq, sqn, p, Fr, Fi);
-    }
-
-    nsym = latticeRotations (info, ops);
-    for (i = 0; i < nsym; i++) {
-      add_rotated_harmonics (ops[i], lmax, nq, hq, sqn, p, Sr, Si);
-    }
-
-    rot_set_rotation (g, 0, 0, 0);
-    add_rotated_harmonics (g, lmax, nq, hq, sqn, p, Gr, Gi);
-
-    for (k = 0; k < nh; k++) {
-      Fr[k] /= nOrient;
-      Fi[k] /= nOrient;
-      Sr[k] /= nsym;
-      Si[k] /= nsym;
-    }
-
-    allocateFourierCoef (lmax, c);
-    for (l = 0; l <= lmax; l++) {
-      d = 2 * l + 1;
-      kappa = exp (-l * (l + 1) * sigma * sigma / 2);
-      harmonic_projection_matrix (l, lmax, nq, wq, Fr, Fi, Gr, Gi, Ar, Ai);
-      harmonic_projection_matrix (l, lmax, nq, wq, Sr, Si, Gr, Gi, Br, Bi);
-      for (m = 0; m < d; m++) {
-        for (n = 0; n < d; n++) {
-          sr = 0;
-          si = 0;
-          for (k = 0; k < d; k++) {
-            sr += Ar[m * d + k] * Br[k * d + n] - Ai[m * d + k] * Bi[k * d + n];
-            si += Ar[m * d + k] * Bi[k * d + n] + Ai[m * d + k] * Br[k * d + n];
-          }
-          (c->cr)[l][m][n] = d * kappa * sr;
-          (c->ci)[l][m][n] = d * kappa * si;
-        }
-      }
-    }
-
-    printf ("Texture_process: %s: %ld orientations, %d lattice rotations, sigma = %g deg, lmax = %d\n", source, nOrient, nsym, sigma * RAD2DEG, lmax);
-
-    free (xg);
-    free (wg);
-    free (wq);
-    free (hq);
-    free (sqn);
-    free (p);
-    free (Fr);
-    free (Fi);
-    free (Gr);
-    free (Gi);
-    free (Sr);
-    free (Si);
-    free (Ar);
-    free (Ai);
-    free (Br);
-    free (Bi);
-  }
-
-  // Fourier coefficients of the ODF of the orientations in filename, given as Bunge Euler angles g = Rz (phi1) Rx (Phi) Rz (phi2)
-  void
-  ebsdFourierCoef (char* filename, double sigma, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
-    t_Table table;
-    long i;
-    double c1, s1, c2, s2, C, S;
-    Rotation* orient;
-
-    if (Table_Read (&table, filename, 1) <= 0 || table.rows < 1 || table.columns < 3) {
-      fprintf (stderr, "Texture_process: %s must have rows starting with the Euler angles phi1 Phi phi2. Exit!\n", filename);
-      exit (-1);
-    }
-    orient = (Rotation*)malloc (table.rows * sizeof (Rotation));
-    if (!orient) {
-      fprintf (stderr, "Texture_process: Failed malloc() in ebsdFourierCoef. Exit!\n");
-      exit (-1);
-    }
-
-    for (i = 0; i < table.rows; i++) {
-      c1 = cos (Table_Index (table, i, 0));
-      s1 = sin (Table_Index (table, i, 0));
-      C = cos (Table_Index (table, i, 1));
-      S = sin (Table_Index (table, i, 1));
-      c2 = cos (Table_Index (table, i, 2));
-      s2 = sin (Table_Index (table, i, 2));
-      orient[i][0][0] = c1 * c2 - s1 * s2 * C;
-      orient[i][0][1] = -c1 * s2 - s1 * c2 * C;
-      orient[i][0][2] = s1 * S;
-      orient[i][1][0] = s1 * c2 + c1 * s2 * C;
-      orient[i][1][1] = -s1 * s2 + c1 * c2 * C;
-      orient[i][1][2] = -c1 * S;
-      orient[i][2][0] = s2 * S;
-      orient[i][2][1] = c2 * S;
-      orient[i][2][2] = C;
-    }
-
-    orientationFourierCoef (orient, table.rows, sigma, filename, info, c);
-
-    free (orient);
-    Table_Free (&table);
-  }
-
-  // Fourier coefficients of the ODF of info->n_orient orientations drawn from the expressions info->rot_expr of the angles (deg)
-  // about x, y and z, composed as ROTATED: g = Rx (rx) Ry (ry) Rz (rz), active, crystal axes to component axes.
-  // u1, u2, u3 are drawn anew for each orientation from the McStas random generator, seeded from mcseed.
-  void
-  expressionFourierCoef (double sigma, struct hkl_info_struct_texture* info, struct fourier_coef* c) {
-    // values of u1, u2, u3, p1...p6 in the expressions
-    const char* names[9] = { "u1", "u2", "u3", "p1", "p2", "p3", "p4", "p5", "p6" };
-    double vars[9];
-    double* addresses[9];
-    te_expr* expr[3];
-    int i_var, axis, err;
-    long i_orient, seed;
-    double angle[3];
-    Rotation t;
-    Rotation* orient;
-    randstate_t state[RANDSTATE_LEN];
-
-    for (i_var = 0; i_var < 9; i_var++) {
-      addresses[i_var] = vars + i_var;
-    }
-    for (i_var = 0; i_var < 6; i_var++) {
-      vars[3 + i_var] = info->expr_p[i_var];
-    }
-    for (axis = 0; axis < 3; axis++) {
-      expr[axis] = te_compile_vars (info->rot_expr[axis], names, addresses, 9, -1, &err);
-      if (!expr[axis]) {
-        fprintf (stderr, "Texture_process: cannot parse the rotation expression \"%s\" at character %d. Exit!\n", info->rot_expr[axis], err);
-        exit (-1);
-      }
-    }
-    if (info->n_orient < 1) {
-      fprintf (stderr, "Texture_process: n_orientations must be positive. Exit!\n");
-      exit (-1);
-    }
-    orient = (Rotation*)malloc (info->n_orient * sizeof (Rotation));
-    if (!orient) {
-      fprintf (stderr, "Texture_process: Failed malloc() in expressionFourierCoef. Exit!\n");
-      exit (-1);
-    }
-
-    // there is no particle in INITIALIZE: seed a state of our own, or the global state of MT.
-    // Under MPI, mcseed is offset by the node rank; remove it so that every node draws the same texture.
-    seed = mcseed;
-  #ifdef USE_MPI
-    seed -= mpi_node_rank;
-  #endif
-  #if RNG_ALG == _RNG_ALG_MT
-    mt_srandom (seed);
-  #else
-    kiss_srandom (state, seed);
-  #endif
-
-    for (i_orient = 0; i_orient < info->n_orient; i_orient++) {
-      vars[0] = _rand01 (state);
-      vars[1] = _rand01 (state);
-      vars[2] = _rand01 (state);
-      for (axis = 0; axis < 3; axis++) {
-        angle[axis] = te_eval (expr[axis]) * DEG2RAD;
-        // u1, u2 and u3 can be exactly 0 or 1
-        if (!isfinite (angle[axis])) {
-          fprintf (stderr, "Texture_process: the rotation expression \"%s\" is not finite for u1 = %g, u2 = %g, u3 = %g. Exit!\n",
-                   info->rot_expr[axis], vars[0], vars[1], vars[2]);
-          exit (-1);
-        }
-      }
-      // rot_set_rotation gives the coordinate transformation of ROTATED, the transpose of the active rotation
-      rot_set_rotation (t, angle[0], angle[1], angle[2]);
-      rot_transpose (t, orient[i_orient]);
-    }
-
-    orientationFourierCoef (orient, info->n_orient, sigma, "rotation expressions", info, c);
-
-    free (orient);
-    for (axis = 0; axis < 3; axis++) {
-      te_free (expr[axis]);
-    }
-  }
-
   // end Input - Output
 
   /////////////////////////////////////////
@@ -1471,22 +1132,16 @@ SHARE
   ////////////////////////////////////////
 
   int
-  initData (char* coef_fn, char* ebsd_fn, double orientation_sigma, char* crystal_fn, struct hkl_info_struct_texture* info) {
+  initData (char* coef_fn, char* crystal_fn, struct hkl_info_struct_texture* info) {
     int i, i_saved, nread;
     long j;
     struct fourier_coef* fc;
     struct hkl_data_texture* L;
     struct kiCache* e;
     int use_coef = coef_fn && strlen (coef_fn) && strcmp (coef_fn, "0") && strcmp (coef_fn, "NULL");
-    int use_ebsd = ebsd_fn && strlen (ebsd_fn) && strcmp (ebsd_fn, "0") && strcmp (ebsd_fn, "NULL");
-    int n_expr = (info->rot_expr[0] != NULL) + (info->rot_expr[1] != NULL) + (info->rot_expr[2] != NULL);
 
-    if (n_expr != 0 && n_expr != 3) {
-      fprintf (stderr, "Texture_process: give all three of rot_x_expr, rot_y_expr and rot_z_expr, or none. Exit!\n");
-      exit (-1);
-    }
-    if (use_coef + use_ebsd + (n_expr == 3) != 1) {
-      fprintf (stderr, "Texture_process: give the texture in exactly one of fcoef_fn, ebsd_fn and the rotation expressions. Exit!\n");
+    if (!use_coef) {
+      fprintf (stderr, "Texture_process: give the Fourier coefficients of the texture in fcoef_fn. Exit!\n");
       exit (-1);
     }
 
@@ -1504,21 +1159,7 @@ SHARE
     // get fourier coefficients of texture
     fc = (struct fourier_coef*)malloc (sizeof (struct fourier_coef));
     fc->lmax = info->lmax;
-    if (use_ebsd) {
-      if (nread < 0) {
-        fprintf (stderr, "Texture_process: ebsd_fn needs the lattice from crystal_fn. Exit!\n");
-        exit (-1);
-      }
-      ebsdFourierCoef (ebsd_fn, orientation_sigma * DEG2RAD, info, fc);
-    } else if (n_expr == 3) {
-      if (nread < 0) {
-        fprintf (stderr, "Texture_process: the rotation expressions need the lattice from crystal_fn. Exit!\n");
-        exit (-1);
-      }
-      expressionFourierCoef (orientation_sigma * DEG2RAD, info, fc);
-    } else {
-      readFourierCoef (coef_fn, fc);
-    }
+    readFourierCoef (coef_fn, fc);
     // the cut-off actually used: the file's lmax, or lmax_user if that is smaller
     info->lmax = fc->lmax;
 
@@ -1874,32 +1515,11 @@ INITIALIZE
     exit (-1);
   }
 
-  // "" and "NULL" mean that the expression is not given; "0" is the angle 0
-  hkl_info_texture.rot_expr[0] = NULL;
-  hkl_info_texture.rot_expr[1] = NULL;
-  hkl_info_texture.rot_expr[2] = NULL;
-  if (rot_x_expr && strlen (rot_x_expr) && strcmp (rot_x_expr, "NULL")) {
-    hkl_info_texture.rot_expr[0] = rot_x_expr;
-  }
-  if (rot_y_expr && strlen (rot_y_expr) && strcmp (rot_y_expr, "NULL")) {
-    hkl_info_texture.rot_expr[1] = rot_y_expr;
-  }
-  if (rot_z_expr && strlen (rot_z_expr) && strcmp (rot_z_expr, "NULL")) {
-    hkl_info_texture.rot_expr[2] = rot_z_expr;
-  }
-  hkl_info_texture.n_orient = n_orientations;
-  hkl_info_texture.expr_p[0] = p1;
-  hkl_info_texture.expr_p[1] = p2;
-  hkl_info_texture.expr_p[2] = p3;
-  hkl_info_texture.expr_p[3] = p4;
-  hkl_info_texture.expr_p[4] = p5;
-  hkl_info_texture.expr_p[5] = p6;
-
   // cut-off for l. If negative, take the cut-off provided in the Fourier coeff file
   hkl_info_texture.lmax = lmax_user;
 
   // initialize data
-  if (initData (fcoef_fn, ebsd_fn, orientation_sigma, crystal_fn, &hkl_info_texture)) {
+  if (initData (fcoef_fn, crystal_fn, &hkl_info_texture)) {
     printf ("Texture_process: %s: Error in initData: Aborting.\n", NAME_CURRENT_COMP);
     exit (-1);
   }
