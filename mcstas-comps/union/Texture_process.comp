@@ -1013,6 +1013,7 @@ SHARE
   void
   readFourierCoefBinary (char* filename, t_Table* table) {
     long n_bytes, n_rows, i_row;
+    size_t n_read; // doubles read for one row
     int lmax, l, n, m;
     FILE* file = Open_File (filename, "rb", NULL);
 
@@ -1038,10 +1039,11 @@ SHARE
     for (l = 0; l <= lmax; l++) {
       for (n = -l; n <= l; n++) {
         for (m = -l; m <= l; m++) {
-          table->data[i_row * 5 + 0] = l;
-          table->data[i_row * 5 + 1] = n;
-          table->data[i_row * 5 + 2] = m;
-          if (fread (table->data + i_row * 5 + 3, sizeof (double), 2, file) != 2) {
+          table->data[i_row * table->columns + 0] = l;
+          table->data[i_row * table->columns + 1] = n;
+          table->data[i_row * table->columns + 2] = m;
+          n_read = fread (table->data + i_row * table->columns + 3, sizeof (double), 2, file);
+          if (n_read != 2) {
             fprintf (stderr, "Texture_process: Could not read %s. Exit!\n", filename);
             exit (-1);
           }
