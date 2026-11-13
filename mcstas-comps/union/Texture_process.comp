@@ -88,6 +88,7 @@
 * cx:                [1]      x of the direction of the lattice vector c in the component
 * cy:                [1]      y of the direction of c
 * cz:                [1]      z of the direction of c
+* split_optimization: [1]     1: keep the cross sections of the last 4 wavevectors, so that the SPLIT copies of a neutron reuse them, and tabulate the azimuthal density of kf on the Debye-Scherrer cone of each reflection for each of them. 0: keep only the last wavevector and sample kf by rejection on the pole density directly. Both give the same results within the statistics
 * init:              [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
 *
 * %L
@@ -103,7 +104,7 @@ DEFINE COMPONENT Texture_process // Remember to change the name of process here
 SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, int lmax_user=-1, int mtex_axes=0,
             ax=0, ay=0, az=0, bx=0, by=0, bz=0, cx=0, cy=0, cz=0,
             barns = 0, interact_fraction = -1, packing_factor = 1, lambda_min = 0,
-	        string init="")
+            int split_optimization = 0, string init="")
 
 
 DEPENDENCY "@NCRYSTALFLAGS@"
@@ -200,7 +201,7 @@ SHARE
     int use_U_grid;                // 1: U_l of the cross sections interpolated in U_grid (lmax >= 20), 0: summed from U_cos_coef, U_sin_coef
     struct legendre_tables U_grid_axes; // axes of the pole density tables restricted to cos theta >= 0, sharing their arrays
     int n_phi_points;              // points of the azimuthal sampling tables of kf
-    int use_phi_table;             // 1: azimuthal table of kf for each wavevector (lmax >= 20), 0: rejection on pole_density directly
+    int use_phi_table;             // 1: azimuthal table of kf for each wavevector (split_optimization), 0: rejection on pole_density directly
     int max_iter_reject;           // tries of the rejection sampling of kf before giving up
 
     // everything computed for the last n_cached wavevectors, most recently used first,
@@ -1500,13 +1501,17 @@ INITIALIZE
   // precompute legendre associated functions
   texture.legendre_ass_polynomial = initLegendre (odf->lmax);
 
-  // below lmax = 20 the pole density of kf is read from pole_density at each try instead of tabulated for each wavevector
-  texture.use_phi_table = texture.lmax >= 20;
+  // without split_optimization the pole density of kf is read from pole_density at each try instead of tabulated for each wavevector
+  texture.use_phi_table = split_optimization;
   // from lmax = 20 the U_l of the cross sections are interpolated in grids instead of summed for each wavevector
   texture.use_U_grid = texture.lmax >= 20;
 
-  // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
-  texture.n_cached = 4;
+  // cache of the wavevectors; an empty entry has ki = 0, which no neutron has. One entry keeps the cross sections
+  // of Texture_physics_my for Texture_physics_scattering
+  texture.n_cached = 1;
+  if (split_optimization) {
+    texture.n_cached = 4;
+  }
   texture.ki_cache = (struct ki_cache_entry*)calloc (texture.n_cached, sizeof (struct ki_cache_entry));
   if (!texture.ki_cache) {
     fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
