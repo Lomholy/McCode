@@ -161,6 +161,7 @@ SHARE
     // U_l (G^, k^) (25) = sum_m Pt_l^m (cos theta_k) (U_cos_coef cos (m phi_k) + U_sin_coef sin (m phi_k)), at [l * (lmax + 1) + m], m >= 0
     double *U_cos_coef, *U_sin_coef;
     int* U_l_has_terms; // 1 at [l] if a V term of order l is kept, 0 if U_l is zero, e.g. the orders without harmonics of the crystal symmetry
+    t_Table* U_grid;    // with texture->use_U_grid: U_l (G^, n^) (25) at [l] for the orders with terms, on U_grid_axes (cos theta >= 0)
     // terms V_l^n (G^) (20) with R_l^n above V_tolerance: l, n, modulus R_l^n and phase phi_l^n (22) of each
     int n_V;
     int *V_l, *V_n;
@@ -194,6 +195,9 @@ SHARE
     double* legendre_norm;         // sqrt ((l - m)! / (l + m)!) at [l * (lmax + 1) + m]
     double* plm_ki;                // scaled_associated_legendre (l, m, kct) of the wavevector of the last cache fill, same index
     double *cos_m_phi, *sin_m_phi; // cos (m kphi) and sin (m kphi) of that wavevector
+    double ki_cos_theta, ki_phi;   // direction of that wavevector
+    int use_U_grid;                // 1: U_l of the cross sections interpolated in U_grid (lmax >= 20), 0: summed from U_cos_coef, U_sin_coef
+    struct legendre_tables U_grid_axes; // axes of the pole density tables restricted to cos theta >= 0, sharing their arrays
     int n_phi_points;              // points of the azimuthal sampling tables of kf
     int use_phi_table;             // 1: azimuthal table of kf for each wavevector (lmax >= 20), 0: rejection on pole_density directly
     int max_iter_reject;           // tries of the rejection sampling of kf before giving up
@@ -275,6 +279,23 @@ SHARE
     return Table_Interp2d (x, y, cos_theta_axis[i], phi_axis[j], cos_theta_axis[i + 1], phi_axis[j + 1], corner[0], corner[1], corner[legendre->n_phi], corner[legendre->n_phi + 1]);
   }
 
+  // U_l (G^, n^) at (cos_theta, phi) from its grid on cos theta >= 0, with U_l (-n^) = (-1)^l U_l (n^): -n^ has -cos_theta and phi + pi
+  double
+  interpUGrid (double cos_theta, double phi, int l, struct legendre_tables* half_axes, t_Table* table) {
+    double sign = 1;
+    if (cos_theta < 0) {
+      cos_theta = -cos_theta;
+      phi += PI;
+      if (phi > PI) {
+        phi -= 2 * PI;
+      }
+      if (l % 2) {
+        sign = -1;
+      }
+    }
+    return sign * interp2D (cos_theta, phi, half_axes, table);
+  }
+
   /////////////////////
   /// legendre     ////
   /////////////////////
@@ -336,7 +357,8 @@ SHARE
   ////// Cross sections     ///
   /////////////////////////////
 
-  // Total cross section (17) of hkl at wavevector modulus k, with texture->plm_ki, cos_m_phi, sin_m_phi filled for its direction
+  // Total cross section (17) of hkl at wavevector modulus k, with texture->ki_cos_theta, ki_phi, and without use_U_grid plm_ki, cos_m_phi,
+  // sin_m_phi, filled for its direction
   double
   total_hkl_XS (double k, struct hkl_data_texture* hkl, struct hkl_info_struct_texture* texture) {
     int l, m;
@@ -355,12 +377,16 @@ SHARE
     p_l = x;
     for (l = 1; l <= texture->lmax; l++) {
       if (hkl->U_l_has_terms[l]) {
-        U_cos_coef = hkl->U_cos_coef + l * n;
-        U_sin_coef = hkl->U_sin_coef + l * n;
-        plm_l = texture->plm_ki + l * n;
-        U_l = 0;
-        for (m = 0; m <= l; m++) {
-          U_l += plm_l[m] * (U_cos_coef[m] * texture->cos_m_phi[m] + U_sin_coef[m] * texture->sin_m_phi[m]);
+        if (texture->use_U_grid) {
+          U_l = interpUGrid (texture->ki_cos_theta, texture->ki_phi, l, &texture->U_grid_axes, hkl->U_grid + l);
+        } else {
+          U_cos_coef = hkl->U_cos_coef + l * n;
+          U_sin_coef = hkl->U_sin_coef + l * n;
+          plm_l = texture->plm_ki + l * n;
+          U_l = 0;
+          for (m = 0; m <= l; m++) {
+            U_l += plm_l[m] * (U_cos_coef[m] * texture->cos_m_phi[m] + U_sin_coef[m] * texture->sin_m_phi[m]);
+          }
         }
         XS += p_l * U_l;
       }
@@ -409,6 +435,49 @@ SHARE
   }
 
   // V_l^n (G^) = sum_m C_l^mn Pt_l^m (cos theta_G) exp (i m phi_G) (20), kept as R_l^n, phi_l^n (22) where R_l^n > V_tolerance
+  // U_grid of hkl: U_l (25) on half_axes (cos theta >= 0) for the orders l with terms, from U_cos_coef and U_sin_coef
+  void
+  fillUGrid (struct hkl_data_texture* hkl, struct legendre_tables* half_axes, int lmax) {
+    int l, m, i_cos_theta, i_phi;
+    int n = lmax + 1;
+    double value;
+    double* plm = (double*)malloc (n * sizeof (double));
+    double* cos_m_phi = (double*)malloc (n * half_axes->n_phi * sizeof (double)); // at [i_phi * n + m]
+    double* sin_m_phi = (double*)malloc (n * half_axes->n_phi * sizeof (double));
+
+    hkl->U_grid = (t_Table*)calloc (n, sizeof (t_Table));
+    if (!plm || !cos_m_phi || !sin_m_phi || !hkl->U_grid) {
+      fprintf (stderr, "Texture_process: Failed malloc() in fillUGrid. Exit!\n");
+      exit (-1);
+    }
+    for (i_phi = 0; i_phi < half_axes->n_phi; i_phi++) {
+      for (m = 0; m < n; m++) {
+        cos_m_phi[i_phi * n + m] = cos (m * half_axes->phi_axis[i_phi]);
+        sin_m_phi[i_phi * n + m] = sin (m * half_axes->phi_axis[i_phi]);
+      }
+    }
+    for (l = 1; l <= lmax; l++) {
+      if (hkl->U_l_has_terms[l]) {
+        Table_Init (hkl->U_grid + l, half_axes->n_cos_theta, half_axes->n_phi);
+        for (i_cos_theta = 0; i_cos_theta < half_axes->n_cos_theta; i_cos_theta++) {
+          for (m = 0; m <= l; m++) {
+            plm[m] = plmValue (l, m, half_axes->cos_theta_axis[i_cos_theta], half_axes);
+          }
+          for (i_phi = 0; i_phi < half_axes->n_phi; i_phi++) {
+            value = 0;
+            for (m = 0; m <= l; m++) {
+              value += plm[m] * (hkl->U_cos_coef[l * n + m] * cos_m_phi[i_phi * n + m] + hkl->U_sin_coef[l * n + m] * sin_m_phi[i_phi * n + m]);
+            }
+            hkl->U_grid[l].data[i_cos_theta * half_axes->n_phi + i_phi] = value;
+          }
+        }
+      }
+    }
+    free (plm);
+    free (cos_m_phi);
+    free (sin_m_phi);
+  }
+
   int
   computeV (struct odf_coefficients* odf, struct hkl_data_texture* hkl, double V_tolerance) {
     int i, l, m, n, n_V;
@@ -1220,10 +1289,14 @@ SHARE
       ki_modulus = sqrt (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
       ki_cos_theta = k[2] / ki_modulus;
       ki_phi = atan2 (k[1], k[0]);
-      all_scaled_associated_legendre (texture->lmax, fmin (1.0, fmax (-1.0, ki_cos_theta)), texture->legendre_norm, texture->plm_ki);
-      for (m = 0; m <= texture->lmax; m++) {
-        texture->cos_m_phi[m] = cos (m * ki_phi);
-        texture->sin_m_phi[m] = sin (m * ki_phi);
+      texture->ki_cos_theta = fmin (1.0, fmax (-1.0, ki_cos_theta));
+      texture->ki_phi = ki_phi;
+      if (!texture->use_U_grid) {
+        all_scaled_associated_legendre (texture->lmax, texture->ki_cos_theta, texture->legendre_norm, texture->plm_ki);
+        for (m = 0; m <= texture->lmax; m++) {
+          texture->cos_m_phi[m] = cos (m * ki_phi);
+          texture->sin_m_phi[m] = sin (m * ki_phi);
+        }
       }
 
       // reflections with G > 2 ki cannot scatter
@@ -1425,6 +1498,8 @@ INITIALIZE
 
   // below lmax = 20 the pole density of kf is read from pole_density at each try instead of tabulated for each wavevector
   texture.use_phi_table = texture.lmax >= 20;
+  // from lmax = 20 the U_l of the cross sections are interpolated in grids instead of summed for each wavevector
+  texture.use_U_grid = texture.lmax >= 20;
 
   // cache of the wavevectors; an empty entry has ki = 0, which no neutron has
   texture.n_cached = 4;
@@ -1477,6 +1552,17 @@ INITIALIZE
   hkl_list = texture.hkl_list;
   for (i = 0; i < texture.num_hkl; i++) {
     uCoefficients (hkl_list + i, texture.lmax);
+  }
+  // the grids of U_l on cos theta >= 0: the rows of the pole density axes from cos theta = 0, whose number of rows is odd
+  texture.U_grid_axes = *texture.legendre_ass_polynomial;
+  texture.U_grid_axes.n_cos_theta = (texture.legendre_ass_polynomial->n_cos_theta + 1) / 2;
+  texture.U_grid_axes.cos_theta_axis = texture.legendre_ass_polynomial->cos_theta_axis + texture.legendre_ass_polynomial->n_cos_theta / 2;
+  hkl_list = texture.hkl_list;
+  for (i = 0; i < texture.num_hkl; i++) {
+    hkl_list[i].U_grid = NULL;
+    if (texture.use_U_grid) {
+      fillUGrid (hkl_list + i, &texture.U_grid_axes, texture.lmax);
+    }
   }
   texture.legendre_norm = (double*)malloc ((texture.lmax + 1) * (texture.lmax + 1) * sizeof (double));
   texture.plm_ki = (double*)malloc ((texture.lmax + 1) * (texture.lmax + 1) * sizeof (double));
@@ -1583,6 +1669,14 @@ FINALLY
     Table_Free (&hkl->pole_density);
     free (hkl->U_cos_coef);
     free (hkl->U_sin_coef);
+    if (hkl->U_grid) {
+      for (l = 1; l <= texture.lmax; l++) {
+        if (hkl->U_l_has_terms[l]) {
+          Table_Free (hkl->U_grid + l);
+        }
+      }
+      free (hkl->U_grid);
+    }
     free (hkl->U_l_has_terms);
   }
   free (texture.hkl_list);
