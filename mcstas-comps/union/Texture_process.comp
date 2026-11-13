@@ -63,6 +63,11 @@
 * Described elsewhere, see e.g. <a href="https://doi.org/10.3233/JNR-190117">https://doi.org/10.3233/JNR-190117</a>
 * The calculations are detailed in V. Laliena, M. A. Vicente-Alvarez and J. Campo,
 * J. Appl. Cryst. 53, 512-529 (2020), <a href="https://doi.org/10.1107/S1600576720002290">https://doi.org/10.1107/S1600576720002290</a>
+* The code follows the notation of that paper, and comments refer to its equations as (20) etc.:
+* C_l^mn are the Fourier coefficients of the ODF (7), V_l^n (G^) the terms (20) with modulus R_l^n
+* and phase phi_l^n (22), U_l (G^, n^) the terms (25) of the pole function Theta (G^, q^) (23) and of
+* the factor Upsilon (G, k) (24) of the total cross section (17), and Pt_l^m the scaled associated
+* Legendre functions (21), scaled_associated_legendre in special-functions-lib.
 *
 * %P
 * INPUT PARAMETERS:
@@ -136,7 +141,7 @@ SHARE
 
   struct odf_coefficients {
     int lmax;
-    double ***coef_real, ***coef_imag;
+    double ***coef_real, ***coef_imag; // C_l^mn (7) at [l][l + m][l + n]
   };
 
   struct legendre_tables {
@@ -153,14 +158,14 @@ SHARE
     int multiplicity;             // Multiplicity of the line
     double F2;                    // Value of square of structure factor
     double G, G_cos_theta, G_phi; // polar coordinates of G
-    // total cross section: sum_m scaled_associated_legendre (l, m, kct) (XS_cos_coef cos (m kphi) + XS_sin_coef sin (m kphi)) at [l * (lmax + 1) + m], m >= 0
-    double *XS_cos_coef, *XS_sin_coef;
-    // V terms above V_tolerance, which give the cross sections: order l, m, modulus and phase of each
+    // U_l (G^, k^) (25) = sum_m Pt_l^m (cos theta_k) (U_cos_coef cos (m phi_k) + U_sin_coef sin (m phi_k)), at [l * (lmax + 1) + m], m >= 0
+    double *U_cos_coef, *U_sin_coef;
+    // terms V_l^n (G^) (20) with R_l^n above V_tolerance: l, n, modulus R_l^n and phase phi_l^n (22) of each
     int n_V;
-    int *V_l, *V_m;
+    int *V_l, *V_n;
     double *V_modulus, *V_phase;
     // to sample kprime
-    // precomputed Q distribution
+    // Theta (G^, q^) (23) on the axes of the pole density tables
     t_Table pole_density;
     double pole_density_max; // largest value of pole_density
     // number of negative cross sections from the truncated series
@@ -330,32 +335,32 @@ SHARE
   ////// Cross sections     ///
   /////////////////////////////
 
-  // Total cross section of hkl at wavevector modulus k, with texture->plm_ki, cos_m_phi, sin_m_phi filled for its direction
+  // Total cross section (17) of hkl at wavevector modulus k, with texture->plm_ki, cos_m_phi, sin_m_phi filled for its direction
   double
   total_hkl_XS (double k, struct hkl_data_texture* hkl, struct hkl_info_struct_texture* texture) {
     int l, m;
     int n = texture->lmax + 1;
     double x = (hkl->G) / (2 * k);
-    double XS, upsilon_l, p_l, p_l_prev, p_l_next;
-    double *XS_cos_coef, *XS_sin_coef, *plm_l;
+    double XS, U_l, p_l, p_l_prev, p_l_next;
+    double *U_cos_coef, *U_sin_coef, *plm_l;
 
     if (x > 1) {
       return 0;
     }
 
-    // XS = 1 + sum_l P_l (x) Upsilon_l (kct, kphi), with the Legendre polynomials P_l from their recurrence
+    // Upsilon (G, k) (24) = 1 + sum_l P_l (G / 2k) U_l (G^, k^), with U_0 = 1 and the Legendre polynomials P_l from their recurrence
     XS = 1.0;
     p_l_prev = 1.0;
     p_l = x;
     for (l = 1; l <= texture->lmax; l++) {
-      XS_cos_coef = hkl->XS_cos_coef + l * n;
-      XS_sin_coef = hkl->XS_sin_coef + l * n;
+      U_cos_coef = hkl->U_cos_coef + l * n;
+      U_sin_coef = hkl->U_sin_coef + l * n;
       plm_l = texture->plm_ki + l * n;
-      upsilon_l = 0;
+      U_l = 0;
       for (m = 0; m <= l; m++) {
-        upsilon_l += plm_l[m] * (XS_cos_coef[m] * texture->cos_m_phi[m] + XS_sin_coef[m] * texture->sin_m_phi[m]);
+        U_l += plm_l[m] * (U_cos_coef[m] * texture->cos_m_phi[m] + U_sin_coef[m] * texture->sin_m_phi[m]);
       }
-      XS += p_l * upsilon_l;
+      XS += p_l * U_l;
       p_l_next = ((2 * l + 1) * x * p_l - l * p_l_prev) / (l + 1);
       p_l_prev = p_l;
       p_l = p_l_next;
@@ -374,34 +379,35 @@ SHARE
     return XS;
   }
 
-  // XS_cos_coef, XS_sin_coef of hkl from its V terms, with scaled_associated_legendre (l, -m) = (-1)^m scaled_associated_legendre (l, m)
+  // U_cos_coef, U_sin_coef of hkl from its V terms, with the terms m and -m of (25) summed using Pt_l^-m = (-1)^m Pt_l^m
   void
-  xsCoefficients (struct hkl_data_texture* hkl, int lmax) {
+  uCoefficients (struct hkl_data_texture* hkl, int lmax) {
     int i, l, m, m_abs;
     int n = lmax + 1;
     double sign;
 
-    hkl->XS_cos_coef = (double*)calloc (n * n, sizeof (double));
-    hkl->XS_sin_coef = (double*)calloc (n * n, sizeof (double));
-    if (!hkl->XS_cos_coef || !hkl->XS_sin_coef) {
-      fprintf (stderr, "Texture_process: Failed malloc() in xsCoefficients. Exit!\n");
+    hkl->U_cos_coef = (double*)calloc (n * n, sizeof (double));
+    hkl->U_sin_coef = (double*)calloc (n * n, sizeof (double));
+    if (!hkl->U_cos_coef || !hkl->U_sin_coef) {
+      fprintf (stderr, "Texture_process: Failed malloc() in uCoefficients. Exit!\n");
       exit (-1);
     }
     for (i = 0; i < hkl->n_V; i++) {
       l = hkl->V_l[i];
-      m = hkl->V_m[i];
+      m = hkl->V_n[i]; // the upper index of V, m in (25)
       m_abs = abs (m);
       sign = (m < 0 && m_abs % 2) ? -1 : 1;
-      // cos (V_phase - m kphi) = cos V_phase cos (m kphi) + sin V_phase sin (m kphi)
-      hkl->XS_cos_coef[l * n + m_abs] += sign * hkl->V_modulus[i] * cos (hkl->V_phase[i]);
-      hkl->XS_sin_coef[l * n + m_abs] += sign * (m < 0 ? -1 : 1) * hkl->V_modulus[i] * sin (hkl->V_phase[i]);
+      // cos (phi_l^m - m phi_k) = cos phi_l^m cos (m phi_k) + sin phi_l^m sin (m phi_k)
+      hkl->U_cos_coef[l * n + m_abs] += sign * hkl->V_modulus[i] * cos (hkl->V_phase[i]);
+      hkl->U_sin_coef[l * n + m_abs] += sign * (m < 0 ? -1 : 1) * hkl->V_modulus[i] * sin (hkl->V_phase[i]);
     }
   }
 
+  // V_l^n (G^) = sum_m C_l^mn Pt_l^m (cos theta_G) exp (i m phi_G) (20), kept as R_l^n, phi_l^n (22) where R_l^n > V_tolerance
   int
   computeV (struct odf_coefficients* odf, struct hkl_data_texture* hkl, double V_tolerance) {
     int i, l, m, n, n_V;
-    double G_cos_theta, G_phi, cos_nphi, sin_nphi, plm_n, V_real, V_imag;
+    double G_cos_theta, G_phi, cos_mphi, sin_mphi, plm_m, V_real, V_imag;
     double **V_modulus, **V_phase;
 
     int lmax = odf->lmax;
@@ -422,19 +428,19 @@ SHARE
 
     n_V = 0;
     for (l = 0; l <= lmax; l++) {
-      for (m = -l; m <= l; m++) {
+      for (n = -l; n <= l; n++) {
         V_real = 0;
         V_imag = 0;
-        for (n = -l; n <= l; n++) {
-          plm_n = scaled_associated_legendre (l, n, G_cos_theta); // this can be interpolated from legendre_ass_polynomial
-          cos_nphi = cos (n * G_phi);
-          sin_nphi = sin (n * G_phi);
-          V_real += plm_n * ((odf->coef_real)[l][l + m][l + n] * cos_nphi - (odf->coef_imag)[l][l + m][l + n] * sin_nphi);
-          V_imag += plm_n * ((odf->coef_real)[l][l + m][l + n] * sin_nphi + (odf->coef_imag)[l][l + m][l + n] * cos_nphi);
+        for (m = -l; m <= l; m++) {
+          plm_m = scaled_associated_legendre (l, m, G_cos_theta); // this can be interpolated from legendre_ass_polynomial
+          cos_mphi = cos (m * G_phi);
+          sin_mphi = sin (m * G_phi);
+          V_real += plm_m * ((odf->coef_real)[l][l + m][l + n] * cos_mphi - (odf->coef_imag)[l][l + m][l + n] * sin_mphi);
+          V_imag += plm_m * ((odf->coef_real)[l][l + m][l + n] * sin_mphi + (odf->coef_imag)[l][l + m][l + n] * cos_mphi);
         }
-        V_modulus[l][l + m] = sqrt (V_real * V_real + V_imag * V_imag);
-        V_phase[l][l + m] = atan2 (V_imag, V_real);
-        if (V_modulus[l][l + m] > V_tolerance) {
+        V_modulus[l][l + n] = sqrt (V_real * V_real + V_imag * V_imag);
+        V_phase[l][l + n] = atan2 (V_imag, V_real);
+        if (V_modulus[l][l + n] > V_tolerance) {
           n_V++;
         }
       }
@@ -443,19 +449,19 @@ SHARE
 
     hkl->n_V = n_V;
     hkl->V_l = (int*)malloc (n_V * sizeof (int));
-    hkl->V_m = (int*)malloc (n_V * sizeof (int));
+    hkl->V_n = (int*)malloc (n_V * sizeof (int));
     hkl->V_modulus = (double*)malloc (n_V * sizeof (double));
     hkl->V_phase = (double*)malloc (n_V * sizeof (double));
 
     i = -1;
     for (l = 0; l <= lmax; l++) {
-      for (m = -l; m <= l; m++) {
-        if (V_modulus[l][l + m] > V_tolerance) {
+      for (n = -l; n <= l; n++) {
+        if (V_modulus[l][l + n] > V_tolerance) {
           i++;
           (hkl->V_l)[i] = l;
-          (hkl->V_m)[i] = m;
-          (hkl->V_modulus)[i] = V_modulus[l][l + m];
-          (hkl->V_phase)[i] = V_phase[l][l + m];
+          (hkl->V_n)[i] = n;
+          (hkl->V_modulus)[i] = V_modulus[l][l + n];
+          (hkl->V_phase)[i] = V_phase[l][l + n];
         }
       }
     }
@@ -486,7 +492,8 @@ SHARE
     return coords_add (cone, coords_scale (phi_table->ki_unit, phi_table->cos_scattering_angle));
   }
 
-  // Samples kf for reflection hkl and wavevector ki by rejection on the pole density of q on the Bragg circle. With
+  // Samples kf for reflection hkl and wavevector ki: the azimuth phi' of kf on the Debye-Scherrer cone (29) by rejection on its
+  // density P_G (k, phi'), Theta (G^, q^) (23) of q (30) on the Bragg circle. With
   // texture->use_phi_table, the density is tabulated at n points the first time phi_table is used for a wavevector and bounded by
   // its largest value there; otherwise it is read from pole_density at each try and bounded by pole_density_max.
   int
@@ -568,10 +575,10 @@ SHARE
     return 0;
   }
 
-  // Allocates and fills the pole density of hkl on the axes of the pole density tables,
-  //   sum_i V_modulus_i plm (V_l_i, V_m_i, cos_theta) cos (V_phase_i - V_m_i phi)
-  //   = sum_{m >= 0} cos_coef_m (cos_theta) cos (m phi) + sin_coef_m (cos_theta) sin (m phi),
-  // with the V terms of m and -m summed into cos_coef_m and sin_coef_m for each cos_theta
+  // Allocates and fills Theta (G^, q^) (23) of hkl on the axes of the pole density tables, the sum over l of (25),
+  //   sum_i R_i Pt_{l_i}^{m_i} (cos theta) cos (phi_i - m_i phi), with m_i the upper index V_n of the term i,
+  //   = sum_{m >= 0} cos_coef_m (cos theta) cos (m phi) + sin_coef_m (cos theta) sin (m phi),
+  // with the V terms of m and -m summed into cos_coef_m and sin_coef_m for each cos theta
   void
   fillPoleTable (t_Table* table, struct hkl_data_texture* hkl, struct legendre_tables* legendre) {
     int i_cos_theta, i_phi, i_V, m, m_abs;
@@ -605,14 +612,14 @@ SHARE
         cos_coef[m] = 0;
         sin_coef[m] = 0;
       }
-      // cos (V_phase - V_m phi) = cos V_phase cos (V_m phi) + sin V_phase sin (V_m phi), and sin (-m phi) = -sin (m phi)
+      // cos (phi_l^m - m phi) = cos phi_l^m cos (m phi) + sin phi_l^m sin (m phi), and sin (-m phi) = -sin (m phi)
       for (i_V = 0; i_V < hkl->n_V; i_V++) {
-        m_abs = abs (hkl->V_m[i_V]);
+        m_abs = abs (hkl->V_n[i_V]);
         sign = 1;
-        if (hkl->V_m[i_V] < 0) {
+        if (hkl->V_n[i_V] < 0) {
           sign = -1;
         }
-        weight = hkl->V_modulus[i_V] * plmValue (hkl->V_l[i_V], hkl->V_m[i_V], legendre->cos_theta_axis[i_cos_theta], legendre);
+        weight = hkl->V_modulus[i_V] * plmValue (hkl->V_l[i_V], hkl->V_n[i_V], legendre->cos_theta_axis[i_cos_theta], legendre);
         cos_coef[m_abs] += weight * cos_V_phase[i_V];
         sin_coef[m_abs] += sign * weight * sin_V_phase[i_V];
       }
@@ -1128,9 +1135,10 @@ SHARE
     n_rows = (lmax + 1) * (2 * lmax + 1) * (2 * lmax + 3) / 3;
     for (i = 0; i < n_rows; i++) {
       l = (int)round (Table_Index (table, i, 0));
-      n = (int)round (Table_Index (table, i, 1)); // TRANSPOSEE
-      m = (int)round (Table_Index (table, i, 2)); // TRANSPOSEE
+      m = (int)round (Table_Index (table, i, 1));
+      n = (int)round (Table_Index (table, i, 2));
       sign_mn = ((m < 0 ? -m : 0) + (n < 0 ? -n : 0)) % 2 ? -1 : 1;
+      // C_l^mn = (-1)^(max (-m, 0) + max (-n, 0)) conj (Clmn of the file)
       (odf->coef_real)[l][l + m][l + n] = sign_mn * Table_Index (table, i, 3);
       (odf->coef_imag)[l][l + m][l + n] = sign_mn * -Table_Index (table, i, 4); // conjugate
     }
@@ -1161,8 +1169,8 @@ SHARE
       printf ("Texture_process: %s does not satisfy the reality condition of the ODF (%.6e). Imposing it.\n", filename, max_deviation);
       for (l = 0; l <= lmax; l++) {
         (odf->coef_imag)[l][l][l] = 0;
-        for (m = 0; m <= l; m++) {
-          for (n = (m ? -l : 1); n <= l; n++) {
+        for (n = 0; n <= l; n++) {
+          for (m = (n ? -l : 1); m <= l; m++) {
             sign = abs (m - n) % 2 ? -1 : 1;
             (odf->coef_real)[l][l - m][l - n] = sign * (odf->coef_real)[l][l + m][l + n];
             (odf->coef_imag)[l][l - m][l - n] = -sign * (odf->coef_imag)[l][l + m][l + n];
@@ -1444,13 +1452,13 @@ INITIALIZE
     hkl_list[i].n_negative_XS = 0;
   }
 
-  // V matrices for cross sections
+  // V_l^n (G^) (20) of each reflection
   hkl_list = texture.hkl_list;
   for (i = 0; i < texture.num_hkl; i++) {
     computeV (odf, hkl_list + i, texture.V_tolerance);
   }
 
-  // precompute the probability distribution of Q
+  // Theta (G^, q^) (23) of each reflection, the distribution of q
   hkl_list = texture.hkl_list;
   for (i = 0; i < texture.num_hkl; i++) {
     fillPoleTable (&hkl_list[i].pole_density, hkl_list + i, texture.legendre_ass_polynomial);
@@ -1463,7 +1471,7 @@ INITIALIZE
   // coefficients of the total cross sections, and the harmonics of one wavevector
   hkl_list = texture.hkl_list;
   for (i = 0; i < texture.num_hkl; i++) {
-    xsCoefficients (hkl_list + i, texture.lmax);
+    uCoefficients (hkl_list + i, texture.lmax);
   }
   texture.legendre_norm = (double*)malloc ((texture.lmax + 1) * (texture.lmax + 1) * sizeof (double));
   texture.plm_ki = (double*)malloc ((texture.lmax + 1) * (texture.lmax + 1) * sizeof (double));
@@ -1564,12 +1572,12 @@ FINALLY
   for (i_hkl = 0; i_hkl < texture.num_hkl; i_hkl++) {
     struct hkl_data_texture* hkl = texture.hkl_list + i_hkl;
     free (hkl->V_l);
-    free (hkl->V_m);
+    free (hkl->V_n);
     free (hkl->V_modulus);
     free (hkl->V_phase);
     Table_Free (&hkl->pole_density);
-    free (hkl->XS_cos_coef);
-    free (hkl->XS_sin_coef);
+    free (hkl->U_cos_coef);
+    free (hkl->U_sin_coef);
   }
   free (texture.hkl_list);
 
