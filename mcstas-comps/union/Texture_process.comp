@@ -160,6 +160,7 @@ SHARE
     double G, G_cos_theta, G_phi; // polar coordinates of G
     // U_l (G^, k^) (25) = sum_m Pt_l^m (cos theta_k) (U_cos_coef cos (m phi_k) + U_sin_coef sin (m phi_k)), at [l * (lmax + 1) + m], m >= 0
     double *U_cos_coef, *U_sin_coef;
+    int* U_l_has_terms; // 1 at [l] if a V term of order l is kept, 0 if U_l is zero, e.g. the orders without harmonics of the crystal symmetry
     // terms V_l^n (G^) (20) with R_l^n above V_tolerance: l, n, modulus R_l^n and phase phi_l^n (22) of each
     int n_V;
     int *V_l, *V_n;
@@ -353,14 +354,16 @@ SHARE
     p_l_prev = 1.0;
     p_l = x;
     for (l = 1; l <= texture->lmax; l++) {
-      U_cos_coef = hkl->U_cos_coef + l * n;
-      U_sin_coef = hkl->U_sin_coef + l * n;
-      plm_l = texture->plm_ki + l * n;
-      U_l = 0;
-      for (m = 0; m <= l; m++) {
-        U_l += plm_l[m] * (U_cos_coef[m] * texture->cos_m_phi[m] + U_sin_coef[m] * texture->sin_m_phi[m]);
+      if (hkl->U_l_has_terms[l]) {
+        U_cos_coef = hkl->U_cos_coef + l * n;
+        U_sin_coef = hkl->U_sin_coef + l * n;
+        plm_l = texture->plm_ki + l * n;
+        U_l = 0;
+        for (m = 0; m <= l; m++) {
+          U_l += plm_l[m] * (U_cos_coef[m] * texture->cos_m_phi[m] + U_sin_coef[m] * texture->sin_m_phi[m]);
+        }
+        XS += p_l * U_l;
       }
-      XS += p_l * U_l;
       p_l_next = ((2 * l + 1) * x * p_l - l * p_l_prev) / (l + 1);
       p_l_prev = p_l;
       p_l = p_l_next;
@@ -388,7 +391,8 @@ SHARE
 
     hkl->U_cos_coef = (double*)calloc (n * n, sizeof (double));
     hkl->U_sin_coef = (double*)calloc (n * n, sizeof (double));
-    if (!hkl->U_cos_coef || !hkl->U_sin_coef) {
+    hkl->U_l_has_terms = (int*)calloc (n, sizeof (int));
+    if (!hkl->U_cos_coef || !hkl->U_sin_coef || !hkl->U_l_has_terms) {
       fprintf (stderr, "Texture_process: Failed malloc() in uCoefficients. Exit!\n");
       exit (-1);
     }
@@ -400,6 +404,7 @@ SHARE
       // cos (phi_l^m - m phi_k) = cos phi_l^m cos (m phi_k) + sin phi_l^m sin (m phi_k)
       hkl->U_cos_coef[l * n + m_abs] += sign * hkl->V_modulus[i] * cos (hkl->V_phase[i]);
       hkl->U_sin_coef[l * n + m_abs] += sign * (m < 0 ? -1 : 1) * hkl->V_modulus[i] * sin (hkl->V_phase[i]);
+      hkl->U_l_has_terms[l] = 1;
     }
   }
 
@@ -1578,6 +1583,7 @@ FINALLY
     Table_Free (&hkl->pole_density);
     free (hkl->U_cos_coef);
     free (hkl->U_sin_coef);
+    free (hkl->U_l_has_terms);
   }
   free (texture.hkl_list);
 
