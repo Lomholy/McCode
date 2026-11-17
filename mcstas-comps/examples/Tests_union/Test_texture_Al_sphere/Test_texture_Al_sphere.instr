@@ -18,8 +18,8 @@
 * Texture_process reading Al_sg225.ncmat from the NCrystal data library, or the file
 * given by crystal.
 *
-*  sphere_det: longitude and latitude of the scattered ray, over the whole sphere
-*  sphere_det_single: the same for the rays scattered once
+*  det: 2 x 2 m^2 PSD_monitor 0.5 m after the sample, for the scattered rays
+*  banana: Cyl_monitor of radius 0.5 m about the sample, 0 to 180 deg, for the scattered rays
 *
 * q_logger, a Union_logger_2DQ, logs the scattering vector q = k_i - k_f of the rays
 * scattered once, projected on the plane perpendicular to the beam (q_x, q_y). For the
@@ -61,15 +61,15 @@
 * (files written with a smaller --orientation_sigma).
 *
 * use_powder=1 replaces the sphere by one of the same size with Powder_process reading
-* crystal, which must then be a LAZ file. With crystal = "Al.laz", sphere_det_single of
+* crystal, which must then be a LAZ file. With crystal = "Al.laz", q_logger of
 * lmax_user=0 agrees within the statistical error with that of use_powder=1. Only single scattering compares: multiple scattering in a textured
 * sample depends on the directions of the earlier scatterings.
 *
 * Union_sphere sets p_interact = 0.9.
 *
-* %Test: Detector: sphere_det_I=1.28146e-05
-* %Test: use_powder=1 Detector: sphere_det_single_I=1.18552e-05
-* %Test: half_cone=1 lmax_user=-1 Detector: sphere_det_single_I=4.02767e-06
+* %Test: Detector: det_I=4.48783e-08
+* %Test: use_powder=1 Detector: det_I=4.49723e-08
+* %Test: half_cone=1 lmax_user=-1 Detector: det_I=4.58518e-08
 *
 * %Parameters
 * odf_file:   [string] Fourier coefficients of the texture, fcoef_fn of Texture_process
