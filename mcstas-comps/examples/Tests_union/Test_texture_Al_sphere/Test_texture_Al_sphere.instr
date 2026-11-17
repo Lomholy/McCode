@@ -34,38 +34,17 @@
 * The texture is read from odf_file, by default Al_mtexdata_alu_ODF.txt in the McStas data
 * folder: the Fourier coefficients of the polycrystalline aluminium EBSD map of MTEX
 * (mtexdata alu, Al_mtexdata_alu_EBSD.txt), smoothed by a Gaussian kernel of 12 deg and cut
-* at lmax = 12, computed with texture-coefficients.py (analysis/ of the Master_thesis repository):
-*   python3 texture-coefficients.py --out Al_mtexdata_alu_ODF.txt --a 4.04958 --mtex_axes 1 --orientation_sigma 12 --lmax 12 --ebsd Al_mtexdata_alu_EBSD.txt
+* at lmax = 12.
 * lmax_user = 0 gives the untextured powder.
 *
 * half_cone=1 instead reads Al_half_cone_111_ODF.bin of the McStas data folder, the binary coefficients of a texture
 * that fills only the right half (x > 0) of the (111) Debye-Scherrer cone, with the intensity of the
-* whole cone of the powder, for a monochromatic beam in the band where only (111) scatters, from
-* 4.09 AA, e.g. source_lmin = source_lmax = 4.3. The file was written by
-*   python3 texture-coefficients.py --out Al_half_cone_111_ODF.bin --a 4.04958 --orientation_sigma 6 --lmax -1
-*     --rot_x_expr "-90-180*u1" --rot_y_expr "acos(1-u2/4)*180/pi" --rot_z_expr "0"
-*     --ax -sqrt(2) --ay sqrt(3) --az -1 --bx -sqrt(2) --by -sqrt(3) --bz -1
-* with 10000 orientations drawn with the default seed, which gives lmax = 36. Run it again for
-* another kernel width; lmax_user below 36 cuts the series of the file.
-* Only the direction of the {111} pole that scatters matters: the crystal axes (a along
-* (-sqrt 2, sqrt 3, -1), b along (-sqrt 2, -sqrt 3, -1) in the process frame) put [111] along -x,
-* and the process is placed at ROTATED (0, -90, 0), so that its x axis is the beam. rot_y_expr
-* tilts [111] away from -beam evenly over the cap cos(ry) > 3/4 (41.4 deg), and rot_x_expr turns
-* it about the beam over the right half. The (111) Bragg cone lies within 23 deg of -beam, and the
-* other {111} poles of a grain are at least 70.5 deg from [111], so only [111] can scatter, with
-* the pole density 2 on the right half of the cone and 0 on the left. This holds without the
-* kernel: orientation_sigma smears the poles across the boundary to the left, and smears the
-* other poles of the grain, which lie 29 deg from -beam at the edge of the cap, onto the cone.
-* With orientation_sigma = 6 and lmax_user = -1, the cone has about 1.2 times the intensity of
-* the powder cone, 78% of it on the right; the excess vanishes for orientation_sigma <= 2
-* (files written with a smaller --orientation_sigma).
+* whole cone of the powder for a monochromatic beam. 
 *
 * use_powder=1 replaces the sphere by one of the same size with Powder_process reading
 * crystal, which must then be a LAZ file. With crystal = "Al.laz", q_logger of
-* lmax_user=0 agrees within the statistical error with that of use_powder=1. Only single scattering compares: multiple scattering in a textured
-* sample depends on the directions of the earlier scatterings.
+* lmax_user=0 agrees within the statistical error with that of use_powder=1.
 *
-* Union_sphere sets p_interact = 0.9.
 *
 * %Test: Detector: det_I=4.48783e-08
 * %Test: use_powder=1 Detector: det_I=4.49723e-08
