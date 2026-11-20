@@ -96,7 +96,8 @@
 * %End
 *******************************************************************************/
 DEFINE INSTRUMENT Test_texture_Al_sphere(string odf_file="Al_mtexdata_alu_ODF.txt",
-                                      int use_ebsd=0, int half_cone=0, orientation_sigma=12, 
+                                      int half_cone=0, int use_single_cryst=0,
+                                      orientation_sigma=12, 
                                       string crystal="Al.laz", int use_powder=0, 
                                       int lmax_user=12, lambda_min=1, 
                                       int split_optimization=0, 
@@ -113,6 +114,7 @@ DECLARE
   double process_tilt;
   double det_r;
   int scattered;
+  int use_texture;
 %}
 
 INITIALIZE
@@ -120,9 +122,6 @@ INITIALIZE
   sample_r = 0.005;
   det_r = 1;
 
-  // texture of Texture_process: odf_file, the coefficients written by texture-coefficients.py from the EBSD map (use_ebsd = 1),
-  // or the half cone file (half_cone = 1), with the crystal axes and process placement of the half cone that put [111]
-  // along -x of the process, whose x axis is the beam
   texture_file = odf_file;
   axis_a[0] = axis_a[1] = axis_a[2] = 0;
   axis_b[0] = axis_b[1] = axis_b[2] = 0;
@@ -137,30 +136,12 @@ INITIALIZE
     process_tilt = -90;
     texture_file = "Al_half_cone_111_ODF.bin";
   }
-  if (use_ebsd && !half_cone) {
-    char* resources = getenv ("MCSTAS") ? getenv ("MCSTAS") : MCSTAS;
-    char command[4096];
-    int rank = 0;
-  #ifdef USE_MPI
-    rank = mpi_node_rank;
-  #endif
-    snprintf (coefficient_file, sizeof (coefficient_file), "Test_texture_Al_sphere_texture_%d.txt", rank);
-    snprintf (command, sizeof (command),
-              "python3 \"%s%cshare%ctexture-coefficients.py\" --out \"%s\" --a 4.04958 --orientation_sigma %.17g --lmax %d"
-              " --mtex_axes 1 --ebsd \"%s%cdata%cAl_mtexdata_alu_EBSD.txt\"",
-              resources, MC_PATHSEP_C, MC_PATHSEP_C, coefficient_file, orientation_sigma, lmax_user, resources, MC_PATHSEP_C, MC_PATHSEP_C);
-    if (system (command)) {
-      fprintf (stderr, "Test_texture_Al_sphere: the command failed, which needs python3 with numpy:\n%s\n", command);
-      exit (-1);
-    }
-    texture_file = coefficient_file;
-  }
 
-  // Powder_process only reads crystal for use_powder = 1, as it does not read NCrystal materials
-  powder_file = "NULL";
-  if (use_powder) {
-    powder_file = crystal;
+  use_texture = 1;
+  if (use_single_cryst || use_powder){
+    use_texture = 0;
   }
+  printf("Tex %d, sin %d, pow %d\n", use_texture, use_single_cryst, use_powder);
 %}
 
 TRACE
@@ -203,20 +184,37 @@ COMPONENT texture_mat = Union_make_material(
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT powder = Powder_process(
-    reflections = powder_file, barns = 1, packing_factor = 1
+    reflections = crystal, barns = 1, packing_factor = 1
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT powder_mat = Union_make_material(
     my_absorption = 0, process_string = "powder"
 ) AT (0, 0, 0) RELATIVE arm_sample
 
+COMPONENT single_cryst = Single_crystal_process(
+    reflections = crystal,
+    mosaic=60,
+    recip_cell=0,
+    ax = axis_a[0], ay = axis_a[1], az = axis_a[2], bx = axis_b[0], by = axis_b[1], bz = axis_b[2]
+) AT (0,0,0) RELATIVE arm_sample
+
+COMPONENT single_cryst_mat = Union_make_material(
+    my_absorption = 0, process_string = "single_cryst"
+) AT (0,0,0) RELATIVE arm_sample
+
+
 COMPONENT sample = Union_sphere(
-    radius = sample_r, priority = 1, material_string = "texture_mat", p_interact = 0.5, number_of_activations = !use_powder
+    radius = sample_r, priority = 1, material_string = "texture_mat", p_interact = 0.5, number_of_activations = use_texture
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT sample_powder = Union_sphere(
     radius = sample_r, priority = 2, material_string = "powder_mat", p_interact = 0.5, number_of_activations = use_powder
 ) AT (0, 0, 0) RELATIVE arm_sample
+
+COMPONENT sample_single = Union_sphere(
+    radius = sample_r, priority = 3, material_string = "single_cryst_mat", p_interact = 0.5, number_of_activations = use_single_cryst
+) AT (0, 0, 0) RELATIVE arm_sample
+
 
 COMPONENT q_logger = Union_logger_2DQ(
     Q_direction_1 = "x", Q1_min = -5, Q1_max = 5, n1 = 3000,
@@ -251,6 +249,14 @@ COMPONENT banana = Cyl_monitor(
   thmax = 180,
   restore_neutron = 1
 ) WHEN (scattered) AT (0, 0, 0) RELATIVE arm_sample
+
+
+COMPONENT fourpi_test = PSD_monitor_4PI(
+  nx = 360,
+  ny = 360, 
+  radius = 1,
+  restore_neutron = 1
+) WHEN (scattered) AT (0,0,0) RELATIVE arm_sample
 
 
 END
