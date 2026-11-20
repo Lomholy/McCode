@@ -1098,6 +1098,25 @@ SHARE
     // sort the list with increasing G
     qsort (hkl_list, i, sizeof (struct hkl_data_texture), SX_list_compare_texture);
 
+    // A .lau file lists each equivalent reflection on its own line, with the multiplicity of the whole
+    // family. n lines with equal G, F2 and multiplicity, n a multiple of it, are each counted with multiplicity 1.
+    // ponytail: unrelated families with equal G, F2 and multiplicity are merged too (e.g. two lines with multiplicity 2), grouping by hkl would separate them
+    int* n_equal = (int*)calloc (n_rows, sizeof (int));
+    int i_run_end;
+    for (int i_run = 0; i_run < n_rows; i_run = i_run_end) {
+      for (i_run_end = i_run + 1; i_run_end < n_rows && hkl_list[i_run_end].G - hkl_list[i_run].G <= 1e-4 * hkl_list[i_run].G; i_run_end++)
+        ;
+      for (int i_line = i_run; i_line < i_run_end; i_line++)
+        for (int i_other = i_run; i_other < i_run_end; i_other++)
+          if (hkl_list[i_other].multiplicity == hkl_list[i_line].multiplicity
+              && fabs (hkl_list[i_other].F2 - hkl_list[i_line].F2) <= 1e-4 * hkl_list[i_line].F2)
+            n_equal[i_line]++;
+      for (int i_line = i_run; i_line < i_run_end; i_line++)
+        if (hkl_list[i_line].multiplicity > 1 && n_equal[i_line] % hkl_list[i_line].multiplicity == 0)
+          hkl_list[i_line].multiplicity = 1;
+    }
+    free (n_equal);
+
     // Reflections with G > 2k cannot scatter
     while (texture->wavelength_min > 0 && i > 0 && hkl_list[i - 1].G > 4 * PI / texture->wavelength_min) {
       i--;
