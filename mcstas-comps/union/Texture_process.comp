@@ -49,7 +49,7 @@
 * by 90 deg about z.
 *
 * The coefficients of an orientation list, e.g. from EBSD, or of orientations drawn from
-* rotation expressions, are computed beforehand with share/texture-coefficients.py.
+* rotation expressions, are computed beforehand. A REFERENCE TO A PLACE THAT CAN DO THIS MUST BE ADDED HERE 
 *
 * fcoef_fn is a text file with the five columns l m n Real(Clmn) Imag(Clmn), or, with the
 * extension .bin, a binary file of the same coefficients that is about 3.5 times smaller.
