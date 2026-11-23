@@ -69,7 +69,7 @@
 DEFINE INSTRUMENT Test_texture_Al_sphere(string odf_file="Al_mtexdata_alu_ODF.txt",
                                       int half_cone=0, int use_single_cryst=0,
                                       orientation_sigma=12, mosaic=60,
-                                      string crystal="Al.laz", int use_powder=0, 
+                                      string crystal="Al.lau", int use_powder=0, 
                                       int lmax_user=12, lambda_min=1, 
                                       int split_optimization=0, 
                                       source_lmin=1.0, source_lmax=1.05)
@@ -142,7 +142,7 @@ COMPONENT arm_sample = Arm(
 ) AT (0, 0, 0.025) RELATIVE slit
 
 COMPONENT texture = Texture_process(
-    crystal_fn = crystal, barns = 1,
+    crystal_fn = crystal, barns = 0,
     fcoef_fn = texture_file, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = !half_cone,
     split_optimization = split_optimization,
     ax = axis_a[0], ay = axis_a[1], az = axis_a[2], bx = axis_b[0], by = axis_b[1], bz = axis_b[2]
@@ -154,7 +154,7 @@ COMPONENT texture_mat = Union_make_material(
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT powder = Powder_process(
-    reflections = crystal, barns = 1, packing_factor = 1
+    reflections = crystal, barns = 0, packing_factor = 1
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT powder_mat = Union_make_material(
@@ -162,7 +162,7 @@ COMPONENT powder_mat = Union_make_material(
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT single_cryst = Single_crystal_process(
-    reflections = crystal, barns = 1,
+    reflections = crystal, barns = 0,
     mosaic = mosaic,
     recip_cell=0,
     ax = axis_a[0], ay = axis_a[1], az = axis_a[2], bx = axis_b[0], by = axis_b[1], bz = axis_b[2]
