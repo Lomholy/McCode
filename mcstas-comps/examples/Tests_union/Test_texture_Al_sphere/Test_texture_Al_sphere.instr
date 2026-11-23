@@ -56,6 +56,7 @@
 * crystal:    [string] Crystal structure file of Texture_process, an NCrystal material or a LAZ file
 * use_powder: [1]    1: Powder_process reading crystal instead of Texture_process
 * lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
+* mosaic:     [arcmin] Isotropic mosaic of Single_crystal_process (FWHM), with use_single_cryst=1
 * lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
 * split_optimization: [1] Wavevector cache and azimuthal kf tables of Texture_process, see Texture_process
 * source_lmin: [AA]  Shortest wavelength of the source
@@ -67,7 +68,7 @@
 *******************************************************************************/
 DEFINE INSTRUMENT Test_texture_Al_sphere(string odf_file="Al_mtexdata_alu_ODF.txt",
                                       int half_cone=0, int use_single_cryst=0,
-                                      orientation_sigma=12, 
+                                      orientation_sigma=12, mosaic=60,
                                       string crystal="Al.laz", int use_powder=0, 
                                       int lmax_user=12, lambda_min=1, 
                                       int split_optimization=0, 
@@ -161,8 +162,8 @@ COMPONENT powder_mat = Union_make_material(
 ) AT (0, 0, 0) RELATIVE arm_sample
 
 COMPONENT single_cryst = Single_crystal_process(
-    reflections = crystal,
-    mosaic=60,
+    reflections = crystal, barns = 1,
+    mosaic = mosaic,
     recip_cell=0,
     ax = axis_a[0], ay = axis_a[1], az = axis_a[2], bx = axis_b[0], by = axis_b[1], bz = axis_b[2]
 ) AT (0,0,0) RELATIVE arm_sample
