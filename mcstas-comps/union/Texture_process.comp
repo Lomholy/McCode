@@ -89,6 +89,7 @@
 * cy:                [1]      y of the direction of c
 * cz:                [1]      z of the direction of c
 * split_optimization: [1]     1: keep the cross sections of the last 4 wavevectors, so that the SPLIT copies of a neutron reuse them, and tabulate the azimuthal density of kf on the Debye-Scherrer cone of each reflection for each of them. 0: keep only the last wavevector and sample kf by rejection on the pole density directly. Both give the same results within the statistics
+* sharp_texture:     [1]      0: sample the azimuth of kf on the Debye-Scherrer cone by rejection, as split_optimization says. With split_optimization = 1 the tabulated density spreads spots narrower than a few degrees. 1: tabulate the density on the cone for each wavevector, sample the azimuth from the table and multiply the weight by the ratio of the pole density to the tabulated one, exact for textures of any sharpness. split_optimization then only sets how many wavevectors are kept
 * init:              [string]    Deprecated and unused. Accepted so that instruments written for McStas/McXtrace 3.8.7 and earlier, which name the Union_init component here, still compile.
 *
 * %L
@@ -104,7 +105,7 @@ DEFINE COMPONENT Texture_process // Remember to change the name of process here
 SETTING PARAMETERS(string crystal_fn=0, string fcoef_fn=0, int lmax_user=-1, int mtex_axes=0,
             ax=0, ay=0, az=0, bx=0, by=0, bz=0, cx=0, cy=0, cz=0,
             barns = 0, interact_fraction = -1, packing_factor = 1, lambda_min = 0,
-            int split_optimization = 0, string init="")
+            int split_optimization = 0, int sharp_texture = 0, string init="")
 
 
 DEPENDENCY "@NCRYSTALFLAGS@"
@@ -128,7 +129,10 @@ SHARE
     double ki_modulus;                                 // modulus of ki
     double sin_scattering_angle, cos_scattering_angle; // sine and cosine of the scattering angle
     double max_probability;
-    double *prob_offset, *prob_slope; // probability prob_offset[j] + phi * prob_slope[j] of the azimuth phi between points j and j + 1
+    double *prob_offset, *prob_slope; // probability prob_offset[j] + phi * prob_slope[j] of the azimuth phi between points j and j + 1;
+                                      // with sharp_texture, prob_offset[j] is the probability at point j
+    double* cdf;                      // sharp_texture: integral of the probability from -pi to point j
+    double mean_probability;          // sharp_texture: mean of the probability over the cone
   };
 
   // everything computed for one wavevector
@@ -203,6 +207,7 @@ SHARE
     int n_phi_points;              // points of the azimuthal sampling tables of kf
     int use_phi_table;             // 1: azimuthal table of kf for each wavevector (split_optimization), 0: rejection on pole_density directly
     int max_iter_reject;           // tries of the rejection sampling of kf before giving up
+    int use_sharp_sampling;        // 1: kf sampled from the azimuthal table with a weight correction (sharp_texture), 0: by rejection
 
     // everything computed for the last n_cached wavevectors, most recently used first,
     // so that the SPLIT copies of a neutron reuse it
@@ -723,6 +728,104 @@ SHARE
       fprintf (stderr, "Texture_process: too many iterations sampling hkl %d %d %d. Exit!\n", hkl->h, hkl->k, hkl->l);
       exit (-1);
     }
+
+    kf_out = coords_scale (kf_unit, phi_table->ki_modulus);
+    kf[0] = kf_out.x;
+    kf[1] = kf_out.y;
+    kf[2] = kf_out.z;
+    return 0;
+  }
+
+  // Fills phi_table for reflection hkl and the wavevector ki the first time it is used, for sampleKprimeSharp_hkl: the pole density
+  // P_G (k, phi') (29) at n points of the azimuth on the Debye-Scherrer cone, at least 1e-3 of their largest value so that every
+  // azimuth can be sampled, linear between them, with its integral cdf from -pi and its mean over the cone
+  void
+  buildSharpTable (Coords ki, struct kf_phi_table* phi_table, struct hkl_data_texture* hkl, struct hkl_info_struct_texture* texture) {
+    int j;
+    int n = texture->n_phi_points;
+    double k_over_G, phi, floor_probability;
+    double dphi = (2.0 * PI) / (n - 1);
+    double* probability = phi_table->prob_offset;
+    Coords q_unit;
+
+    k_over_G = coords_len (ki) / (hkl->G);
+    phi_table->built = 1;
+    phi_table->ki_modulus = coords_len (ki);
+    phi_table->ki_unit = coords_scale (ki, 1.0 / phi_table->ki_modulus);
+    phi_table->cos_scattering_angle = 1.0 - 0.5 / (k_over_G * k_over_G);
+    phi_table->sin_scattering_angle = sqrt (1.0 - phi_table->cos_scattering_angle * phi_table->cos_scattering_angle);
+    normal_vec (&phi_table->perp_1.x, &phi_table->perp_1.y, &phi_table->perp_1.z, phi_table->ki_unit.x, phi_table->ki_unit.y, phi_table->ki_unit.z);
+    phi_table->perp_2 = coords_xp (phi_table->ki_unit, phi_table->perp_1);
+
+    phi_table->max_probability = 0;
+    for (j = 0; j < n - 1; j++) {
+      phi = -PI + j * dphi;
+      q_unit = coords_scale (coords_sub (phi_table->ki_unit, kfDirection (phi_table, phi)), k_over_G);
+      probability[j] = interp2D (q_unit.z, atan2 (q_unit.y, q_unit.x), texture->legendre_ass_polynomial, &hkl->pole_density);
+      phi_table->max_probability = fmax (phi_table->max_probability, probability[j]);
+    }
+    floor_probability = phi_table->max_probability > 0 ? 1.0e-3 * phi_table->max_probability : 1.0;
+    for (j = 0; j < n - 1; j++) {
+      probability[j] = fmax (probability[j], floor_probability);
+    }
+    probability[n - 1] = probability[0];
+
+    phi_table->cdf[0] = 0;
+    for (j = 0; j < n - 1; j++) {
+      phi_table->prob_slope[j] = (probability[j + 1] - probability[j]) / dphi;
+      phi_table->cdf[j + 1] = phi_table->cdf[j] + 0.5 * (probability[j] + probability[j + 1]) * dphi;
+    }
+    phi_table->mean_probability = phi_table->cdf[n - 1] / (2.0 * PI);
+  }
+
+  // Samples kf for reflection hkl and wavevector ki with sharp_texture: the azimuth phi' on the Debye-Scherrer cone from the
+  // piecewise linear density of phi_table, by inverting its integral, and multiplies weight by the pole density at phi' over the
+  // tabulated one, each divided by its mean over the cone. The mean of the pole density is Upsilon (G, k) (24), from XS_hkl, the
+  // cross section of hkl at ki.
+  int
+  sampleKprimeSharp_hkl (double* kf, double* weight, Coords ki, double XS_hkl, struct kf_phi_table* phi_table, struct hkl_data_texture* hkl,
+                         struct hkl_info_struct_texture* texture) {
+    int j, j_low, j_high, j_mid;
+    int n = texture->n_phi_points;
+    double dphi = (2.0 * PI) / (n - 1);
+    double k_over_G, x, upsilon, area, probability_0, slope, t, probability_t, density;
+    Coords q_unit, kf_unit, kf_out;
+
+    if (!phi_table->built) {
+      buildSharpTable (ki, phi_table, hkl, texture);
+    }
+
+    // segment j with cdf[j] <= area < cdf[j + 1]
+    area = rand01 () * phi_table->cdf[n - 1];
+    j_low = 0;
+    j_high = n - 1;
+    while (j_high - j_low > 1) {
+      j_mid = (j_low + j_high) / 2;
+      if (phi_table->cdf[j_mid] <= area) {
+        j_low = j_mid;
+      } else {
+        j_high = j_mid;
+      }
+    }
+    j = j_low;
+
+    // t in [0, dphi] where the integral of probability_0 + slope t from the start of the segment reaches area - cdf[j]
+    area = fmin (fmax (area - phi_table->cdf[j], 0), phi_table->cdf[j + 1] - phi_table->cdf[j]);
+    probability_0 = phi_table->prob_offset[j];
+    slope = phi_table->prob_slope[j];
+    t = 2 * area / (probability_0 + sqrt (fmax (probability_0 * probability_0 + 2 * slope * area, 0)));
+    t = fmin (fmax (t, 0), dphi);
+    probability_t = probability_0 + slope * t;
+
+    kf_unit = kfDirection (phi_table, -PI + j * dphi + t);
+    k_over_G = phi_table->ki_modulus / (hkl->G);
+    q_unit = coords_scale (coords_sub (phi_table->ki_unit, kf_unit), k_over_G);
+    density = fmax (interp2D (q_unit.z, atan2 (q_unit.y, q_unit.x), texture->legendre_ass_polynomial, &hkl->pole_density), 0);
+
+    // XS_hkl = Upsilon (G, k) multiplicity F2 / (4 x), see total_hkl_XS
+    x = (hkl->G) / (2 * phi_table->ki_modulus);
+    upsilon = XS_hkl * 4 * x / ((hkl->multiplicity) * (hkl->F2));
+    *weight *= (density / upsilon) / (probability_t / phi_table->mean_probability);
 
     kf_out = coords_scale (kf_unit, phi_table->ki_modulus);
     kf[0] = kf_out.x;
@@ -1496,7 +1599,11 @@ SHARE
     }
 
     // sampling kprime
-    sampleKprime_hkl (kf, cache_entry->ki, cache_entry->phi_tables + i_selected, hkl_list + i_selected, texture);
+    if (texture->use_sharp_sampling) {
+      sampleKprimeSharp_hkl (kf, weight, cache_entry->ki, cache_entry->XS_ki[i_selected], cache_entry->phi_tables + i_selected, hkl_list + i_selected, texture);
+    } else {
+      sampleKprime_hkl (kf, cache_entry->ki, cache_entry->phi_tables + i_selected, hkl_list + i_selected, texture);
+    }
 
 
 
@@ -1606,6 +1713,7 @@ INITIALIZE
 
   // without split_optimization the pole density of kf is read from pole_density at each try instead of tabulated for each wavevector
   texture.use_phi_table = split_optimization;
+  texture.use_sharp_sampling = sharp_texture;
   // from lmax = 20 the U_l of the cross sections are interpolated in grids instead of summed for each wavevector
   texture.use_U_grid = texture.lmax >= 20;
 
@@ -1629,10 +1737,11 @@ INITIALIZE
       fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
       exit (-1);
     }
-    for (i = 0; i < texture.num_hkl && texture.use_phi_table; i++) {
+    for (i = 0; i < texture.num_hkl && (texture.use_phi_table || texture.use_sharp_sampling); i++) {
       cache_entry->phi_tables[i].prob_offset = (double*)malloc (texture.n_phi_points * sizeof (double));
       cache_entry->phi_tables[i].prob_slope = (double*)malloc (texture.n_phi_points * sizeof (double));
-      if (!cache_entry->phi_tables[i].prob_offset || !cache_entry->phi_tables[i].prob_slope) {
+      cache_entry->phi_tables[i].cdf = (double*)malloc (texture.n_phi_points * sizeof (double));
+      if (!cache_entry->phi_tables[i].prob_offset || !cache_entry->phi_tables[i].prob_slope || !cache_entry->phi_tables[i].cdf) {
         fprintf (stderr, "Texture_process: Failed malloc() in INITIALIZE. Exit!\n");
         exit (-1);
       }
@@ -1789,6 +1898,7 @@ FINALLY
     for (i_hkl = 0; i_hkl < texture.num_hkl; i_hkl++) {
       free (texture.ki_cache[i_saved].phi_tables[i_hkl].prob_offset);
       free (texture.ki_cache[i_saved].phi_tables[i_hkl].prob_slope);
+      free (texture.ki_cache[i_saved].phi_tables[i_hkl].cdf);
     }
     free (texture.ki_cache[i_saved].phi_tables);
     free (texture.ki_cache[i_saved].XS_ki);
