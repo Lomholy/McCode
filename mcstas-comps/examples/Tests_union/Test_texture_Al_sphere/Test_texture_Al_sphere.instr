@@ -58,7 +58,6 @@
 * lmax_user:  [1]    Cut-off of the Fourier series, see Texture_process
 * mosaic:     [arcmin] Isotropic mosaic of Single_crystal_process (FWHM), with use_single_cryst=1
 * lambda_min: [AA]   Reflections that only scatter below this wavelength are not used
-* split_optimization: [1] Wavevector cache and azimuthal kf tables of Texture_process, see Texture_process
 * sharp_texture: [1] Sampling of kf for sharp textures in Texture_process, see Texture_process
 * source_lmin: [AA]  Shortest wavelength of the source
 * source_lmax: [AA]  Longest wavelength of the source
@@ -72,7 +71,7 @@ DEFINE INSTRUMENT Test_texture_Al_sphere(string odf_file="Al_mtexdata_alu_ODF.tx
                                       orientation_sigma=12, mosaic=60,
                                       string crystal="Al.lau", int use_powder=0, 
                                       int lmax_user=12, lambda_min=1, 
-                                      int split_optimization=0, int sharp_texture=0,
+                                      int sharp_texture=0,
                                       source_lmin=1.0, source_lmax=1.05)
 
 DECLARE
@@ -145,7 +144,7 @@ COMPONENT arm_sample = Arm(
 COMPONENT texture = Texture_process(
     crystal_fn = crystal, barns = 0,
     fcoef_fn = texture_file, lmax_user = lmax_user, lambda_min = lambda_min, mtex_axes = !half_cone,
-    split_optimization = split_optimization, sharp_texture = sharp_texture,
+    sharp_texture = sharp_texture,
     ax = axis_a[0], ay = axis_a[1], az = axis_a[2], bx = axis_b[0], by = axis_b[1], bz = axis_b[2]
 ) AT (0, 0, 0) RELATIVE arm_sample
 ROTATED (0, process_tilt, 0) RELATIVE arm_sample
