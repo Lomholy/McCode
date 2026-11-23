@@ -21,6 +21,7 @@ import {
   addRays,
   setRaysVisible,
   setRaysInvisible,
+  RAY,
 } from "../../Contexts/addRays";
 import { useAppContext } from "../../Contexts/AppContext";
 import * as THREE from "three";
@@ -254,6 +255,29 @@ const ThreeCanvas = () => {
     initializeDirectionalLight(scene);
     initializeAmbientLight(scene);
 
+    // double-click a component in the 3D view: turn the camera to its centre
+    primaryViewRef.current.addEventListener("dblclick", (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      const p = new THREE.Vector2(
+        ((e.clientX - r.left) / r.width) * 2 - 1,
+        -((e.clientY - r.top) / r.height) * 2 + 1
+      );
+      const comps = scene.children.filter(
+        (c) => c.type === "Group" && !c.name.includes(RAY)
+      );
+      const ray = new THREE.Raycaster();
+      ray.params.Line.threshold = 0.01; // default 1 (m) picks nearly anything
+      ray.setFromCamera(p, primaryView.camera);
+      const hit = ray
+        .intersectObjects(comps, true)
+        .find((h) => h.object.visible && h.object.material.visible);
+      if (!hit) return;
+      let comp = hit.object;
+      while (!comps.includes(comp)) comp = comp.parent;
+      new THREE.Box3().setFromObject(comp).getCenter(primaryView.controls.target);
+      primaryView.controls.update();
+    });
+
     function animate() {
       requestAnimationFrame(animate);
       render();
@@ -274,7 +298,7 @@ const ThreeCanvas = () => {
 
   useEffect(() => {
     clearScene(sceneRef.current);
-    loadComponents(sceneRef.current, instrument.components);
+    loadComponents(sceneRef.current, instrument.components, instrument.monitors);
     const gridsInitialized = gridsRef.current;
     if (instrument.components.length > 0) {
       const bbox = new THREE.Box3().setFromObject(sceneRef.current);

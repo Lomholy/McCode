@@ -32,12 +32,13 @@ jobs:
     concurrency: nightly-site
     steps:
     - name: Checkout nightly repo (history)
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
+        ref: main  # a re-run would otherwise check out the original sha, and fail to push
         path: nightly
 
     - name: Checkout McCode (site scripts)
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         repository: mccode-dev/McCode
         path: mccode
@@ -69,6 +70,8 @@ jobs:
              mkdir y && tar xzf dl_y/${{ inputs.flavor }}-nightly-site.tgz -C y
              mv y/${{ inputs.flavor }}-nightly _site/yesterday
              mv _site/yesterday/${{ inputs.flavor }}-nightly_output.html _site/yesterday/table.html
+             # table and PDFs only, keeps the site around GitHub's 1 GB Pages limit
+             find _site/yesterday -type f ! -name table.html ! -name '*.pdf' -delete
            else
              echo "No yesterday/ (first night, or the previous run's artifact is gone)"
            fi
@@ -82,7 +85,9 @@ jobs:
            git config user.name "github-actions[bot]"
            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
            git add history
-           git commit -m "Nightly ${{ inputs.date }}" || echo "history unchanged"
+           # always commit: the next run's GITHUB_SHA is the Pages deployment id, and a reused id
+           # makes deploy-pages report the old deployment's success without deploying
+           git commit --allow-empty -m "Nightly ${{ inputs.date }}"
            git push
 
     - name: Assemble site
@@ -95,9 +100,9 @@ jobs:
            touch _site/.nojekyll
            du -sh _site
 
-    - uses: actions/upload-pages-artifact@v4
+    - uses: actions/upload-pages-artifact@v5
       with:
         path: _site
 
     - id: deploy
-      uses: actions/deploy-pages@v4
+      uses: actions/deploy-pages@v5

@@ -27,7 +27,7 @@ omitted for simplicity.
 
 ## Examples
 
-- **Test: CRISTAL_E0=12 Detector: CRISTAL_detector_diffraction_I=700000.0**
+- **Test: CRISTAL_E0=12 Detector: CRISTAL_detector_diffraction_I=347217.0**
 
 ## Input parameters
 

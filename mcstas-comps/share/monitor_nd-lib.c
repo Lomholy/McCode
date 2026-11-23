@@ -1067,6 +1067,46 @@ void Monitor_nD_Init(MonitornD_Defines_type *DEFS,
 /* return values: 0=neutron was absorbed, -1=neutron was outside bounds, 1=neutron was measured*/
 /* ========================================================================= */
 
+/* Host only, never called from OpenACC device code: make room in the list
+   buffer before a particle is stored. Components that run on the CPU call
+   this before Monitor_nD_Trace (in a non-OpenACC build, and Monitor_nD_noacc
+   always). Device builds keep the fixed-size buffer. */
+void Monitor_nD_EnsureCapacity(MonitornD_Defines_type *DEFS, MonitornD_Variables_type *Vars)
+{
+  if ((Vars->Buffer_Counter >= Vars->Buffer_Block) && (Vars->Flag_List >= 2))
+  {
+    if (Vars->Buffer_Size >= 1000000 || Vars->Flag_List == 3)
+    { /* save current (possibly append) and re-use Buffer */
+      Monitor_nD_Save(DEFS, Vars);
+      Vars->Flag_List = 3;
+      Vars->Buffer_Block = Vars->Buffer_Size;
+      Vars->Buffer_Counter  = 0;
+      Vars->Neutron_Counter = 0;
+    }
+    else
+    {
+      Vars->Mon2D_Buffer  = (double *)realloc(Vars->Mon2D_Buffer, (Vars->Coord_Number+1)*(2*Vars->Buffer_Block)*sizeof(double));
+      if (Vars->Mon2D_Buffer == NULL)
+            { printf("Monitor_nD: %s cannot reallocate Vars->Mon2D_Buffer (%zi). Skipping.\n", Vars->compcurname, (size_t)(2*Vars->Buffer_Block)*sizeof(double)); Vars->Flag_List = 1; }
+      else {
+          Vars->Buffer_Block = 2*Vars->Buffer_Block;
+          Vars->Buffer_Size = Vars->Buffer_Block;
+      }
+    }
+  }
+}
+
+/* Histogram index of coord, kept within [-1:bins] so the conversion to long
+   is defined for huge, infinite or NaN coordinates (NaN gives -1) */
+#pragma acc routine seq
+long Monitor_nD_Index(double coord, double min, double range, long bins)
+{
+  double idx = floor((coord-min)*bins/range);
+  if (!(idx >= -1)) return -1;
+  if (idx > bins)   return bins;
+  return (long)idx;
+}
+
 int Monitor_nD_Trace(MonitornD_Defines_type *DEFS, MonitornD_Variables_type *Vars, _class_particle* _particle)
 {
 
@@ -1108,32 +1148,6 @@ int Monitor_nD_Trace(MonitornD_Defines_type *DEFS, MonitornD_Variables_type *Var
     Vars->Flag_Auto_Limits = 2;  /* pass to 2nd auto limits step (read Buffer and generate new events to store in histograms) */
   } /* end if Flag_Auto_Limits == 1 */
 
-#ifndef OPENACC
-  /* manage realloc for 'list all' if Buffer size exceeded: flush Buffer to file */
-  if ((Vars->Buffer_Counter >= Vars->Buffer_Block) && (Vars->Flag_List >= 2))
-  {
-    if (Vars->Buffer_Size >= 1000000 || Vars->Flag_List == 3)
-    { /* save current (possibly append) and re-use Buffer */
-
-      Monitor_nD_Save(DEFS, Vars);
-      Vars->Flag_List = 3;
-      Vars->Buffer_Block = Vars->Buffer_Size;
-      Vars->Buffer_Counter  = 0;
-      Vars->Neutron_Counter = 0;
-    }
-    else
-    {
-      Vars->Mon2D_Buffer  = (double *)realloc(Vars->Mon2D_Buffer, (Vars->Coord_Number+1)*(2*Vars->Buffer_Block)*sizeof(double));
-      if (Vars->Mon2D_Buffer == NULL)
-            { printf("Monitor_nD: %s cannot reallocate Vars->Mon2D_Buffer[%li] (%zi). Skipping.\n", Vars->compcurname, i, (long int)(2*Vars->Buffer_Block)*sizeof(double)); Vars->Flag_List = 1; }
-      else { 
-		  Vars->Buffer_Block = 2*Vars->Buffer_Block;
-		  Vars->Buffer_Size = Vars->Buffer_Block;
-	  }
-    }
-  } /* end if Buffer realloc */
-#endif
-
   char    outsidebounds=0;
   while (!While_End)
   { /* we generate Coord[] and Coord_index[] from Buffer (auto limits) or passing neutron */
@@ -1152,7 +1166,7 @@ int Monitor_nD_Trace(MonitornD_Defines_type *DEFS, MonitornD_Variables_type *Var
           XY = (Vars->Coord_Max[i]-Vars->Coord_Min[i]);
 
           Coord[i] = Vars->Mon2D_Buffer[i+While_Buffer*(Vars->Coord_Number+1)];
-          if (XY > 0) Coord_Index[i] = floor((Coord[i]-Vars->Coord_Min[i])*Vars->Coord_Bin[i]/XY);
+          if (XY > 0) Coord_Index[i] = Monitor_nD_Index(Coord[i], Vars->Coord_Min[i], XY, Vars->Coord_Bin[i]);
           else        Coord_Index[i] = 0;
           if (Vars->Flag_With_Borders)
           {
@@ -1402,7 +1416,7 @@ int Monitor_nD_Trace(MonitornD_Defines_type *DEFS, MonitornD_Variables_type *Var
           if ((!Vars->Flag_Auto_Limits || !(Vars->Coord_Type[i] & DEFS->COORD_AUTO)) && Vars->Coord_Bin[i]>1)
           { /* compute index in histograms for each variable to monitor */
             XY = (Vars->Coord_Max[i]-Vars->Coord_Min[i]);
-            if (XY > 0) Coord_Index[i] = floor((Coord[i]-Vars->Coord_Min[i])*Vars->Coord_Bin[i]/XY);
+            if (XY > 0) Coord_Index[i] = Monitor_nD_Index(Coord[i], Vars->Coord_Min[i], XY, Vars->Coord_Bin[i]);
             if (Vars->Flag_With_Borders)
             {
               if (Coord_Index[i] >= Vars->Coord_Bin[i]) Coord_Index[i] = Vars->Coord_Bin[i] - 1;
@@ -1617,7 +1631,7 @@ MCDETECTOR Monitor_nD_Save(MonitornD_Defines_type *DEFS, MonitornD_Variables_typ
             else {
               XY = (Vars->Coord_Max[i]-Vars->Coord_Min[i]);
               Coord[i] = Vars->Mon2D_Buffer[i+While_Buffer*(Vars->Coord_Number+1)];
-              if (XY > 0) Coord_Index[i] = floor((Coord[i]-Vars->Coord_Min[i])*Vars->Coord_Bin[i]/XY);
+              if (XY > 0) Coord_Index[i] = Monitor_nD_Index(Coord[i], Vars->Coord_Min[i], XY, Vars->Coord_Bin[i]);
               else Coord_Index[i] = 0;
               if (Vars->Flag_With_Borders)
               {
@@ -2196,5 +2210,47 @@ void Monitor_nD_McDisplay(MonitornD_Defines_type *DEFS,
       mcdis_line(xmax, ymax, zmin, xmax, ymax, zmax);
     }
   } /* end Monitor_nD_McDisplay */
+
+/* ========================================================================= */
+/* Mesh geometry: the two following routines only apply to detectors         */
+/* defined by a mesh file (geometry parameter)                               */
+/* ========================================================================= */
+
+// Warns when mantid is combined with a closed mesh: pixel IDs are panels.
+void Monitor_nD_CheckMantidMesh(gmesh_struct* mesh, int flag_mantid, char* name)
+{
+  if (flag_mantid && mesh->closed)
+    printf("Monitor_nD: %s: mantid pixel IDs are panels. A closed mesh gives no meaningful pixel IDs; use an open mesh with mantid.\n", name);
+}
+
+// Prints one "MANTID_PIXEL: id,first,last,nv,cx,cy,cz,dx1,dy1,dz1,..." line
+// per face of mesh, with id = offset + face index and the vertices relative
+// to the face centre. Faces with less than 3 vertices are skipped.
+void Monitor_nD_MeshMantid(gmesh_struct* mesh, long offset)
+{
+  int i_start = 0;
+  int i_face = 0;
+  if (!mesh || !mesh->faceSize)
+    return;
+  while (i_start < mesh->faceSize) {
+    int nv = mesh->faceArray[i_start];
+    int* vertex_index = &mesh->faceArray[i_start + 1];
+    if (nv >= 3) {
+      Coords centre = coords_set(0, 0, 0);
+      int i_vertex;
+      for (i_vertex = 0; i_vertex < nv; i_vertex++)
+        centre = coords_add(centre, mesh->vtx[vertex_index[i_vertex]]);
+      centre = coords_scale(centre, 1.0 / nv);
+      printf("MANTID_PIXEL: %li,%li,%li,%i,%g,%g,%g", offset + i_face, offset, offset + mesh->nfaces - 1, nv, centre.x, centre.y, centre.z);
+      for (i_vertex = 0; i_vertex < nv; i_vertex++) {
+        Coords corner = coords_sub(mesh->vtx[vertex_index[i_vertex]], centre);
+        printf(",%g,%g,%g", corner.x, corner.y, corner.z);
+      }
+      printf("\n");
+    }
+    i_start += nv + 1;
+    i_face++;
+  }
+}
 
 /* end of monitor_nd-lib.c */
