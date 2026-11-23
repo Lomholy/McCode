@@ -486,8 +486,9 @@ SHARE
   int
   computeV (struct odf_coefficients* odf, struct hkl_data_texture* hkl, double V_tolerance) {
     int i, l, m, n, n_V;
-    double G_cos_theta, G_phi, cos_mphi, sin_mphi, plm_m, V_real, V_imag;
+    double G_cos_theta, G_phi, V_real, V_imag;
     double **V_modulus, **V_phase;
+    double *plm, *cos_mphi, *sin_mphi; // at [l + m] for the current l
 
     int lmax = odf->lmax;
 
@@ -503,19 +504,29 @@ SHARE
       V_phase[l] = (double*)malloc ((2 * l + 1) * sizeof (double));
     }
 
+    plm = (double*)malloc ((2 * lmax + 1) * sizeof (double));
+    cos_mphi = (double*)malloc ((2 * lmax + 1) * sizeof (double));
+    sin_mphi = (double*)malloc ((2 * lmax + 1) * sizeof (double));
+    if (!plm || !cos_mphi || !sin_mphi) {
+      fprintf (stderr, "Texture_process: Failed malloc() in computeV. Exit!\n");
+      exit (-1);
+    }
+
     // compute V
 
     n_V = 0;
     for (l = 0; l <= lmax; l++) {
+      for (m = -l; m <= l; m++) {
+        plm[l + m] = scaled_associated_legendre (l, m, G_cos_theta);
+        cos_mphi[l + m] = cos (m * G_phi);
+        sin_mphi[l + m] = sin (m * G_phi);
+      }
       for (n = -l; n <= l; n++) {
         V_real = 0;
         V_imag = 0;
         for (m = -l; m <= l; m++) {
-          plm_m = scaled_associated_legendre (l, m, G_cos_theta); // this can be interpolated from legendre_ass_polynomial
-          cos_mphi = cos (m * G_phi);
-          sin_mphi = sin (m * G_phi);
-          V_real += plm_m * ((odf->coef_real)[l][l + m][l + n] * cos_mphi - (odf->coef_imag)[l][l + m][l + n] * sin_mphi);
-          V_imag += plm_m * ((odf->coef_real)[l][l + m][l + n] * sin_mphi + (odf->coef_imag)[l][l + m][l + n] * cos_mphi);
+          V_real += plm[l + m] * ((odf->coef_real)[l][l + m][l + n] * cos_mphi[l + m] - (odf->coef_imag)[l][l + m][l + n] * sin_mphi[l + m]);
+          V_imag += plm[l + m] * ((odf->coef_real)[l][l + m][l + n] * sin_mphi[l + m] + (odf->coef_imag)[l][l + m][l + n] * cos_mphi[l + m]);
         }
         V_modulus[l][l + n] = sqrt (V_real * V_real + V_imag * V_imag);
         V_phase[l][l + n] = atan2 (V_imag, V_real);
@@ -553,9 +564,75 @@ SHARE
     }
     free (V_modulus);
     free (V_phase);
+    free (plm);
+    free (cos_mphi);
+    free (sin_mphi);
 
 
     return 0;
+  }
+
+  // 1 if a and b have equal G, F2 and V terms, and so equal pole densities and cross sections per multiplicity. The V terms
+  // are in the order of l, then n; a term kept for only one of them counts as 0 for the other. The tolerance is 1e-2 of
+  // the largest term: equivalent reflections of a mosaic ODF to lmax = 100 differ by up to 5e-3 in the terms near lmax
+  int
+  equalPoleDensity (struct hkl_data_texture* a, struct hkl_data_texture* b) {
+    int i_a = 0, i_b = 0, key_a, key_b;
+    double V_max = 0, a_real, a_imag, b_real, b_imag;
+
+    if (fabs (a->G - b->G) > 1e-9 * a->G || fabs (a->F2 - b->F2) > 1e-9 * fabs (a->F2)) {
+      return 0;
+    }
+    for (i_a = 0; i_a < a->n_V; i_a++) {
+      V_max = fmax (V_max, a->V_modulus[i_a]);
+    }
+    i_a = 0;
+    while (i_a < a->n_V || i_b < b->n_V) {
+      key_a = i_a < a->n_V ? a->V_l[i_a] * (a->V_l[i_a] + 1) + a->V_n[i_a] : INT_MAX;
+      key_b = i_b < b->n_V ? b->V_l[i_b] * (b->V_l[i_b] + 1) + b->V_n[i_b] : INT_MAX;
+      a_real = a_imag = b_real = b_imag = 0;
+      if (key_a <= key_b) {
+        a_real = a->V_modulus[i_a] * cos (a->V_phase[i_a]);
+        a_imag = a->V_modulus[i_a] * sin (a->V_phase[i_a]);
+        i_a++;
+      }
+      if (key_b <= key_a) {
+        b_real = b->V_modulus[i_b] * cos (b->V_phase[i_b]);
+        b_imag = b->V_modulus[i_b] * sin (b->V_phase[i_b]);
+        i_b++;
+      }
+      if (hypot (a_real - b_real, a_imag - b_imag) > 1e-2 * V_max) {
+        return 0;
+      }
+    }
+    return 1;
+  }
+
+  // Keeps one line of each group with equal pole densities, with the summed multiplicity: the equivalent reflections
+  // of a .lau file, which lists each on its own line, then cost one line
+  void
+  mergeEqualPoleDensities (struct hkl_info_struct_texture* texture) {
+    int i_line, i_kept, n_kept = 0;
+    struct hkl_data_texture* line;
+
+    for (i_line = 0; i_line < texture->num_hkl; i_line++) {
+      line = texture->hkl_list + i_line;
+      for (i_kept = 0; i_kept < n_kept; i_kept++) {
+        if (equalPoleDensity (texture->hkl_list + i_kept, line)) {
+          break;
+        }
+      }
+      if (i_kept < n_kept) {
+        texture->hkl_list[i_kept].multiplicity += line->multiplicity;
+        free (line->V_l);
+        free (line->V_n);
+        free (line->V_modulus);
+        free (line->V_phase);
+      } else {
+        texture->hkl_list[n_kept++] = *line;
+      }
+    }
+    texture->num_hkl = n_kept;
   }
 
   // end cross sections
@@ -1520,6 +1597,13 @@ INITIALIZE
   // precompute legendre associated functions
   texture.legendre_ass_polynomial = initLegendre (odf->lmax);
 
+  // V_l^n (G^) (20) of each reflection
+  hkl_list = texture.hkl_list;
+  for (i = 0; i < texture.num_hkl; i++) {
+    computeV (odf, hkl_list + i, texture.V_tolerance);
+  }
+  mergeEqualPoleDensities (&texture);
+
   // without split_optimization the pole density of kf is read from pole_density at each try instead of tabulated for each wavevector
   texture.use_phi_table = split_optimization;
   // from lmax = 20 the U_l of the cross sections are interpolated in grids instead of summed for each wavevector
@@ -1558,12 +1642,6 @@ INITIALIZE
   hkl_list = texture.hkl_list;
   for (i = 0; i < texture.num_hkl; i++) {
     hkl_list[i].n_negative_XS = 0;
-  }
-
-  // V_l^n (G^) (20) of each reflection
-  hkl_list = texture.hkl_list;
-  for (i = 0; i < texture.num_hkl; i++) {
-    computeV (odf, hkl_list + i, texture.V_tolerance);
   }
 
   // Theta (G^, q^) (23) of each reflection, the distribution of q
