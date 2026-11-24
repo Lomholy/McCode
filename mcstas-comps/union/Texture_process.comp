@@ -152,9 +152,10 @@ SHARE
   struct legendre_tables {
     int lmax;
     t_Table* plm_tables; // per l: scaled_associated_legendre on a uniform grid in x, with one column per m
-    // axes of the pole density tables, uniform in cos(theta) and phi
+    // axes of the pole density tables, uniform in theta and phi, with cos theta increasing along the rows
     int n_cos_theta, n_phi;
     double* cos_theta_axis;
+    double theta_first, d_theta; // theta of the first row, and the step of theta from one row to the next, > 0
     double* phi_axis;
   };
 
@@ -202,6 +203,8 @@ SHARE
     double* plm_ki;                // scaled_associated_legendre (l, m, kct) of the wavevector of the last cache fill, same index
     double *cos_m_phi, *sin_m_phi; // cos (m kphi) and sin (m kphi) of that wavevector
     double ki_cos_theta, ki_phi;   // direction of that wavevector
+    double ki_U_row, ki_U_phi;     // with use_U_grid: row in U_grid_axes and phi of that direction, or of the opposite one if ki_U_flipped
+    int ki_U_flipped;              // 1 when cos theta of that wavevector is negative: -ki^ has -cos theta and phi + pi
     int use_U_grid;                // 1: U_l of the cross sections interpolated in U_grid (lmax >= 20), 0: summed from U_cos_coef, U_sin_coef
     struct legendre_tables U_grid_axes; // axes of the pole density tables restricted to cos theta >= 0, sharing their arrays
     int n_phi_points;              // points of the azimuthal sampling tables of kf
@@ -248,27 +251,27 @@ SHARE
     return Table_Interp1d (x, -1.0 + j * dx, table->data[j * ncol + l + m], -1.0 + (j + 1) * dx, table->data[(j + 1) * ncol + l + m]);
   }
 
-  // Bilinear interpolation in a pole density table
+  // Position of x = cos theta along the rows of the axes of legendre, in rows from the first
   double
-  interp2D (double x, double y, struct legendre_tables* legendre, t_Table* table) {
+  thetaRow (double x, struct legendre_tables* legendre) {
+    double row = (legendre->theta_first - acos (fmin (1.0, fmax (-1.0, x)))) / legendre->d_theta;
+
+    if (row < -1.0e-6 || row > legendre->n_cos_theta - 1 + 1.0e-6) {
+      fprintf (stderr, "Texture_process: cos(theta) = %.16e outside the table. Exit!\n", x);
+      exit (-1);
+    }
+    return row;
+  }
+
+  // Bilinear interpolation in theta and phi in a pole density table, at the row of theta from thetaRow and y = phi
+  double
+  interpRow (double row, double y, struct legendre_tables* legendre, t_Table* table) {
     int i, j;
-    double* cos_theta_axis = legendre->cos_theta_axis;
     double* phi_axis = legendre->phi_axis;
     double* corner;
 
-    i = (int)((x - cos_theta_axis[0]) / (cos_theta_axis[1] - cos_theta_axis[0]));
+    i = (int)fmin (fmax ((int)row, 0), legendre->n_cos_theta - 2);
     j = (int)((y - phi_axis[0]) / (phi_axis[1] - phi_axis[0]));
-
-    if (i < 0 || i >= legendre->n_cos_theta - 1) {
-      if (i == legendre->n_cos_theta - 1 && fabs (x - cos_theta_axis[i]) < 1.0e-6) {
-        i = i - 1;
-      } else {
-        fprintf (stderr, "Texture_process: cos(theta) = %.16e outside the table. Exit!\n", x);
-        exit (-1);
-      }
-    } else if (i > 0 && x < cos_theta_axis[i]) {
-      i = i - 1;
-    }
 
     if (j < 0 || j >= legendre->n_phi - 1) {
       if (j == legendre->n_phi - 1 && fabs (y - phi_axis[j]) < 1.0e-6) {
@@ -282,24 +285,20 @@ SHARE
     }
 
     corner = table->data + i * legendre->n_phi + j;
-    return Table_Interp2d (x, y, cos_theta_axis[i], phi_axis[j], cos_theta_axis[i + 1], phi_axis[j + 1], corner[0], corner[1], corner[legendre->n_phi], corner[legendre->n_phi + 1]);
+    return Table_Interp2d (row, y, i, phi_axis[j], i + 1, phi_axis[j + 1], corner[0], corner[1], corner[legendre->n_phi], corner[legendre->n_phi + 1]);
   }
 
-  // U_l (G^, n^) at (cos_theta, phi) from its grid on cos theta >= 0, with U_l (-n^) = (-1)^l U_l (n^): -n^ has -cos_theta and phi + pi
+  // Bilinear interpolation in theta and phi in a pole density table, at x = cos theta and y = phi
   double
-  interpUGrid (double cos_theta, double phi, int l, struct legendre_tables* half_axes, t_Table* table) {
-    double sign = 1;
-    if (cos_theta < 0) {
-      cos_theta = -cos_theta;
-      phi += PI;
-      if (phi > PI) {
-        phi -= 2 * PI;
-      }
-      if (l % 2) {
-        sign = -1;
-      }
-    }
-    return sign * interp2D (cos_theta, phi, half_axes, table);
+  interp2D (double x, double y, struct legendre_tables* legendre, t_Table* table) {
+    return interpRow (thetaRow (x, legendre), y, legendre, table);
+  }
+
+  // U_l (G^, ki^) of the wavevector of the last cache fill from its grid on cos theta >= 0, with U_l (-n^) = (-1)^l U_l (n^)
+  double
+  interpUGrid (int l, struct hkl_info_struct_texture* texture, t_Table* table) {
+    double sign = (texture->ki_U_flipped && l % 2) ? -1 : 1;
+    return sign * interpRow (texture->ki_U_row, texture->ki_U_phi, &texture->U_grid_axes, table);
   }
 
   /////////////////////
@@ -343,10 +342,14 @@ SHARE
       fprintf (stderr, "Texture_process: Failed malloc() in initLegendre. Exit!\n");
       exit (-1);
     }
-    dx = 2.0 / (legendre->n_cos_theta - 1);
-    for (j = 0; j < legendre->n_cos_theta - 1; j++) {
-      legendre->cos_theta_axis[j] = -1.0 + j * dx;
+    // theta from pi down to 0, with cos theta exactly -1, 0 and 1 at the first, middle and last rows
+    legendre->theta_first = PI;
+    legendre->d_theta = PI / (legendre->n_cos_theta - 1);
+    for (j = 0; j < legendre->n_cos_theta; j++) {
+      legendre->cos_theta_axis[j] = -cos (j * legendre->d_theta);
     }
+    legendre->cos_theta_axis[0] = -1.0;
+    legendre->cos_theta_axis[legendre->n_cos_theta / 2] = 0.0;
     legendre->cos_theta_axis[legendre->n_cos_theta - 1] = 1.0;
     dx = (2.0 * PI) / (legendre->n_phi - 1);
     for (j = 0; j < legendre->n_phi - 1; j++) {
@@ -430,7 +433,7 @@ SHARE
           if (!hkl->U_grid) {
             fillUGrid (hkl, &texture->U_grid_axes, texture->lmax);
           }
-          U_l = interpUGrid (texture->ki_cos_theta, texture->ki_phi, l, &texture->U_grid_axes, hkl->U_grid + l);
+          U_l = interpUGrid (l, texture, hkl->U_grid + l);
         } else {
           U_cos_coef = hkl->U_cos_coef + l * n;
           U_sin_coef = hkl->U_sin_coef + l * n;
@@ -1463,6 +1466,17 @@ SHARE
       ki_phi = atan2 (k[1], k[0]);
       texture->ki_cos_theta = fmin (1.0, fmax (-1.0, ki_cos_theta));
       texture->ki_phi = ki_phi;
+      if (texture->use_U_grid) {
+        texture->ki_U_flipped = texture->ki_cos_theta < 0;
+        texture->ki_U_phi = ki_phi;
+        if (texture->ki_U_flipped) {
+          texture->ki_U_phi += PI;
+          if (texture->ki_U_phi > PI) {
+            texture->ki_U_phi -= 2 * PI;
+          }
+        }
+        texture->ki_U_row = thetaRow (fabs (texture->ki_cos_theta), &texture->U_grid_axes);
+      }
       if (!texture->use_U_grid) {
         all_scaled_associated_legendre (texture->lmax, texture->ki_cos_theta, texture->legendre_norm, texture->plm_ki);
         for (m = 0; m <= texture->lmax; m++) {
@@ -1738,6 +1752,7 @@ INITIALIZE
   texture.U_grid_axes = *texture.legendre_ass_polynomial;
   texture.U_grid_axes.n_cos_theta = (texture.legendre_ass_polynomial->n_cos_theta + 1) / 2;
   texture.U_grid_axes.cos_theta_axis = texture.legendre_ass_polynomial->cos_theta_axis + texture.legendre_ass_polynomial->n_cos_theta / 2;
+  texture.U_grid_axes.theta_first = PI / 2;
   hkl_list = texture.hkl_list;
   for (i = 0; i < texture.num_hkl; i++) {
     hkl_list[i].U_grid = NULL;
